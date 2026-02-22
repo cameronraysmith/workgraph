@@ -1,3 +1,40 @@
+#set document(
+  title: "Organizational Patterns & Formal Models for Workgraph",
+  author: "The Workgraph Project",
+)
+
+#set text(font: "New Computer Modern", size: 11pt)
+#set par(justify: true)
+#set heading(numbering: "1.")
+
+// Title page
+#page(numbering: none)[
+  #v(4fr)
+  #align(center)[
+    #text(size: 28pt, weight: "bold")[Organizational Patterns]
+    #v(4pt)
+    #text(size: 28pt, weight: "bold")[& Formal Models]
+    #v(12pt)
+    #text(size: 16pt)[for Workgraph]
+    #v(24pt)
+    #text(size: 12pt, style: "italic")[
+      A mathematics of organizations mapped onto task graph primitives
+    ]
+    #v(16pt)
+    #text(size: 10pt)[February 2026]
+  ]
+  #v(6fr)
+]
+
+// Table of contents
+#page(numbering: none)[
+  #outline(title: "Contents", depth: 2, indent: auto)
+]
+
+// Start page numbering
+#set page(numbering: "1")
+#counter(page).update(1)
+
 = Executive Summary
 <executive-summary>
 Workgraph’s primitives—tasks, dependency edges, roles, motivations,
@@ -65,9 +102,9 @@ about how to structure work in workgraph.
 
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
-== 1. Stigmergy: The Task Graph as Coordination Medium
+= Stigmergy: The Task Graph as Coordination Medium
 <stigmergy-the-task-graph-as-coordination-medium>
-=== 1.1 What is Stigmergy?
+== What is Stigmergy?
 <what-is-stigmergy>
 Stigmergy (from Greek #emph[stigma] "mark" + #emph[ergon] "work") is
 indirect coordination between agents through traces left in a shared
@@ -102,7 +139,7 @@ There are two fundamental types:
 )
 ]
 
-=== 1.2 Workgraph is a Stigmergic System
+== Workgraph is a Stigmergic System
 <workgraph-is-a-stigmergic-system>
 A workgraph task graph is a stigmergic medium. Agents do not communicate
 with each other directly—they read and write to the shared graph, and
@@ -140,7 +177,7 @@ workgraph agents operate. Agent A completes task X, modifying the graph
 task Y with `after = [X]`, is now unblocked. B never spoke to A.
 The graph mediated the coordination.
 
-=== 1.3 Real-World Stigmergic Systems
+== Real-World Stigmergic Systems
 <real-world-stigmergic-systems>
 Wikipedia is the canonical human example of stigmergy. An editor sees a
 stub article (the trace), is stimulated to expand it, and leaves a more
@@ -155,7 +192,7 @@ centrally planned systems because adding agents does not increase
 communication overhead—the coordination cost is absorbed by the shared
 medium.
 
-=== 1.4 Implications for Workgraph Users
+== Implications for Workgraph Users
 <implications-for-workgraph-users>
 - #strong[The task graph is your communication channel.] Write
   descriptive task titles, clear descriptions, and meaningful log
@@ -171,9 +208,9 @@ medium.
 
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
-== 2. Workflow Patterns: What `after` Edges and Structural Cycles Can Express
+= Workflow Patterns: What `after` Edges and Structural Cycles Can Express
 <workflow-patterns-what-after-edges-and-structural-cycles-can-express>
-=== 2.1 The Workflow Patterns Catalog
+== The Workflow Patterns Catalog
 <the-workflow-patterns-catalog>
 The Workflow Patterns Initiative, established by Wil van der Aalst,
 Arthur ter Hofstede, Bartek Kiepuszewski, and Alistair Barros,
@@ -185,7 +222,7 @@ and 40 Data Patterns.
 These patterns provide a precise vocabulary for what any workflow system
 can and cannot express.
 
-=== 2.2 Patterns Natively Supported by `after`
+== Patterns Natively Supported by `after`
 <patterns-natively-supported-by-after>
 #align(center)[#table(
   columns: 4,
@@ -219,7 +256,7 @@ can and cannot express.
 These five patterns—the basic directed-graph patterns—are the bread and butter of
 `after` graphs. (Note: workgraph is a directed graph, not necessarily a DAG — structural cycles are intentional.)
 
-=== 2.3 Patterns Added by Structural Cycles
+== Patterns Added by Structural Cycles
 <patterns-added-by-structural-cycles>
 #align(center)[#table(
   columns: 3,
@@ -235,7 +272,7 @@ These five patterns—the basic directed-graph patterns—are the bread and butt
 )
 ]
 
-=== 2.4 Patterns Requiring Coordinator Logic (Idioms)
+== Patterns Requiring Coordinator Logic (Idioms)
 <patterns-requiring-coordinator-logic-idioms>
 These patterns cannot be expressed with static edges alone but can be
 achieved through coordinator behavior or conventions:
@@ -273,7 +310,7 @@ achieved through coordinator behavior or conventions:
 )
 ]
 
-=== 2.5 Resource Patterns and the Agency
+== Resource Patterns and the Agency
 <resource-patterns-and-the-agency>
 Beyond control-flow, Van der Aalst’s Resource Patterns describe how work
 is distributed to agents. Several map directly:
@@ -297,7 +334,7 @@ is distributed to agents. Several map directly:
 )
 ]
 
-=== 2.6 Summary: Expressiveness Hierarchy
+== Summary: Expressiveness Hierarchy
 <summary-expressiveness-hierarchy>
 ```
 after edges alone:       WCP1-3, WCP5, WCP11 (basic directed-graph patterns)
@@ -311,9 +348,9 @@ expresses policy.]
 
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
-== 3. Fork-Join, MapReduce, and Scatter-Gather
+= Fork-Join, MapReduce, and Scatter-Gather
 <fork-join-mapreduce-and-scatter-gather>
-=== 3.1 The Three Parallel Decomposition Patterns
+== The Three Parallel Decomposition Patterns
 <the-three-parallel-decomposition-patterns>
 These three patterns represent variations of the same fundamental idea —
 parallel decomposition with subsequent aggregation—originating from
@@ -344,7 +381,7 @@ different fields:
 )
 ]
 
-=== 3.2 Fork-Join in Workgraph
+== Fork-Join in Workgraph
 <fork-join-in-workgraph>
 Fork-Join is the natural topology of `after` graphs:
 
@@ -367,7 +404,7 @@ is workgraph’s most fundamental parallel pattern. Every fan-out from a
 single task is a fork; every convergence point with multiple
 `after` entries is a join.
 
-=== 3.3 MapReduce in Workgraph
+== MapReduce in Workgraph
 <mapreduce-in-workgraph>
 MapReduce adds data-parallel semantics to fork-join. In workgraph, this
 is expressed as:
@@ -386,7 +423,7 @@ description specifies which map outputs it consumes.
 This is workgraph’s most common pattern for parallelizable research,
 analysis, and implementation tasks.
 
-=== 3.4 Scatter-Gather in Workgraph
+== Scatter-Gather in Workgraph
 <scatter-gather-in-workgraph>
 Scatter-Gather differs from fork-join in two ways: recipients may be
 heterogeneous (different roles), and the aggregator may not require all
@@ -399,7 +436,7 @@ responses. In workgraph:
   marking incomplete worker tasks as `Abandoned` (a terminal status).
   This is an idiom for the Discriminator pattern (WCP9).
 
-=== 3.5 Work-Stealing
+== Work-Stealing
 <work-stealing>
 Doug Lea’s Fork/Join framework introduced work-stealing: idle threads
 steal tasks from busy threads’ queues, achieving dynamic load balancing
@@ -410,9 +447,9 @@ coordinator’s `max_agents` parameter is the thread pool size.
 
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
-== 4. Pipeline and Assembly Line Patterns
+= Pipeline and Assembly Line Patterns
 <pipeline-and-assembly-line-patterns>
-=== 4.1 The Pipeline Pattern
+== The Pipeline Pattern
 <the-pipeline-pattern>
 A pipeline is a serial chain of specialized processing stages:
 
@@ -447,7 +484,7 @@ This maps directly to manufacturing and operations concepts:
 )
 ]
 
-=== 4.2 Pipeline vs. Fork-Join
+== Pipeline vs. Fork-Join
 <pipeline-vs.-fork-join>
 These two patterns are complementary, not competing:
 
@@ -473,7 +510,7 @@ These two patterns are complementary, not competing:
 )
 ]
 
-=== 4.3 Combined Patterns
+== Combined Patterns
 <combined-patterns>
 Real workflows combine both. A common workgraph pattern:
 
@@ -496,7 +533,7 @@ can have a different role:
 This is the Inverse Conway Maneuver in action—the role assignments
 shape the pipeline stages, which shape the output architecture.
 
-=== 4.4 Theory of Constraints
+== Theory of Constraints
 <theory-of-constraints>
 Eliyahu Goldratt’s Theory of Constraints (1984) applies directly to
 pipelines:
@@ -518,9 +555,9 @@ parallel.
 
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
-== 5. Autopoiesis: The Self-Producing Agency
+= Autopoiesis: The Self-Producing Agency
 <autopoiesis-the-self-producing-agency>
-=== 5.1 The Concept
+== The Concept
 <the-concept>
 Autopoiesis (from Greek #emph[auto] "self" + #emph[poiesis]
 "production") was introduced by Chilean biologists Humberto Maturana and
@@ -555,7 +592,7 @@ Key properties:
 )
 ]
 
-=== 5.2 Luhmann’s Social Systems Theory
+== Luhmann’s Social Systems Theory
 <luhmanns-social-systems-theory>
 Niklas Luhmann (1984) adapted autopoiesis for sociology with a radical
 move: #strong[social systems are made of communications, not people.]
@@ -571,7 +608,7 @@ matters is the network of communications: "task X is done" triggers
 "task Y is ready" triggers "agent A starts work" triggers "task Y is
 in-progress"—communications producing communications.
 
-=== 5.3 The Evolve Loop is Autopoietic
+== The Evolve Loop is Autopoietic
 <the-evolve-loop-is-autopoietic>
 The execute→evaluate→evolve→execute cycle maps precisely onto
 autopoietic self-production:
@@ -621,7 +658,7 @@ execute (cycle repeats)
 )
 ]
 
-=== 5.4 Practical Implications
+== Practical Implications
 <practical-implications>
 The autopoietic framing suggests several design principles:
 
@@ -646,9 +683,9 @@ The autopoietic framing suggests several design principles:
 
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
-== 6. Trace as Organizational Memory: The Provenance Log
+= Trace as Organizational Memory: The Provenance Log
 <trace-as-organizational-memory>
-=== 6.1 Beyond Stigmergic Traces
+== Beyond Stigmergic Traces
 <beyond-stigmergic-traces>
 Section 1 established that the task graph is a stigmergic medium—agents
 leave traces (completed tasks, artifacts, status changes) that guide
@@ -690,7 +727,7 @@ metadata, not data.
 )
 ]
 
-=== 6.2 Luhmann's Structural Memory
+== Luhmann's Structural Memory
 <luhmanns-structural-memory>
 Niklas Luhmann's concept of #strong[structural memory] in social
 systems theory provides the deepest theoretical connection. For
@@ -723,7 +760,7 @@ Key Luhmann concepts apply directly:
   operative memory (what the system currently needs to function). The
   provenance log is system memory (what the system has been through).
 
-=== 6.3 Organizational Learning Theory
+== Organizational Learning Theory
 <organizational-learning-theory>
 The provenance log connects to the organizational memory literature:
 
@@ -744,7 +781,7 @@ The provenance log connects to the organizational memory literature:
   through replay and trace-as-functions (Section 8), gets encoded into
   reusable routines.
 
-=== 6.4 The Three Layers of Memory in Workgraph
+== The Three Layers of Memory in Workgraph
 <three-layers-of-memory>
 Workgraph's memory architecture comprises three distinct layers:
 
@@ -768,7 +805,7 @@ Layer 3: PROCEDURAL MEMORY (provenance log)
   - Append-only, immutable, compressed rotation
 ```
 
-=== 6.5 Implications for Practice
+== Implications for Practice
 <trace-implications-for-practice>
 - #strong[Trace enables post-mortem analysis.] When a workflow fails,
   `wg trace --full` reconstructs the complete causal chain—not just
@@ -783,9 +820,9 @@ Layer 3: PROCEDURAL MEMORY (provenance log)
 
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
-== 7. Replay as Organizational Learning: Double-Loop Learning Made Concrete
+= Replay as Organizational Learning: Double-Loop Learning Made Concrete
 <replay-as-organizational-learning>
-=== 7.1 From Memory to Learning
+== From Memory to Learning
 <from-memory-to-learning>
 Section 6 established that trace creates organizational memory. Replay
 (`wg replay`) is the mechanism by which the system #emph[learns from]
@@ -825,7 +862,7 @@ modified parameters. This is closer to #strong[simulation] or
 used a different model?" or "What would have happened if we re-ran only
 the failed tasks?"
 
-=== 7.2 Replay Filters as Learning Strategies
+== Replay Filters as Learning Strategies
 <replay-filters-as-learning-strategies>
 Each replay filter embodies a different organizational learning
 strategy:
@@ -859,7 +896,7 @@ strategy:
 )
 ]
 
-=== 7.3 Transitive Reset as Causal Reasoning
+== Transitive Reset as Causal Reasoning
 <transitive-reset-as-causal-reasoning>
 When `wg replay` resets a task, it also resets all #strong[transitive
 dependents]—tasks that depend (directly or transitively) on the reset
@@ -878,7 +915,7 @@ This connects to:
   leaves a corrupted implementation in place. Transitive reset prevents
   this.
 
-=== 7.4 Snapshots as Experimental Records
+== Snapshots as Experimental Records
 <snapshots-as-experimental-records>
 `wg replay` creates a snapshot (`wg runs`) before resetting. This is
 not just a safety mechanism—it is an #strong[experimental record]. Each
@@ -902,7 +939,7 @@ This is the scientific method applied to workflow execution.
 Hypothesis → experiment → measurement → conclusion. The snapshots are
 the lab notebooks.
 
-=== 7.5 Counterfactual Reasoning
+== Counterfactual Reasoning
 <counterfactual-reasoning>
 Replay enables a form of counterfactual reasoning that is rare in
 organizational systems: "What if we had done X differently?"
@@ -921,7 +958,7 @@ made empirical]: rather than theoretically questioning governing
 variables, the system can #emph[actually test] alternative governing
 parameters.
 
-=== 7.6 Connection to Simulation Theory
+== Connection to Simulation Theory
 <connection-to-simulation-theory>
 The organizational simulation literature provides further theoretical
 grounding:
@@ -938,9 +975,9 @@ grounding:
 
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
-== 8. Trace-as-Functions: From Ad-Hoc Patterns to Organizational Routines
+= Trace-as-Functions: From Ad-Hoc Patterns to Organizational Routines
 <trace-as-functions>
-=== 8.1 The Problem: Emergent Patterns Are Invisible
+== The Problem: Emergent Patterns Are Invisible
 <emergent-patterns-are-invisible>
 The autopoietic loop (Section 5) produces workflow patterns through
 self-organization. A human operator creates a task graph
@@ -957,7 +994,7 @@ The key insight:
 A successful trace is a function waiting to be extracted.
 ]
 
-=== 8.2 Nelson & Winter's Organizational Routines
+== Nelson & Winter's Organizational Routines
 <nelson-winter-organizational-routines>
 Richard Nelson and Sidney Winter's #emph[An Evolutionary Theory of
 Economic Change] (1982) introduced the concept of #strong[organizational
@@ -997,7 +1034,7 @@ serve as the "genes" of the organization:
 )
 ]
 
-=== 8.3 From Trace to Template: The Extraction Pipeline
+== From Trace to Template: The Extraction Pipeline
 <from-trace-to-template>
 The conceptual pipeline for turning a trace into a reusable function
 describes the theoretical framework that current and future features
@@ -1050,7 +1087,7 @@ This pipeline is currently partially implemented:
 - Step 6: `wg replay` re-executes; future `wg template` or similar
   could formalize this
 
-=== 8.4 March's Exploration vs. Exploitation
+== March's Exploration vs. Exploitation
 <march-exploration-exploitation>
 James March's (1991) framework of #strong[exploration] (search,
 variation, risk-taking, experimentation, discovery) vs.
@@ -1092,7 +1129,7 @@ workgraph, this tension manifests as:
 - #strong[Balance]: Using replay for known workflow types, fresh task
   graphs for novel problems
 
-=== 8.5 Feldman & Pentland: Routines as Generative Systems
+== Feldman & Pentland: Routines as Generative Systems
 <routines-as-generative-systems>
 Martha Feldman and Brian Pentland (2003) reconceptualized organizational
 routines not as fixed, dead patterns but as #strong[generative systems]
@@ -1132,7 +1169,7 @@ that a performative deviation (e.g., adding a review step) improved
 outcomes, the evolve mechanism can update roles and motivations to
 institutionalize that deviation—modifying the ostensive routine.
 
-=== 8.6 The Evolutionary Cycle
+== The Evolutionary Cycle
 <the-evolutionary-cycle>
 Synthesizing Nelson & Winter + March + Feldman & Pentland yields a
 unified evolutionary model:
@@ -1179,9 +1216,9 @@ workgraph primitives as the substrate:
 
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
-== 9. Cybernetics and Control Theory
+= Cybernetics and Control Theory
 <cybernetics-and-control-theory>
-=== 9.1 Core Concepts
+== Core Concepts
 <core-concepts>
 Cybernetics (from Greek #emph[kybernetes] "steersman") is the study of
 regulatory systems—feedback loops, circular causality, and the science
@@ -1225,7 +1262,7 @@ understanding how systems maintain stability in changing environments.
 )
 ]
 
-=== 9.2 The Coordinator as Cybernetic Regulator
+== The Coordinator as Cybernetic Regulator
 <the-coordinator-as-cybernetic-regulator>
 The workgraph coordinator operates a control loop:
 
@@ -1262,7 +1299,7 @@ regulator] (Cannon/Ashby): The coordinator maintains steady throughput
 despite perturbations (agent failures, new tasks added, changing
 priorities)
 
-=== 9.3 Ashby’s Law of Requisite Variety
+== Ashby’s Law of Requisite Variety
 <ashbys-law-of-requisite-variety>
 Ashby’s Law states: #strong["Only variety can absorb variety."] A
 regulator must have at least as many response options as the system has
@@ -1302,7 +1339,7 @@ to match the growing variety of disturbances (V).
 )
 ]
 
-=== 9.4 Single-Loop vs. Double-Loop Learning
+== Single-Loop vs. Double-Loop Learning
 <single-loop-vs.-double-loop-learning>
 #align(center)[#table(
   columns: 3,
@@ -1331,9 +1368,9 @@ plateau in performance.
 
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
-== 10. The Viable System Model
+= The Viable System Model
 <the-viable-system-model>
-=== 10.1 Beer’s Five Systems
+== Beer’s Five Systems
 <beers-five-systems>
 Stafford Beer’s Viable System Model (VSM) describes the organizational
 structure of any autonomous system capable of surviving in a changing
@@ -1381,7 +1418,7 @@ The critical homeostatic balance is the #strong[S3-S4 homeostat]: S3
 wants stability and optimization of current operations; S4 wants
 exploration and adaptation. S5 mediates this tension.
 
-=== 10.2 Mapping to Workgraph
+== Mapping to Workgraph
 <mapping-to-workgraph>
 #align(center)[#table(
   columns: 2,
@@ -1423,7 +1460,7 @@ exploration and adaptation. S5 mediates this tension.
 )
 ]
 
-=== 10.3 The S3-S4 Balance in Practice
+== The S3-S4 Balance in Practice
 <the-s3-s4-balance-in-practice>
 In workgraph, the S3-S4 tension manifests as:
 
@@ -1439,9 +1476,9 @@ evolver’s own role) is the S5 function enforcing identity preservation.
 
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
-== 11. The Principal-Agent Problem
+= The Principal-Agent Problem
 <the-principal-agent-problem>
-=== 11.1 The Problem
+== The Problem
 <the-problem>
 The principal-agent problem, formalized by Ross (1973) and Jensen &
 Meckling (1976), arises when a #strong[principal] delegates work to an
@@ -1469,7 +1506,7 @@ Two core information asymmetries:
 Agency costs (Jensen & Meckling 1976) \= Monitoring costs + Bonding
 costs + Residual loss.
 
-=== 11.2 Workgraph as an Agency Relationship
+== Workgraph as an Agency Relationship
 <workgraph-as-an-agency-relationship>
 This mapping is unusually precise because workgraph literally has
 primitives called "agents," "evaluations," and "motivations"—the
@@ -1518,7 +1555,7 @@ vocabulary of agency theory.
 )
 ]
 
-=== 11.3 Mechanism Design Implications
+== Mechanism Design Implications
 <mechanism-design-implications>
 Agency theory suggests specific design principles for workgraph:
 
@@ -1541,9 +1578,9 @@ Agency theory suggests specific design principles for workgraph:
 
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
-== 12. Conway’s Law and the Inverse Conway Maneuver
+= Conway’s Law and the Inverse Conway Maneuver
 <conways-law-and-the-inverse-conway-maneuver>
-=== 12.1 Conway’s Law
+== Conway’s Law
 <conways-law>
 #quote(block: true)[
 "Organizations which design systems are constrained to produce designs
@@ -1557,7 +1594,7 @@ Therefore, the interfaces between the system’s parts will mirror the
 communication channels between the teams. This is a #emph[constraint],
 not a choice.
 
-=== 12.2 The Inverse Conway Maneuver
+== The Inverse Conway Maneuver
 <the-inverse-conway-maneuver>
 Coined by Jonny LeRoy and Matt Simons (2010): if org structure shapes
 system architecture, then #strong[deliberately designing org structure
@@ -1565,7 +1602,7 @@ can drive desired system architecture]. Rather than accepting that your
 system mirrors your org chart, you restructure teams to produce the
 architecture you want.
 
-=== 12.3 Mapping to Workgraph
+== Mapping to Workgraph
 <mapping-to-workgraph-1>
 #align(center)[#table(
   columns: 2,
@@ -1588,7 +1625,7 @@ architecture you want.
 )
 ]
 
-=== 12.4 The Inverse Conway Maneuver in Practice
+== The Inverse Conway Maneuver in Practice
 <the-inverse-conway-maneuver-in-practice>
 #strong[Example: Microservices via roles]
 
@@ -1617,9 +1654,9 @@ the roles first, and the task graph (and resulting code) will follow.
 
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
-== 13. Team Topologies
+= Team Topologies
 <team-topologies>
-=== 13.1 The Framework
+== The Framework
 <the-framework>
 Team Topologies (Skelton & Pais, 2019) provides a practical framework
 for organizing technology teams, built on Conway’s Law and cognitive
@@ -1673,7 +1710,7 @@ load theory.
 )
 ]
 
-=== 13.2 Mapping to Workgraph Roles
+== Mapping to Workgraph Roles
 <mapping-to-workgraph-roles>
 #align(center)[#table(
   columns: 2,
@@ -1712,7 +1749,7 @@ load theory.
 )
 ]
 
-=== 13.3 Practical Guidance for Workgraph Users
+== Practical Guidance for Workgraph Users
 <practical-guidance-for-workgraph-users>
 + #strong[Most roles should be stream-aligned.] If you have a "build the
   feature" type of work, that’s stream-aligned. Don’t over-specialize.
@@ -1731,9 +1768,9 @@ load theory.
 
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
-== 14. Organizational Theory Primitives
+= Organizational Theory Primitives
 <organizational-theory-primitives>
-=== 14.1 Division of Labor
+== Division of Labor
 <division-of-labor>
 Adam Smith’s pin factory (1776): splitting work into specialized steps
 increases productivity. In workgraph, this maps to:
@@ -1750,7 +1787,7 @@ The tradeoff: over-specialization increases coordination costs (more
 This is the fundamental tension in organizational design, and it applies
 directly to workgraph agency design.
 
-=== 14.2 Span of Control
+== Span of Control
 <span-of-control>
 The number of subordinates a manager can effectively supervise. In
 workgraph: the number of agents a single coordinator tick can
@@ -1761,7 +1798,7 @@ Research suggests 5-9 direct reports as optimal for human managers
 agents can the coordinator monitor, evaluate, and evolve without losing
 oversight quality.
 
-=== 14.3 Coordination Costs
+== Coordination Costs
 <coordination-costs>
 Every dependency edge (`after`) is a coordination point. The total
 coordination cost of a task graph scales with the number of edges, not
@@ -1775,7 +1812,7 @@ serial chain, more agents are wasted. If the graph is a wide diamond
 (fork-join), more agents directly increase throughput—up to the point
 where coordination overhead dominates.
 
-=== 14.4 Transaction Cost Economics
+== Transaction Cost Economics
 <transaction-cost-economics>
 Oliver Williamson’s Transaction Cost Economics (1975, 1985) asks: when
 should work be done inside the organization ("make") vs. outside
@@ -1808,12 +1845,12 @@ represents this make-vs-buy boundary.
 
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
-== 15. Synthesis: Cross-Cutting Connections
+= Synthesis: Cross-Cutting Connections
 <synthesis-cross-cutting-connections>
 These frameworks are not independent—they are deeply interconnected
 views of the same underlying organizational dynamics.
 
-=== 15.1 The Grand Unification
+== The Grand Unification
 <the-grand-unification>
 ```
                     STRUCTURE                    DYNAMICS                     MEMORY
@@ -1844,7 +1881,7 @@ Org. Learning ──── Routines ──────────── Double-
 Nelson & Winter ── Organizational genes ─ Variation + Selection ──── Trace-as-function
 ```
 
-=== 15.2 Key Structural Identities
+== Key Structural Identities
 <key-structural-identities>
 Several deep identities connect these frameworks:
 
@@ -1911,9 +1948,9 @@ Several deep identities connect these frameworks:
 
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
-== 16. Practical Recommendations
+= Practical Recommendations
 <practical-recommendations>
-=== 16.1 Agency Design Checklist
+== Agency Design Checklist
 <agency-design-checklist>
 Based on the theoretical frameworks above, here is a checklist for
 designing a workgraph agency:
@@ -1954,7 +1991,7 @@ designing a workgraph agency:
 )
 ]
 
-=== 16.2 Pattern Selection Guide
+== Pattern Selection Guide
 <pattern-selection-guide>
 #align(center)[#table(
   columns: 3,
@@ -1982,7 +2019,7 @@ designing a workgraph agency:
 )
 ]
 
-=== 16.3 Anti-Patterns
+== Anti-Patterns
 <anti-patterns>
 #align(center)[#table(
   columns: 4,
@@ -2022,14 +2059,14 @@ designing a workgraph agency:
 
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
-== 17. Appendix: Comparative Tables
+= Appendix: Comparative Tables
 <appendix-comparative-tables>
-=== Framework-to-Primitive Mapping
+== Framework-to-Primitive Mapping
 <framework-to-primitive-mapping>
-#align(center)[#table(
+#text(size: 7pt)[#align(center)[#table(
   columns: 13,
   align: (col, row) => (auto,auto,auto,auto,auto,auto,auto,auto,auto,auto,auto,auto,auto,).at(col),
-  inset: 6pt,
+  inset: 4pt,
   [Framework], [Tasks], [`after`], [Structural Cycles], [Roles],
   [Motivations], [Agents], [Coordinator], [Evaluations], [Evolve],
   [Trace], [Replay], [Runs],
@@ -2190,14 +2227,14 @@ designing a workgraph agency:
   [Reproduction with mutation],
   [Snapshot of prior generation],
 )
-]
+]]
 
-=== Theoretical Density of Workgraph Primitives
+== Theoretical Density of Workgraph Primitives
 <theoretical-density-of-workgraph-primitives>
-#align(center)[#table(
+#text(size: 7pt)[#align(center)[#table(
   columns: 3,
   align: (col, row) => (auto,auto,auto,).at(col),
-  inset: 6pt,
+  inset: 4pt,
   [Primitive], [Frameworks That Map To It], [Theoretical "Load"],
   [#strong[Tasks]],
   [All 10 frameworks],
@@ -2251,13 +2288,13 @@ designing a workgraph agency:
   Evolutionary Theory (generational snapshots)],
   [The experimental record],
 )
-]
+]]
 
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
-== 18. Sources
+= Sources
 <sources>
-=== Organizational Theory
+== Organizational Theory
 <organizational-theory>
 - Smith, A. (1776). #emph[An Inquiry into the Nature and Causes of the
   Wealth of Nations]. Book I, Chapter 1: "Of the Division of Labour."
@@ -2271,7 +2308,7 @@ designing a workgraph agency:
   Business Review], 34(3), 39-47.
 - Brooks, F.P. (1975). #emph[The Mythical Man-Month]. Addison-Wesley.
 
-=== Workflow Patterns
+== Workflow Patterns
 <workflow-patterns>
 - van der Aalst, W.M.P., ter Hofstede, A.H.M., Kiepuszewski, B., &
   Barros, A.P. (2003). "Workflow Patterns." #emph[Distributed and
@@ -2285,7 +2322,7 @@ designing a workgraph agency:
   (2005). "Workflow Resource Patterns." In #emph[Advanced Information
   Systems Engineering (CAiSE)], Springer.
 
-=== Parallel Decomposition
+== Parallel Decomposition
 <parallel-decomposition>
 - Dean, J. & Ghemawat, S. (2004). "MapReduce: Simplified Data Processing
   on Large Clusters." #emph[OSDI ’04], 137-150.
@@ -2298,7 +2335,7 @@ designing a workgraph agency:
 - Blumofe, R.D. & Leiserson, C.E. (1999). "Scheduling Multithreaded
   Computations by Work Stealing." #emph[JACM], 46(5), 720-748.
 
-=== Stigmergy
+== Stigmergy
 <stigmergy>
 - Grassé, P.-P. (1959). "La reconstruction du nid et les coordinations
   interindividuelles chez Bellicositermes natalensis et Cubitermes sp."
@@ -2317,7 +2354,7 @@ designing a workgraph agency:
   Coordination in FLOSS Development Teams." #emph[Cognitive Systems
   Research], 38, 14-22.
 
-=== Autopoiesis
+== Autopoiesis
 <autopoiesis>
 - Maturana, H.R. & Varela, F.J. (1972/1980). #emph[Autopoiesis and
   Cognition: The Realization of the Living]. D. Reidel.
@@ -2330,7 +2367,7 @@ designing a workgraph agency:
 - Mingers, J. (2002). "Can Social Systems Be Autopoietic?"
   #emph[Sociological Review], 50(2), 278-299.
 
-=== Organizational Learning & Evolutionary Theory
+== Organizational Learning & Evolutionary Theory
 <organizational-learning-evolutionary-theory>
 - Huber, G.P. (1991). "Organizational Learning: The Contributing
   Processes and the Literatures." #emph[Organization Science], 2(1),
@@ -2355,7 +2392,7 @@ designing a workgraph agency:
   Back: Cognitive and Experiential Search." #emph[Administrative Science
   Quarterly], 45(1), 113–137.
 
-=== Cybernetics
+== Cybernetics
 <cybernetics>
 - Wiener, N. (1948). #emph[Cybernetics: Or Control and Communication in
   the Animal and the Machine]. MIT Press.
@@ -2371,7 +2408,7 @@ designing a workgraph agency:
 - Beer, S. (1959). #emph[Cybernetics and Management]. English
   Universities Press.
 
-=== Viable System Model
+== Viable System Model
 <viable-system-model>
 - Beer, S. (1972). #emph[Brain of the Firm]. Allen Lane / Penguin Press.
 - Beer, S. (1979). #emph[The Heart of Enterprise]. Wiley.
@@ -2380,7 +2417,7 @@ designing a workgraph agency:
 - Espejo, R. & Harnden, R. (1989). #emph[The Viable System Model:
   Interpretations and Applications]. Wiley.
 
-=== Principal-Agent Theory
+== Principal-Agent Theory
 <principal-agent-theory>
 - Ross, S.A. (1973). "The Economic Theory of Agency: The Principal’s
   Problem." #emph[AER], 63(2), 134-139.
@@ -2394,7 +2431,7 @@ designing a workgraph agency:
 - Laffont, J.-J. & Martimort, D. (2002). #emph[The Theory of Incentives:
   The Principal-Agent Model]. Princeton University Press.
 
-=== Conway’s Law
+== Conway’s Law
 <conways-law-1>
 - Conway, M.E. (1968). "How Do Committees Invent?" #emph[Datamation],
   14(4), 28-31.
@@ -2404,11 +2441,11 @@ designing a workgraph agency:
   Duality between Product and Organizational Architectures."
   #emph[Research Policy], 41(8), 1309-1324.
 
-=== Team Topologies
+== Team Topologies
 <team-topologies-1>
 - Skelton, M. & Pais, M. (2019). #emph[Team Topologies: Organizing
   Business and Technology Teams for Fast Flow]. IT Revolution Press.
 
-=== Theory of Constraints
+== Theory of Constraints
 <theory-of-constraints-1>
 - Goldratt, E.M. (1984). #emph[The Goal]. North River Press.
