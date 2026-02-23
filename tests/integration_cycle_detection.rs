@@ -656,6 +656,78 @@ fn test_dispatch_reiteration_worker_ready_after_reopen() {
     );
 }
 
+#[test]
+fn test_dispatch_cycle_header_not_exempt_from_forward_deps() {
+    // Context-scopes scenario: design → integrate → verify (cycle via back-edges).
+    // verify has cycle_config (--max-iterations 3). Auto-back-edges add verify
+    // to design.after and integrate.after, forming an SCC.
+    //
+    // When design is Done and integrate is Open:
+    //   - integrate should be ready (worker exempt from verify back-edge, design Done)
+    //   - verify must NOT be ready (must wait for integrate, its forward dep)
+    let mut design = make_task_with_status("design", "Design", Status::Done);
+    design.after = vec!["verify".to_string()]; // auto-back-edge
+
+    let mut integrate = make_task("integrate", "Integrate");
+    integrate.after = vec!["design".to_string(), "verify".to_string()]; // forward + auto-back-edge
+
+    let mut verify = make_task("verify", "Verify");
+    verify.after = vec!["integrate".to_string(), "design".to_string()]; // forward deps
+    verify.cycle_config = Some(CycleConfig {
+        max_iterations: 3,
+        guard: None,
+        delay: None,
+    });
+
+    let graph = build_graph(vec![design, integrate, verify]);
+    let analysis = graph.compute_cycle_analysis();
+
+    let ready = ready_tasks_cycle_aware(&graph, &analysis);
+    let ready_ids: Vec<&str> = ready.iter().map(|t| t.id.as_str()).collect();
+
+    assert!(
+        ready_ids.contains(&"integrate"),
+        "Integrate should be ready (worker exempt from verify, design Done). Ready: {:?}",
+        ready_ids
+    );
+    assert!(
+        !ready_ids.contains(&"verify"),
+        "Verify (cycle header) must NOT be ready — integrate (forward dep) is still Open. Ready: {:?}",
+        ready_ids
+    );
+}
+
+#[test]
+fn test_dispatch_cycle_header_ready_when_all_forward_deps_done() {
+    // Same cycle as above but now both design and integrate are Done.
+    // Verify should now be ready (all forward deps satisfied).
+    let mut design = make_task_with_status("design", "Design", Status::Done);
+    design.after = vec!["verify".to_string()];
+
+    let mut integrate = make_task_with_status("integrate", "Integrate", Status::Done);
+    integrate.after = vec!["design".to_string(), "verify".to_string()];
+
+    let mut verify = make_task("verify", "Verify");
+    verify.after = vec!["integrate".to_string(), "design".to_string()];
+    verify.cycle_config = Some(CycleConfig {
+        max_iterations: 3,
+        guard: None,
+        delay: None,
+    });
+
+    let graph = build_graph(vec![design, integrate, verify]);
+    let analysis = graph.compute_cycle_analysis();
+
+    let ready = ready_tasks_cycle_aware(&graph, &analysis);
+    let ready_ids: Vec<&str> = ready.iter().map(|t| t.id.as_str()).collect();
+
+    assert!(
+        ready_ids.contains(&"verify"),
+        "Verify should be ready (all forward deps Done). Ready: {:?}",
+        ready_ids
+    );
+}
+
 // ===========================================================================
 // 3. Completion and re-opening tests
 // ===========================================================================
@@ -3528,6 +3600,80 @@ fn test_deep_cli_viz_no_duplicate_nodes() {
     assert!(
         has_cycle_marker || !output.is_empty(),
         "Viz should render without errors. Output:\n{}",
+        output
+    );
+}
+
+#[test]
+fn test_viz_cycle_back_edge_no_duplicate_node_rendering() {
+    // Cycle: A → B → C → A (back-edge from C to A).
+    // The back-edge line should show "↺ (cycles back to a)" — NOT the full
+    // format_node output like "a  (open)  (cycle back-edge)" which duplicates
+    // the node already rendered higher in the tree.
+    let tmp = TempDir::new().unwrap();
+    let a = make_task("a", "Task A");
+    let mut b = make_task("b", "Task B");
+    b.after = vec!["a".to_string()];
+    let mut c = make_task("c", "Task C");
+    c.after = vec!["b".to_string()];
+    c.cycle_config = Some(CycleConfig {
+        max_iterations: 3,
+        guard: None,
+        delay: None,
+    });
+    // Back-edge: a depends on c (creating cycle a→b→c→a)
+    let mut a_with_back = a.clone();
+    a_with_back.after = vec!["c".to_string()];
+
+    let wg_dir = setup_workgraph(&tmp, vec![a_with_back, b, c]);
+    let output = wg_ok(&wg_dir, &["viz", "--all"]);
+
+    // The back-edge line should use compact format: "↺ (cycles back to ...)"
+    assert!(
+        output.contains("cycles back to"),
+        "Back-edge should show compact '↺ (cycles back to ...)' not full node. Output:\n{}",
+        output
+    );
+
+    // Back-edge lines must NOT contain status labels like "(open)" or "(done)"
+    // which would indicate format_node was called (duplicating the node).
+    for line in output.lines() {
+        if line.contains("cycles back to") {
+            assert!(
+                !line.contains("(open)") && !line.contains("(done)") && !line.contains("(in-progress)"),
+                "Back-edge line should not contain status (duplicate node rendering): {:?}\nFull output:\n{}",
+                line,
+                output
+            );
+        }
+    }
+}
+
+#[test]
+fn test_viz_cycle_members_shown_without_all_flag() {
+    // When a cycle has mixed done/open members, all members should be visible
+    // even without --all, so the cycle structure is complete.
+    let tmp = TempDir::new().unwrap();
+    let a = make_task_with_status("a", "Task A", Status::Done);
+    let mut b = make_task("b", "Task B"); // open
+    b.after = vec!["a".to_string()];
+    b.cycle_config = Some(CycleConfig {
+        max_iterations: 3,
+        guard: None,
+        delay: None,
+    });
+    // Back-edge: a depends on b (creating cycle a→b→a)
+    let mut a_with_back = a.clone();
+    a_with_back.after = vec!["b".to_string()];
+
+    let wg_dir = setup_workgraph(&tmp, vec![a_with_back, b]);
+
+    // Without --all: done task 'a' should still appear because it's in
+    // an active cycle with non-done member 'b'
+    let output = wg_ok(&wg_dir, &["viz"]);
+    assert!(
+        output.contains("a") && output.contains("b"),
+        "Both cycle members should appear even without --all. Output:\n{}",
         output
     );
 }

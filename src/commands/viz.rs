@@ -129,6 +129,25 @@ fn filter_internal_tasks<'a>(
 pub fn run(dir: &Path, options: &VizOptions) -> Result<()> {
     let (graph, _path) = super::load_workgraph(dir)?;
 
+    // Compute cycle analysis so we can preserve cycle members in filtered views
+    let cycle_analysis = graph.compute_cycle_analysis();
+
+    // Find cycle indices that have at least one non-done member —
+    // all members of such cycles should be shown even without --all.
+    let active_cycle_ids: HashSet<usize> = if options.all || options.status.is_some() {
+        HashSet::new()
+    } else {
+        let mut active = HashSet::new();
+        for task in graph.tasks() {
+            if task.status != Status::Done {
+                if let Some(&ci) = cycle_analysis.task_to_cycle.get(&task.id) {
+                    active.insert(ci);
+                }
+            }
+        }
+        active
+    };
+
     // Determine which tasks to include
     let tasks_to_show: Vec<_> = graph
         .tasks()
@@ -151,8 +170,15 @@ pub fn run(dir: &Path, options: &VizOptions) -> Result<()> {
                 return task_status == status_filter.to_lowercase();
             }
 
-            // Default: show only non-done tasks
-            t.status != Status::Done
+            // Default: show non-done tasks, plus done cycle members if
+            // the cycle still has active (non-done) work.
+            if t.status != Status::Done {
+                return true;
+            }
+            if let Some(&ci) = cycle_analysis.task_to_cycle.get(&t.id) {
+                return active_cycle_ids.contains(&ci);
+            }
+            false
         })
         .collect();
 
@@ -817,10 +843,8 @@ fn generate_ascii(
 
                     if is_back_edge {
                         lines.push(format!(
-                            "{}{}↺ {}  (cycle back-edge)",
-                            prefix,
-                            connector,
-                            format_node(id)
+                            "{}{}↺ (cycles back to {})",
+                            prefix, connector, id
                         ));
                     } else {
                         lines.push(format!(
@@ -1509,6 +1533,7 @@ mod tests {
             ready_after: None,
             paused: false,
             visibility: "internal".to_string(),
+            context_scope: None,
         cycle_config: None,
         }
     }

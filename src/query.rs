@@ -353,15 +353,18 @@ pub fn ready_tasks_cycle_aware<'a>(
                 {
                     return true;
                 }
-                // Cycle-aware: only exempt back-edge blockers (cycle iterator
-                // tasks in the same cycle).  The auto-created dependency from a
-                // worker back to the iterator is a loop-back edge; the iterator
-                // should not block the worker on iteration 0.
-                if let Some(blocker) = graph.get_task(blocker_id) {
-                    if blocker.cycle_config.is_some() {
-                        if let Some(bc) = cycle_analysis.task_to_cycle.get(blocker_id) {
-                            if cycle_analysis.task_to_cycle.get(&task.id) == Some(bc) {
-                                return true;
+                // Cycle-aware: only exempt WORKERS from back-edge blockers.
+                // The auto-created dependency from a worker back to the iterator
+                // is a loop-back edge; the iterator should not block the worker.
+                // But the cycle header (task with cycle_config) must NEVER skip
+                // its own forward dependencies — it must wait for workers to finish.
+                if task.cycle_config.is_none() {
+                    if let Some(blocker) = graph.get_task(blocker_id) {
+                        if blocker.cycle_config.is_some() {
+                            if let Some(bc) = cycle_analysis.task_to_cycle.get(blocker_id) {
+                                if cycle_analysis.task_to_cycle.get(&task.id) == Some(bc) {
+                                    return true;
+                                }
                             }
                         }
                     }
@@ -395,13 +398,16 @@ pub fn ready_tasks_with_peers_cycle_aware<'a>(
                 if is_blocker_satisfied(blocker_id, graph, Some(workgraph_dir)) {
                     return true;
                 }
-                // Cycle-aware: exempt back-edge blockers (cycle iterator tasks
-                // in the same cycle).
-                if let Some(blocker) = graph.get_task(blocker_id) {
-                    if blocker.cycle_config.is_some() {
-                        if let Some(bc) = cycle_analysis.task_to_cycle.get(blocker_id) {
-                            if cycle_analysis.task_to_cycle.get(&task.id) == Some(bc) {
-                                return true;
+                // Cycle-aware: only exempt WORKERS from back-edge blockers.
+                // The cycle header (task with cycle_config) must wait for its
+                // forward dependencies (workers) to complete.
+                if task.cycle_config.is_none() {
+                    if let Some(blocker) = graph.get_task(blocker_id) {
+                        if blocker.cycle_config.is_some() {
+                            if let Some(bc) = cycle_analysis.task_to_cycle.get(blocker_id) {
+                                if cycle_analysis.task_to_cycle.get(&task.id) == Some(bc) {
+                                    return true;
+                                }
                             }
                         }
                     }
