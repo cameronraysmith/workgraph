@@ -2,7 +2,7 @@
 
 Canonical list of all key documentation files and their purpose. Used as the reference for future doc-sync runs.
 
-Last updated: 2026-02-23
+Last updated: 2026-02-23 (verified by doc-sync run 2)
 
 ---
 
@@ -77,6 +77,8 @@ Last updated: 2026-02-23
 | `docs/research/veracity-exchange-integration.md` | Veracity exchange integration research | Research |
 | `docs/research/veracity-exchange-deep-dive.md` | Veracity exchange deep dive | Research |
 | `docs/research/agent-context-awareness.md` | Agent context awareness research | Research |
+| `docs/research/agent-context-scopes.md` | Configurable agent context scopes design | Research (not shipped) |
+| `docs/research/organizational-patterns.typ` | Organizational patterns research (Typst) | Research |
 
 ## Other Documentation
 

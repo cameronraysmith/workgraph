@@ -37,7 +37,8 @@ wg add <TITLE> [OPTIONS]
 |--------|-------------|
 | `--id <ID>` | Custom task ID (auto-generated from title if not provided) |
 | `-d, --description <TEXT>` | Detailed description, acceptance criteria |
-| `--blocked-by <ID>` | Add dependency on another task (repeatable, comma-separated) |
+| `--after <ID>` | This task comes after another task (repeatable) |
+| `--repo <REPO>` | Create the task in a peer workgraph (by name or path) |
 | `--assign <AGENT>` | Assign to an agent |
 | `--hours <N>` | Estimated hours |
 | `--cost <N>` | Estimated cost |
@@ -46,6 +47,7 @@ wg add <TITLE> [OPTIONS]
 | `--input <PATH>` | Input file/context needed (repeatable) |
 | `--deliverable <PATH>` | Expected output (repeatable) |
 | `--max-retries <N>` | Maximum retry attempts |
+| `--visibility <LEVEL>` | Task visibility zone for trace exports: `internal` (default), `peer`, `public` |
 | `--model <MODEL>` | Preferred model for this task (haiku, sonnet, opus) |
 | `--verify <CRITERIA>` | Verification criteria — task requires review before done |
 | `--max-iterations <N>` | Maximum cycle iterations — sets `CycleConfig` on this task, making it a cycle header |
@@ -61,7 +63,7 @@ wg add "Fix login bug"
 # Task with dependencies and metadata
 wg add "Implement user auth" \
   --id user-auth \
-  --blocked-by design-api \
+  --after design-api \
   --hours 8 \
   --skill rust \
   --skill security \
@@ -97,8 +99,8 @@ wg edit <ID> [OPTIONS]
 |--------|-------------|
 | `--title <TEXT>` | Update task title |
 | `-d, --description <TEXT>` | Update task description |
-| `--add-blocked-by <ID>` | Add a blocked-by dependency (repeatable) |
-| `--remove-blocked-by <ID>` | Remove a blocked-by dependency (repeatable) |
+| `--add-after <ID>` | Add an after dependency (repeatable) |
+| `--remove-after <ID>` | Remove an after dependency (repeatable) |
 | `--add-tag <TAG>` | Add a tag (repeatable) |
 | `--remove-tag <TAG>` | Remove a tag (repeatable) |
 | `--add-skill <SKILL>` | Add a required skill (repeatable) |
@@ -107,6 +109,7 @@ wg edit <ID> [OPTIONS]
 | `--max-iterations <N>` | Set maximum cycle iterations (creates or updates `CycleConfig`) |
 | `--cycle-guard <EXPR>` | Set guard condition for cycle iteration |
 | `--cycle-delay <DUR>` | Set delay between cycle iterations |
+| `--visibility <LEVEL>` | Set task visibility zone: `internal`, `peer`, `public` |
 
 Triggers a `graph_changed` IPC notification to the service daemon, so the coordinator picks up changes immediately.
 
@@ -117,7 +120,7 @@ Triggers a `graph_changed` IPC notification to the service daemon, so the coordi
 wg edit my-task --title "Better title"
 
 # Add a dependency
-wg edit my-task --add-blocked-by other-task
+wg edit my-task --add-after other-task
 
 # Swap tags
 wg edit my-task --remove-tag stale --add-tag urgent
@@ -400,6 +403,7 @@ wg list [--status <STATUS>]
 | Option | Description |
 |--------|-------------|
 | `--status <STATUS>` | Filter by status (open, in-progress, done, failed, abandoned) |
+| `--paused` | Only show paused tasks |
 
 ---
 
@@ -1244,6 +1248,7 @@ wg agency stats [--min-evals <N>]
 | Option | Description |
 |--------|-------------|
 | `--min-evals <N>` | Minimum evaluations to consider a pair "explored" (default: 3) |
+| `--by-model` | Group stats by model (shows per-model score breakdown) |
 
 Shows role leaderboard, motivation leaderboard, synergy matrix, tag breakdown, and under-explored combinations.
 
@@ -1507,7 +1512,7 @@ wg spawn <TASK> --executor <NAME> [--model <MODEL>] [--timeout <DURATION>]
 **Options:**
 | Option | Description |
 |--------|-------------|
-| `--executor <NAME>` | Executor to use: claude, shell, or custom config name (required) |
+| `--executor <NAME>` | Executor to use: claude, amplifier, shell, or custom config name (required) |
 | `--model <MODEL>` | Model override (haiku, sonnet, opus) |
 | `--timeout <DURATION>` | Timeout (e.g., 30m, 1h, 90s) |
 
@@ -2039,7 +2044,9 @@ wg viz [OPTIONS]
 | `--critical-path` | Highlight the critical path in red |
 | `--dot` | Output Graphviz DOT format |
 | `--mermaid` | Output Mermaid diagram format |
+| `--graph` | Output 2D spatial graph with box-drawing characters |
 | `-o, --output <FILE>` | Render directly to file (requires graphviz) |
+| `--show-internal` | Show internal tasks (`assign-*`, `evaluate-*`) normally hidden |
 
 **Example:**
 ```bash

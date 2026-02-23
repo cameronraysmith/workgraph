@@ -9,8 +9,8 @@ You've got tasks. Some block others. Multiple people (or AIs) need to coordinate
 ```bash
 wg init
 wg add "Design the API"
-wg add "Build the backend" --blocked-by design-the-api
-wg add "Write tests" --blocked-by build-the-backend
+wg add "Build the backend" --after design-the-api
+wg add "Write tests" --after build-the-backend
 
 wg service start   # spawns agents on ready tasks automatically
 wg agents          # who's working on what?
@@ -60,7 +60,7 @@ This creates `.workgraph/` with your task graph.
 wg add "Set up CI pipeline"
 
 # Task with a blocker
-wg add "Deploy to staging" --blocked-by set-up-ci-pipeline
+wg add "Deploy to staging" --after set-up-ci-pipeline
 
 # Task with metadata
 wg add "Implement auth" \
@@ -83,7 +83,7 @@ wg add "Public API design" --visibility public
 
 ```bash
 wg edit my-task --title "Better title"
-wg edit my-task --add-blocked-by other-task
+wg edit my-task --add-after other-task
 wg edit my-task --remove-tag stale --add-tag urgent
 wg edit my-task --model opus
 wg edit my-task --add-skill security --remove-skill docs
@@ -174,7 +174,7 @@ Use workgraph (`wg`) for task coordination. Run `wg quickstart` to orient yourse
 
 As a top-level agent, use service mode — do not manually claim tasks:
 - `wg service start` to start the coordinator
-- `wg add "Task" --blocked-by dep` to define work
+- `wg add "Task" --after dep` to define work
 - `wg list` / `wg agents` to monitor progress
 
 The service automatically spawns agents and claims tasks.
@@ -198,8 +198,8 @@ Start the service and let it handle everything:
 ```bash
 # Define the work
 wg add "Refactor auth module" --skill rust
-wg add "Update tests" --blocked-by refactor-auth-module --skill testing
-wg add "Update docs" --blocked-by refactor-auth-module --skill docs
+wg add "Update tests" --after refactor-auth-module --skill testing
+wg add "Update docs" --after refactor-auth-module --skill docs
 
 # Start the service — it spawns agents on ready tasks automatically
 wg service start --max-agents 4
@@ -221,7 +221,7 @@ Let a top-level agent define the work, then the service dispatches it:
 
 Break down this goal into tasks using workgraph:
 1. Analyze what needs to be done
-2. Create tasks with `wg add`, linking dependencies with --blocked-by
+2. Create tasks with `wg add`, linking dependencies with --after
 3. Start `wg service start` to dispatch work automatically
 4. Monitor with `wg list` and `wg agents`
 5. If you discover more work, add it to the graph — the service picks it up
@@ -393,10 +393,10 @@ wg config --triage-max-log-bytes 50000
 
 Models are selected in priority order:
 
-1. `--model` flag on `wg spawn` (highest priority)
-2. Task's `model` property (set with `wg add --model` or `wg edit --model`)
-3. Coordinator config (`coordinator.model` in config.toml)
-4. Agent config default (`agent.model` in config.toml)
+1. Task's `model` property (set with `wg add --model` or `wg edit --model`) — highest priority
+2. Executor config model (model field in the executor's config file)
+3. `coordinator.model` in config.toml (or `--model` on `wg spawn` / `wg service start`)
+4. Executor default (if no model is resolved, no `--model` flag is passed)
 
 ```bash
 # Set model per-task at creation
@@ -588,8 +588,8 @@ For most projects:
    ```bash
    wg add "Goal task"
    wg add "Step 1"
-   wg add "Step 2" --blocked-by step-1
-   wg add "Step 3" --blocked-by step-2
+   wg add "Step 2" --after step-1
+   wg add "Step 3" --after step-2
    ```
 
 2. **Check the structure**:
@@ -607,7 +607,7 @@ For most projects:
 
 4. **Adapt**: As you learn more, update the graph — the service picks up changes
    ```bash
-   wg add "New thing we discovered" --blocked-by whatever
+   wg add "New thing we discovered" --after whatever
    wg edit stuck-task --add-tag needs-rethink
    wg fail stuck-task --reason "Need to rethink this"
    wg retry stuck-task  # when ready to try again
@@ -747,7 +747,7 @@ wg trace show <task-id> --animate    # animated replay of execution over time
 
 **Agents** are humans or AIs that do work. They can be AI agents (with a role and motivation that shape their behavior) or human agents (with contact info and a human executor like Matrix or email). All agents share the same identity model: capabilities, trust levels, rate, and capacity.
 
-**The graph** is tasks connected by "blocked-by" relationships. A task is blocked until all its blockers are done. Concurrent writes are protected by flock-based file locking.
+**The graph** is tasks connected by dependency edges (the `after` field). A task is waiting until all its dependencies reach a terminal status. Concurrent writes are protected by flock-based file locking.
 
 **Context flow**: Tasks can declare inputs (what they need) and deliverables (what they produce). Use `wg context <task>` to see what's available.
 
@@ -814,7 +814,7 @@ Everything lives in `.workgraph/graph.jsonl`. One JSON object per line. Human-re
 
 ```jsonl
 {"kind":"task","id":"design-api","title":"Design the API","status":"done"}
-{"kind":"task","id":"build-backend","title":"Build the backend","status":"open","blocked_by":["design-api"],"model":"sonnet"}
+{"kind":"task","id":"build-backend","title":"Build the backend","status":"open","after":["design-api"],"model":"sonnet"}
 ```
 
 Configuration is in `.workgraph/config.toml`:

@@ -30,8 +30,8 @@ wg service start --max-agents 5
 
 ```bash
 wg add "Design the API" --description "Description of what to do"
-wg add "Implement backend" --blocked-by design-the-api
-wg add "Write tests" --blocked-by implement-backend
+wg add "Implement backend" --after design-the-api
+wg add "Write tests" --after implement-backend
 ```
 
 ### Monitor progress
@@ -71,7 +71,7 @@ wg done <task-id>        # Mark complete when finished
 If you discover new work while working:
 
 ```bash
-wg add "New task" --blocked-by <current-task>
+wg add "New task" --after <current-task>
 ```
 
 Record output files so downstream tasks can find them:
@@ -103,12 +103,12 @@ open → [claim] → in-progress → [done] → done
 
 ## Cycles (repeating workflows)
 
-Some workflows repeat. Workgraph models these as **structural cycles** — `blocked_by` back-edges with a `CycleConfig` that controls iteration limits. When a cycle iteration completes, the cycle header task is reset to `open` with its `loop_iteration` incremented, and intermediate tasks are re-opened automatically.
+Some workflows repeat. Workgraph models these as **structural cycles** — `after` back-edges with a `CycleConfig` that controls iteration limits. When a cycle iteration completes, the cycle header task is reset to `open` with its `loop_iteration` incremented, and intermediate tasks are re-opened automatically.
 
 ```bash
 # Create a write/review cycle, max 3 iterations
-wg add "Write" --id write --blocked-by review --max-iterations 3
-wg add "Review" --blocked-by write --id review
+wg add "Write" --id write --after review --max-iterations 3
+wg add "Review" --after write --id review
 
 # Inspect cycles
 wg cycles
@@ -146,16 +146,16 @@ wg service resume           # Resume dispatching
 | Command | Purpose |
 |---------|---------|
 | `wg add "Title" --description "Desc"` | Create a task (`-d` alias for `--description`) |
-| `wg add "X" --blocked-by Y` | Create task with dependency |
-| `wg add "X" --blocked-by a,b,c` | Multiple dependencies (comma-separated) |
+| `wg add "X" --after Y` | Create task with dependency |
+| `wg add "X" --after a,b,c` | Multiple dependencies (comma-separated) |
 | `wg add "X" --skill rust --input src/foo.rs --deliverable docs/out.md` | Task with skills, inputs, deliverables |
 | `wg add "X" --model haiku` | Task with preferred model |
 | `wg add "X" --verify "Tests pass"` | Task requiring review before completion |
 | `wg add "X" --tag important --hours 2` | Tags and estimates |
-| `wg add "X" --blocked-by Y --max-iterations 3` | Create cycle header with max 3 iterations |
+| `wg add "X" --after Y --max-iterations 3` | Create cycle header with max 3 iterations |
 | `wg edit <id> --title "New" --description "New"` | Edit task fields |
-| `wg edit <id> --add-blocked-by X --remove-blocked-by Y` | Modify dependencies |
-| `wg edit <id> --add-blocked-by X --max-iterations 3` | Add cycle back-edge |
+| `wg edit <id> --add-after X --remove-after Y` | Modify dependencies |
+| `wg edit <id> --add-after X --max-iterations 3` | Add cycle back-edge |
 | `wg edit <id> --add-tag T --remove-tag T` | Modify tags |
 | `wg edit <id> --add-skill S --remove-skill S` | Modify skills |
 | `wg edit <id> --model sonnet` | Change preferred model |
@@ -230,7 +230,7 @@ wg service resume           # Resume dispatching
 | `wg cost <id>` | Cost including dependencies |
 | `wg coordinate` | Ready tasks for parallel execution |
 | `wg trajectory <id>` | Optimal claim order for context |
-| `wg next --agent <id>` | Best next task for an agent |
+| `wg next --actor <id>` | Best next task for an agent |
 
 ### Service & agents
 
@@ -323,7 +323,7 @@ wg service resume           # Resume dispatching
 |---------|---------|
 | `wg func list` | List available functions |
 | `wg func show <id>` | Show function details and required inputs |
-| `wg func extract --task <id>` | Extract a function from completed task(s) |
+| `wg func extract <task-id>...` | Extract a function from completed task(s) |
 | `wg func apply <id> --input key=value` | Create tasks from a function with provided inputs |
 | `wg func bootstrap` | Bootstrap the extract-function meta-function |
 | `wg func make-adaptive <id>` | Upgrade a generative function to adaptive (adds run memory) |
@@ -333,7 +333,7 @@ wg service resume           # Resume dispatching
 | Command | Purpose |
 |---------|---------|
 | `wg trace show <id>` | Show the execution history of a task |
-| `wg trace export --zone <zone>` | Export trace data filtered by visibility zone |
+| `wg trace export --visibility <zone>` | Export trace data filtered by visibility zone |
 | `wg trace import <file>` | Import a trace export file as read-only context |
 
 ### Artifacts & resources

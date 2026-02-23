@@ -197,15 +197,15 @@ Created with:
 
 ```
 wg add "write-draft" --max-iterations 5 --cycle-guard "task:review-draft=failed"
-wg add "review-draft" --blocked-by write-draft
-wg add "revise-draft" --blocked-by review-draft
-wg add "publish" --blocked-by revise-draft
+wg add "review-draft" --after write-draft
+wg add "revise-draft" --after review-draft
+wg add "publish" --after revise-draft
 ```
 
 Then create the back-edge that forms the cycle:
 
 ```
-wg edit write-draft --add-blocked-by revise-draft
+wg edit write-draft --add-after revise-draft
 ```
 
 Here is the execution:
@@ -344,7 +344,7 @@ The graph is stored as JSONL—one JSON object per line, one node per object. A 
 
 #figure(
   raw(block: true, lang: "jsonl",
-"{\"kind\":\"task\",\"id\":\"write-draft\",\"title\":\"Write draft\",\"status\":\"open\",\"blocked_by\":[\"revise-draft\"],\"cycle_config\":{\"max_iterations\":5,\"guard\":{\"TaskStatus\":{\"task\":\"review-draft\",\"status\":\"failed\"}}}}\n{\"kind\":\"task\",\"id\":\"review-draft\",\"title\":\"Review draft\",\"status\":\"open\",\"blocked_by\":[\"write-draft\"]}\n{\"kind\":\"task\",\"id\":\"revise-draft\",\"title\":\"Revise\",\"status\":\"open\",\"blocked_by\":[\"review-draft\"]}\n{\"kind\":\"task\",\"id\":\"publish\",\"title\":\"Publish\",\"status\":\"open\",\"blocked_by\":[\"revise-draft\"]}"
+"{\"kind\":\"task\",\"id\":\"write-draft\",\"title\":\"Write draft\",\"status\":\"open\",\"after\":[\"revise-draft\"],\"cycle_config\":{\"max_iterations\":5,\"guard\":{\"TaskStatus\":{\"task\":\"review-draft\",\"status\":\"failed\"}}}}\n{\"kind\":\"task\",\"id\":\"review-draft\",\"title\":\"Review draft\",\"status\":\"open\",\"after\":[\"write-draft\"]}\n{\"kind\":\"task\",\"id\":\"revise-draft\",\"title\":\"Revise\",\"status\":\"open\",\"after\":[\"review-draft\"]}\n{\"kind\":\"task\",\"id\":\"publish\",\"title\":\"Publish\",\"status\":\"open\",\"after\":[\"revise-draft\"]}"
   ),
   caption: [A graph file in JSONL format. Each line is a self-contained node.],
 ) <jsonl-example>

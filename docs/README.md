@@ -21,7 +21,7 @@ Tasks are the fundamental units of work. Each task has:
 - **id**: Unique identifier (auto-generated from title or specified manually)
 - **title**: Human-readable description of the work
 - **status**: Current state (open, in-progress, done, failed, abandoned)
-- **blocked_by**: List of task IDs that must complete before this task can start
+- **after**: List of task IDs that must complete before this task can start
 - **assigned**: Agent currently working on the task
 - **estimate**: Optional hours and/or cost estimate
 - **skills**: Required capabilities to complete the task
@@ -53,7 +53,7 @@ Tasks are the fundamental units of work. Each task has:
 - **failed**: Task attempted but failed (can be retried)
 - **abandoned**: Task will not be completed (terminal state)
 
-A task is **blocked** (derived state) when any of its `blocked_by` dependencies are not yet done. Only unblocked, open tasks appear in `wg ready`.
+A task is **waiting** (derived state) when any of its `after` dependencies are not yet terminal. Only ready (unblocked, open) tasks appear in `wg ready`.
 
 ### Agents
 
@@ -79,7 +79,7 @@ Resources represent consumable or limited assets:
 
 ### Dependencies (The Graph)
 
-Tasks form a directed graph through `blocked_by` relationships. Repeating workflows (review loops, retries, recurring work) are modeled as structural cycles — `blocked_by` back-edges with `CycleConfig` controlling iteration limits. Use `wg cycles` to inspect them.
+Tasks form a directed graph through `after` dependency edges. Repeating workflows (review loops, retries, recurring work) are modeled as structural cycles — `after` back-edges with `CycleConfig` controlling iteration limits. Use `wg cycles` to inspect them.
 
 Key graph concepts:
 
@@ -97,7 +97,7 @@ Tasks can specify inputs and deliverables to establish an implicit data flow:
 Task A                    Task B
 ├─ deliverables:          ├─ inputs:
 │  └─ src/api.rs     ──────> └─ src/api.rs
-│                         ├─ blocked_by:
+│                         ├─ after:
 │                              └─ task-a
 ```
 
@@ -158,11 +158,11 @@ Creates `.workgraph/graph.jsonl` in the current directory.
 wg add "Design API schema"
 
 # Task with dependencies
-wg add "Implement API" --blocked-by design-api-schema
+wg add "Implement API" --after design-api-schema
 
 # Task with full metadata
 wg add "Write API tests" \
-  --blocked-by implement-api \
+  --after implement-api \
   --hours 4 \
   --skill testing \
   --deliverable tests/api_test.rs
@@ -222,7 +222,7 @@ Example content:
 
 ```jsonl
 {"kind":"task","id":"design-api","title":"Design API","status":"done","completed_at":"2026-01-15T10:00:00Z"}
-{"kind":"task","id":"impl-api","title":"Implement API","status":"open","blocked_by":["design-api"]}
+{"kind":"task","id":"impl-api","title":"Implement API","status":"open","after":["design-api"]}
 ```
 
 Configuration is stored in `.workgraph/config.toml`:

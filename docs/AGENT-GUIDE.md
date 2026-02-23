@@ -383,8 +383,8 @@ Model resolution follows a priority chain (highest wins):
 
 1. `task.model` — per-task override set via `wg add --model` or `wg edit --model`
 2. Executor config model — model field in the executor's config
-3. `coordinator.model` — from `[coordinator]` in config.toml
-4. `agent.model` — from `[agent]` in config.toml (lowest)
+3. `coordinator.model` — from `[coordinator]` in config.toml or CLI `--model`
+4. Executor default — if no model is resolved, no model flag is passed and the executor uses its own default
 
 For agency meta-tasks (assignment, evaluation, evolution), dedicated model settings apply:
 - Assignment: `agency.assigner_model` (defaults to `haiku` after `wg agency init`)

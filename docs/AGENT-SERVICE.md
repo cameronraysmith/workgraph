@@ -304,7 +304,7 @@ For regular tasks (resolution order, highest priority wins):
 1. `task.model` — per-task override (highest)
 2. Executor config model — model field in the executor's config file
 3. CLI `--model` on `wg spawn` / `coordinator.model` in service mode
-4. `agent.model` (lowest)
+4. Executor default — if no model is resolved, no `--model` flag is passed and the executor uses its own default
 
 For agency meta-tasks:
 - Assignment: `agency.assigner_model` (defaults to `haiku` after `wg agency init`)

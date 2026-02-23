@@ -128,6 +128,14 @@ EXECUTORS & MODELS
 
   Model hierarchy: task --model > executor model > coordinator model > 'default'
 
+  Browse available models:
+
+  wg models list                      # Show all models with tiers and costs
+  wg models list --tier heavy         # Filter by tier (light, medium, heavy)
+  wg models add <id> --tier medium \
+    --cost-in 3.0 --cost-out 15.0     # Register a custom model
+  wg models set-default <id>          # Set the coordinator's default model
+
 REUSABLE FUNCTIONS
 ─────────────────────────────────────────
   Functions capture proven workflow patterns for reuse:
@@ -135,7 +143,7 @@ REUSABLE FUNCTIONS
   wg func list                        # Discover available functions
   wg func show <id>                   # View function details and inputs
   wg func apply <id> --input k=v      # Instantiate a function into tasks
-  wg func extract --tasks a,b,c       # Extract a pattern from completed tasks
+  wg func extract a b c               # Extract a pattern from completed tasks
 
 EVALUATION & MONITORING
 ─────────────────────────────────────────
@@ -219,7 +227,13 @@ fn json_output() -> serde_json::Value {
             "set_model_cli": "wg service start --model anthropic/claude-sonnet-4",
             "set_model_config": "[coordinator] model = \"anthropic/claude-sonnet-4\"",
             "per_task_model": "wg add \"task\" --model google/gemini-2.5-flash",
-            "hierarchy": "task --model > executor model > coordinator model > 'default'"
+            "hierarchy": "task --model > executor model > coordinator model > 'default'",
+            "model_registry": {
+                "list": "wg models list",
+                "list_by_tier": "wg models list --tier heavy",
+                "add": "wg models add <id> --tier medium --cost-in 3.0 --cost-out 15.0",
+                "set_default": "wg models set-default <id>"
+            }
         },
         "functions": {
             "description": "Reusable workflow patterns extracted from completed tasks.",
@@ -227,7 +241,7 @@ fn json_output() -> serde_json::Value {
                 "list": "wg func list",
                 "show": "wg func show <id>",
                 "apply": "wg func apply <id> --input k=v",
-                "extract": "wg func extract --tasks a,b,c"
+                "extract": "wg func extract a b c"
             }
         },
         "evaluation_and_monitoring": {
