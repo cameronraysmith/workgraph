@@ -102,6 +102,33 @@ CYCLES (repeating workflows)
   This stops the loop/cycle. Using plain 'wg done' causes iteration again.
   Only use plain 'wg done' if you want the next iteration to proceed.
 
+HOUSEKEEPING
+─────────────────────────────────────────
+  wg archive                    # Archive completed tasks to a separate file
+  wg archive --older 7d         # Only archive tasks completed more than 7 days ago
+  wg archive --list             # List previously archived tasks
+  wg gc                         # Garbage collect failed/abandoned tasks
+  wg gc --dry-run               # Preview what would be removed
+  wg gc --include-done          # Also remove done tasks (default: only failed+abandoned)
+
+GROWING THE GRAPH (autopoietic behavior)
+─────────────────────────────────────────
+  You are not just a task executor — you are part of a living system.
+  When you discover work that needs doing, ADD IT TO THE GRAPH.
+
+  Subtasks of your current work:
+    wg add "Fix edge case in parser" --after my-current-task -d "Found during impl"
+
+  Independent work you noticed:
+    wg add "Refactor duplicate validation logic" -d "Spotted while reading auth.rs"
+
+  Follow-up verification:
+    wg add "Verify fix works end-to-end" --after my-current-task
+
+  The coordinator will dispatch agents for anything you add.
+  You don't need permission — if you see work, create it.
+  The graph grows organically. That's the point.
+
 TIPS
 ─────────────────────────────────────────
 • If the coordinator is running: add tasks → it dispatches automatically
@@ -235,6 +262,14 @@ fn json_output() -> serde_json::Value {
                 "add": "wg models add <id> --tier medium --cost-in 3.0 --cost-out 15.0",
                 "set_default": "wg models set-default <id>"
             }
+        },
+        "housekeeping": {
+            "archive": "wg archive",
+            "archive_older": "wg archive --older 7d",
+            "archive_list": "wg archive --list",
+            "gc": "wg gc",
+            "gc_dry_run": "wg gc --dry-run",
+            "gc_include_done": "wg gc --include-done"
         },
         "functions": {
             "description": "Reusable workflow patterns extracted from completed tasks.",
@@ -380,6 +415,11 @@ mod tests {
         assert!(em.get("per_task_model").is_some());
         assert!(em.get("hierarchy").is_some());
 
+        // Check housekeeping section
+        let hk = output.get("housekeeping").unwrap();
+        assert!(hk.get("archive").is_some());
+        assert!(hk.get("gc").is_some());
+
         // Check functions section
         let funcs = output.get("functions").unwrap();
         assert!(funcs.get("commands").is_some());
@@ -402,6 +442,13 @@ mod tests {
         assert!(QUICKSTART_TEXT.contains("REUSABLE FUNCTIONS"));
         assert!(QUICKSTART_TEXT.contains("wg func list"));
         assert!(QUICKSTART_TEXT.contains("wg func apply"));
+    }
+
+    #[test]
+    fn test_quickstart_text_contains_housekeeping() {
+        assert!(QUICKSTART_TEXT.contains("HOUSEKEEPING"));
+        assert!(QUICKSTART_TEXT.contains("wg archive"));
+        assert!(QUICKSTART_TEXT.contains("wg gc"));
     }
 
     #[test]
@@ -458,6 +505,8 @@ mod tests {
             "TASK STATE COMMANDS",
             "CONTEXT & ARTIFACTS",
             "CYCLES",
+            "HOUSEKEEPING",
+            "GROWING THE GRAPH",
             "TIPS",
             "EXECUTORS & MODELS",
             "REUSABLE FUNCTIONS",

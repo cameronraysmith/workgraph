@@ -299,7 +299,7 @@ enum Commands {
 
     /// Visualize the dependency graph (ASCII tree by default)
     Viz {
-        /// Include done tasks (default: only open tasks)
+        /// Include abandoned tasks (default: hides only abandoned)
         #[arg(long)]
         all: bool,
 

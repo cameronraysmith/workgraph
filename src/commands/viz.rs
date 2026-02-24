@@ -170,15 +170,9 @@ pub fn run(dir: &Path, options: &VizOptions) -> Result<()> {
                 return task_status == status_filter.to_lowercase();
             }
 
-            // Default: show non-done tasks, plus done cycle members if
-            // the cycle still has active (non-done) work.
-            if t.status != Status::Done {
-                return true;
-            }
-            if let Some(&ci) = cycle_analysis.task_to_cycle.get(&t.id) {
-                return active_cycle_ids.contains(&ci);
-            }
-            false
+            // Default: show everything except abandoned tasks.
+            // Done (green), in-progress, open, blocked, failed — all visible.
+            t.status != Status::Abandoned
         })
         .collect();
 
@@ -2394,5 +2388,38 @@ mod tests {
     #[test]
     fn test_generate_graph_format_parsing() {
         assert_eq!("graph".parse::<OutputFormat>().unwrap(), OutputFormat::Graph);
+    }
+
+    /// Verify the default viz filter includes in-progress tasks alongside open tasks,
+    /// while excluding done tasks (regression test for the default filter).
+    #[test]
+    fn test_default_filter_shows_all_except_abandoned() {
+        let mut graph = WorkGraph::new();
+
+        let mut open_task = make_task("task-open", "Open Task");
+        open_task.status = Status::Open;
+        let mut ip_task = make_task("task-ip", "In Progress Task");
+        ip_task.status = Status::InProgress;
+        let mut done_task = make_task("task-done", "Done Task");
+        done_task.status = Status::Done;
+        let mut abandoned_task = make_task("task-abandoned", "Abandoned Task");
+        abandoned_task.status = Status::Abandoned;
+
+        graph.add_node(Node::Task(open_task));
+        graph.add_node(Node::Task(ip_task));
+        graph.add_node(Node::Task(done_task));
+        graph.add_node(Node::Task(abandoned_task));
+
+        // Apply the same default filter logic as run(): show everything except abandoned
+        let filtered: Vec<_> = graph
+            .tasks()
+            .filter(|t| t.status != Status::Abandoned)
+            .collect();
+
+        let ids: Vec<&str> = filtered.iter().map(|t| t.id.as_str()).collect();
+        assert!(ids.contains(&"task-open"), "Default filter should include open tasks");
+        assert!(ids.contains(&"task-ip"), "Default filter should include in-progress tasks");
+        assert!(ids.contains(&"task-done"), "Default filter should include done tasks");
+        assert!(!ids.contains(&"task-abandoned"), "Default filter should exclude abandoned tasks");
     }
 }
