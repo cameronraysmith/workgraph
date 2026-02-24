@@ -346,7 +346,7 @@ Begin working on the task now.
             .as_array()
             .map(|a| {
                 a.iter()
-                    .filter_map(|v| v.as_str())
+                    .filter_map(|v| v["id"].as_str())
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();

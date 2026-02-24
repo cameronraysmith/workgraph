@@ -536,11 +536,8 @@ fn spawn_eval_inline(
     let output_file = output_dir.join("output.log");
     let output_file_str = output_file.to_string_lossy().to_string();
 
-    // Build the eval command with explicit model
-    let mut eval_cmd = format!("wg evaluate run '{}'", source_task_id.replace('\'', "'\\''"));
-    if let Some(model) = evaluator_model {
-        eval_cmd.push_str(&format!(" --model '{}'", model.replace('\'', "'\\''")));
-    }
+    // Build the eval command (wg evaluate run doesn't support --model flag)
+    let eval_cmd = format!("wg evaluate run '{}'", source_task_id.replace('\'', "'\\''"));
 
     let escaped_eval_id = eval_task_id.replace('\'', "'\\''");
     let escaped_output = output_file_str.replace('\'', "'\\''");
