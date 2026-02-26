@@ -25,6 +25,32 @@ typst compile docs/manual/workgraph-manual.typ   # rebuild manual PDF
 typst compile docs/research/organizational-patterns.typ  # rebuild org patterns PDF
 ```
 
+## Documentation: Typst → Markdown
+
+**Typst is the ground truth** for all documentation. Markdown versions are rendered from typst and must be kept in sync.
+
+To regenerate markdown from typst after editing docs:
+
+```bash
+# Preprocess (handle table.header, #quote, raw blocks) then convert
+# For individual chapters that convert cleanly:
+pandoc -f typst -t gfm --wrap=none docs/manual/01-overview.typ -o out.md
+
+# For the full manual (pandoc can't follow #include directives):
+# Concatenate the glossary section + all chapters, then convert.
+# See the preprocessing script pattern in the convert-typst-docs task logs.
+
+# For organizational-patterns:
+pandoc -f typst -t gfm --wrap=none docs/research/organizational-patterns.typ -o docs/research/organizational-patterns.md
+```
+
+**Note:** Some typst features require preprocessing before pandoc can handle them:
+- `table.header(...)` — strip the wrapper, keep the cell contents
+- `#quote(block: true)[...]` — replace with `#block[...]`
+- `raw(block: true, ...)` with multi-line strings — convert to fenced code blocks
+
+After regenerating, copy the markdown to the website repo (`graphwork.github.io/`).
+
 ## Service Operations
 
 ```

@@ -320,6 +320,44 @@ When a workflow pattern proves useful—a review cycle that consistently produce
 
 Applying a function with `wg func apply` reverses the process. It takes a function name and a set of input values, substitutes them into the template, and creates concrete tasks in the graph with proper dependency wiring. The original pattern's structure is preserved—its fan-out topology, its cycle bounds, its guard conditions—but applied to new work. Functions can also be shared across projects: the `--from` flag accepts a peer name or file path, enabling teams to import proven workflows from one another.
 
+=== Seed Tasks (Generative Tasks)
+
+A _seed task_ is a task whose primary purpose is to bootstrap a subgraph—it fans out into subtasks that did not exist before it ran. The seed does not do the "real" work itself; it analyzes a problem, decomposes it into concrete steps, and creates the tasks that perform those steps. Once the seed completes, the graph has new structure that the coordinator dispatches.
+
+#figure(
+  raw(block: true, lang: none,
+"
+    Before seed runs:           After seed runs:
+
+    ┌──────────┐                ┌──────────┐
+    │   seed   │                │   seed   │ (done)
+    └──────────┘                └────┬─────┘
+                                ┌────┼────┐
+                                ▼    ▼    ▼
+                           ┌──────┐ ┌──┐ ┌──────┐
+                           │sub-a │ │..│ │sub-n │
+                           └──┬───┘ └──┘ └──┬───┘
+                              └──────┬──────┘
+                                     ▼
+                              ┌────────────┐
+                              │ integrate  │
+                              └────────────┘
+"),
+  caption: [A seed task creates structure. The graph before execution has one node; the graph after has many.],
+) <seed-task>
+
+The seed pattern is common in practice:
+
+- A planning task that reads a spec, identifies components, and creates one implementation task per component.
+- A research task that surveys a topic, identifies sub-questions, and creates investigation tasks for each.
+- A triage task that reads an incoming report and creates the appropriate response tasks.
+
+Seed tasks are often the root of a diamond (fan-out then fan-in) or scatter-gather topology. What distinguishes a seed from an ordinary fan-out parent is that the children _do not exist in the graph until the seed runs_. The graph is not just executed—it is grown.
+
+In theoretical terms, a seed task is a _generative task_: it produces the network components that constitute the next phase of work. This connects to Maturana and Varela's concept of autopoiesis—a production relation where the system produces its own components. The seed is the autopoietic act at the task level: a node that produces nodes.
+
+Casually, seed tasks are sometimes called _spark tasks_—the spark that ignites a subgraph into existence.
+
 == Graph Analysis
 
 Workgraph provides several analysis tools that read the graph structure and compute derived properties. These are instruments, not concepts—they report on the graph rather than define it.

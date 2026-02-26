@@ -2016,8 +2016,62 @@ designing a workgraph agency:
   [Recurring process],
   [Autopoietic cycle (Section 5)],
   [Structural cycle forming a full cycle],
+  [Bootstrapping a subgraph from a single task],
+  [Seed / Generative Task (Section 5.5)],
+  [Planner or triage task creates subtasks dynamically via `wg add`],
 )
 ]
+
+== Seed Tasks: The Autopoietic Act at the Task Level
+<seed-tasks-autopoietic>
+
+The patterns above describe topologies that _exist_ in the graph. But who creates those topologies? In many workflows, the answer is a #strong[seed task] (or #strong[generative task])—a task whose execution produces the subgraph that constitutes the next phase of work.
+
+A seed task does not perform the "real" work. It analyzes a problem, identifies components, and calls `wg add` to create the tasks that perform those components. Once the seed completes, the graph has new structure: new nodes, new edges, new work for the coordinator to dispatch. The graph is not just executed—it is #emph[grown].
+
+This is autopoiesis at the task level. Recall Maturana and Varela's definition: "a network of inter-related component-producing processes such that the components in interaction generate the same network that produced them." The seed task is the component-producing process. It produces tasks (components) that, through their execution and evaluation, generate the conditions for future seed tasks. The system produces its own structure.
+
+=== Terminology
+
+The concept admits several names, each suited to a different register:
+
+#align(center)[#table(
+  columns: 3,
+  align: (col, row) => (auto,auto,auto,).at(col),
+  inset: 6pt,
+  [Term], [Register], [Connotation],
+  [#strong[Seed task]],
+  [CLI / documentation],
+  [Graph-native. A seed is planted; a subgraph grows from it. Simple, concrete, immediately understood.],
+  [#strong[Generative task]],
+  [Theory / organizational patterns],
+  [Emphasizes the production relation. The task generates structure. Connects to generative grammars (Chomsky) and generative models.],
+  [#strong[Autopoietic seed]],
+  [Theory / cybernetics],
+  [The self-producing seed: a task that produces the network components that constitute the system. The strongest theoretical framing.],
+  [#strong[Spark]],
+  [Casual / informal],
+  [The spark that ignites a subgraph into existence. Quick, evocative, lightweight.],
+)
+]
+
+=== Relationship to Autopoiesis
+
+The seed pattern deepens the autopoietic analysis from Section 5. The evolve loop is autopoietic at the #emph[agency] level—agents produce evaluations that produce new agent definitions. The seed pattern is autopoietic at the #emph[task graph] level—tasks produce tasks. Together, they form a nested autopoiesis:
+
+- #strong[Outer loop (agency):] execute → evaluate → evolve → execute. The system produces the agents that produce the system.
+- #strong[Inner loop (graph):] seed → subtasks → integrate → (new seed). The graph produces the nodes that constitute the graph.
+
+A workgraph project in full operation exhibits both loops simultaneously. Seed tasks grow the graph; the coordinator dispatches work to agents shaped by evolution; evaluations feed back into agent definitions; and new seed tasks are created to address what the evaluations reveal. The graph is not a static plan executed once—it is a living structure that grows, evaluates, and adapts.
+
+In Luhmann's terms: each seed task is a #emph[communication] that stimulates further communications. The graph is a social system whose elements (task state transitions) produce the elements (new tasks) that constitute the system. This is operational closure at the level of the work itself.
+
+=== Common Seed Patterns
+
++ #strong[Planning seed.] A spec task reads requirements and creates implementation tasks. The classic diamond: seed → N workers → integrator.
++ #strong[Triage seed.] An incoming report (bug, feature request, incident) is read by a triage task that creates the appropriate response tasks—investigation, fix, test, deploy.
++ #strong[Research seed.] A survey task identifies sub-questions and creates one investigation task per question, with a synthesis task to integrate findings.
++ #strong[Recursive seed.] A seed task creates subtasks, one of which is itself a seed. This produces multi-level graph growth—a tree of subgraphs. Use with care: recursive seeding without bounds can exhaust resources. The `max_iterations` pattern from structural cycles applies conceptually, even when the recursion is across separate seed tasks rather than within a single cycle.
 
 == Anti-Patterns
 <anti-patterns>

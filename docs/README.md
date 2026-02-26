@@ -89,6 +89,18 @@ Key graph concepts:
 - **Bottlenecks**: Tasks blocking the most downstream work
 - **Impact**: Forward view of what depends on a given task
 
+### Graph Patterns
+
+Dependencies naturally give rise to recurring structural patterns:
+
+- **Pipeline**: A linear chain (A → B → C) where each task waits for its predecessor
+- **Fan-out / Fan-in (Diamond)**: One task fans out to parallel children; a downstream integrator fans them back in
+- **Scatter-Gather**: Multiple reviewers with different roles examine the same artifact in parallel
+- **Review Cycle**: A structural cycle (write → review → revise → write) with a guard condition that breaks the loop on approval
+- **Seed Task**: A task whose job is to *create other tasks*—it analyzes a problem, decomposes it, and fans out into subtasks that didn't exist before it ran. Seed tasks grow the graph rather than just executing it. (Also called *spark* or *generative task* in theoretical contexts.)
+
+See the [manual](./manual/) for detailed explanations and diagrams of each pattern.
+
 ### Context Flow
 
 Tasks can specify inputs and deliverables to establish an implicit data flow:
