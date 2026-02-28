@@ -7,7 +7,6 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use crossterm::{
-    event::{EnableMouseCapture, DisableMouseCapture},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -24,7 +23,7 @@ pub fn run(workgraph_dir: PathBuf, viz_options: VizOptions) -> Result<()> {
     }));
 
     enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(io::stdout(), EnterAlternateScreen)?;
 
     let mut terminal = ratatui::init();
     let mut app = VizApp::new(workgraph_dir, viz_options);
@@ -40,8 +39,7 @@ fn restore_terminal() -> Result<()> {
     disable_raw_mode()?;
     execute!(
         io::stdout(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
+        LeaveAlternateScreen
     )?;
     Ok(())
 }
