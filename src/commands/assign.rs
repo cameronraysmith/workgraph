@@ -6,40 +6,53 @@ use workgraph::parser::{load_graph, save_graph};
 
 use super::graph_path;
 
-/// Record an evaluation against the assigner's own performance.
+/// Record an evaluation against the assigner special agent's performance.
 ///
-/// When auto_evaluate is enabled, this creates an evaluation entry for the
-/// assignment itself (source = "assigner"), so the agency can track how well
-/// the assigner selects agents.  The actual quality signal comes later from
-/// the agent's task evaluation, but recording the event here lets the system
-/// attribute downstream scores back to the assignment decision.
+/// When auto_evaluate is enabled and an assigner_agent is configured, this
+/// creates an evaluation entry for the assignment itself (source = "system"),
+/// recording against the assigner agent entity so it accumulates performance
+/// history. The actual quality signal comes later from the agent's task
+/// evaluation, but recording the event here lets the system attribute
+/// downstream scores back to the assignment decision via the 6-step cascade.
 fn record_assigner_evaluation(
     agency_dir: &Path,
     task_id: &str,
-    agent: &agency::Agent,
+    _assigned_agent: &agency::Agent,
     config: &Config,
 ) {
     if !config.agency.auto_evaluate {
         return;
     }
 
+    // Resolve the assigner special agent from config
+    let assigner_agent = match config.agency.assigner_agent {
+        Some(ref hash) => {
+            let agents_dir = agency_dir.join("cache/agents");
+            match agency::find_agent_by_prefix(&agents_dir, hash) {
+                Ok(agent) => agent,
+                Err(_) => return, // No assigner agent found — skip recording
+            }
+        }
+        None => return, // No assigner agent configured
+    };
+
     let assign_task_id = format!("assign-{}", task_id);
     let eval = agency::Evaluation {
         id: format!("eval-assign-{}", task_id),
         task_id: assign_task_id,
-        agent_id: agent.id.clone(),
-        role_id: agent.role_id.clone(),
-        tradeoff_id: agent.tradeoff_id.clone(),
+        agent_id: assigner_agent.id.clone(),
+        role_id: assigner_agent.role_id.clone(),
+        tradeoff_id: assigner_agent.tradeoff_id.clone(),
         // Placeholder score — actual quality will be determined by downstream
         // evaluation and org-eval. The assigner's "score" is updated
         // retrospectively when the assigned agent's task completes.
         score: 0.5,
         dimensions: std::collections::HashMap::new(),
         notes: format!("Assignment recorded for task '{}'. Awaiting downstream evaluation.", task_id),
-        evaluator: "assigner".to_string(),
+        evaluator: "system".to_string(),
         timestamp: chrono::Utc::now().to_rfc3339(),
         model: None,
-        source: "assigner".to_string(),
+        source: "system".to_string(),
     };
 
     if let Err(e) = agency::record_evaluation(&eval, agency_dir) {
@@ -386,5 +399,407 @@ mod tests {
 
         let result = run(dir_path, "t1", None, true);
         assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Special agent evaluation recording tests
+    // -----------------------------------------------------------------------
+
+    /// Set up a full agency with the assigner special agent composed from
+    /// real starters, matching the `wg agency init` pathway. Returns
+    /// (actor_agent_id, assigner_agent_id).
+    fn setup_agency_with_assigner(dir: &Path) -> (String, String) {
+        let agency_dir = dir.join("agency");
+        agency::seed_starters(&agency_dir).unwrap();
+
+        let agents_dir = agency_dir.join("cache/agents");
+        fs::create_dir_all(&agents_dir).unwrap();
+
+        // Create the actor agent (assigned to the task)
+        let (actor_id, _role_id, _tradeoff_id) = setup_agency(dir);
+
+        // Compose the assigner special agent from starter primitives
+        let special_roles = agency::special_agent_roles();
+        let special_tradeoffs = agency::special_agent_tradeoffs();
+        let assigner_role = special_roles.iter().find(|r| r.name == "Assigner").unwrap();
+        let assigner_tradeoff = special_tradeoffs
+            .iter()
+            .find(|t| t.name == "Assigner Balanced")
+            .unwrap();
+
+        let assigner_id = agency::content_hash_agent(&assigner_role.id, &assigner_tradeoff.id);
+        let assigner_path = agents_dir.join(format!("{}.yaml", assigner_id));
+        if !assigner_path.exists() {
+            let assigner_agent = agency::Agent {
+                id: assigner_id.clone(),
+                role_id: assigner_role.id.clone(),
+                tradeoff_id: assigner_tradeoff.id.clone(),
+                name: "Default Assigner".to_string(),
+                performance: PerformanceRecord::default(),
+                lineage: Lineage::default(),
+                capabilities: vec![],
+                rate: None,
+                capacity: None,
+                trust_level: Default::default(),
+                contact: None,
+                executor: "claude".to_string(),
+                attractor_weight: 0.5,
+                deployment_history: vec![],
+                staleness_flags: vec![],
+            };
+            agency::save_agent(&assigner_agent, &agents_dir).unwrap();
+        }
+
+        // Configure the assigner_agent in config with auto_evaluate enabled
+        let mut config = Config::load_or_default(dir);
+        config.agency.auto_evaluate = true;
+        config.agency.assigner_agent = Some(assigner_id.clone());
+        config.save(dir).unwrap();
+
+        (actor_id, assigner_id)
+    }
+
+    /// (1) Simulate an inline assign execution and verify it succeeds.
+    #[test]
+    fn test_assign_records_assigner_evaluation() {
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+        setup_workgraph(dir_path, vec![make_task("t1", "Test task")]);
+        let (actor_id, assigner_id) = setup_agency_with_assigner(dir_path);
+
+        // Run assign — this triggers record_assigner_evaluation internally
+        let result = run(dir_path, "t1", Some(&actor_id), false);
+        assert!(result.is_ok(), "assign failed: {:?}", result.err());
+
+        // Verify the evaluation JSON file was created
+        let evals_dir = dir_path.join("agency/evaluations");
+        let eval_files: Vec<_> = fs::read_dir(&evals_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .starts_with("eval-assign-t1-")
+            })
+            .collect();
+        assert_eq!(
+            eval_files.len(),
+            1,
+            "Expected exactly one evaluation file for assign-t1, got {}",
+            eval_files.len()
+        );
+
+        // Load and verify the evaluation contents
+        let eval = agency::load_evaluation(&eval_files[0].path()).unwrap();
+        assert_eq!(eval.task_id, "assign-t1");
+        assert_eq!(eval.agent_id, assigner_id, "Evaluation should be recorded against the assigner agent");
+        assert_eq!(eval.source, "system");
+        assert_eq!(eval.score, 0.5, "Placeholder score should be 0.5");
+    }
+
+    /// (2) Verify the Evaluation is recorded against the assigner agent hash,
+    /// not the actor agent.
+    #[test]
+    fn test_evaluation_recorded_against_assigner_not_actor() {
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+        setup_workgraph(dir_path, vec![make_task("t1", "Test task")]);
+        let (actor_id, assigner_id) = setup_agency_with_assigner(dir_path);
+
+        run(dir_path, "t1", Some(&actor_id), false).unwrap();
+
+        // Load the assigner agent and verify it has the evaluation
+        let agents_dir = dir_path.join("agency/cache/agents");
+        let assigner = agency::find_agent_by_prefix(&agents_dir, &assigner_id).unwrap();
+        assert_eq!(
+            assigner.performance.evaluations.len(),
+            1,
+            "Assigner agent should have exactly 1 evaluation"
+        );
+        assert_eq!(assigner.performance.evaluations[0].task_id, "assign-t1");
+
+        // The actor agent should NOT have any evaluation from this assignment
+        let actor = agency::find_agent_by_prefix(&agents_dir, &actor_id).unwrap();
+        assert_eq!(
+            actor.performance.evaluations.len(),
+            0,
+            "Actor agent should NOT have evaluations from assigner recording"
+        );
+    }
+
+    /// (3) Verify the assigner's PerformanceRecord.task_count increments.
+    #[test]
+    fn test_assigner_task_count_increments() {
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+        setup_workgraph(
+            dir_path,
+            vec![
+                make_task("t1", "First task"),
+                make_task("t2", "Second task"),
+                make_task("t3", "Third task"),
+            ],
+        );
+        let (actor_id, assigner_id) = setup_agency_with_assigner(dir_path);
+
+        let agents_dir = dir_path.join("agency/cache/agents");
+
+        // Before any assignments
+        let assigner = agency::find_agent_by_prefix(&agents_dir, &assigner_id).unwrap();
+        assert_eq!(assigner.performance.task_count, 0);
+
+        // First assignment
+        run(dir_path, "t1", Some(&actor_id), false).unwrap();
+        let assigner = agency::find_agent_by_prefix(&agents_dir, &assigner_id).unwrap();
+        assert_eq!(assigner.performance.task_count, 1, "task_count should be 1 after first assign");
+
+        // Second assignment
+        run(dir_path, "t2", Some(&actor_id), false).unwrap();
+        let assigner = agency::find_agent_by_prefix(&agents_dir, &assigner_id).unwrap();
+        assert_eq!(assigner.performance.task_count, 2, "task_count should be 2 after second assign");
+
+        // Third assignment
+        run(dir_path, "t3", Some(&actor_id), false).unwrap();
+        let assigner = agency::find_agent_by_prefix(&agents_dir, &assigner_id).unwrap();
+        assert_eq!(assigner.performance.task_count, 3, "task_count should be 3 after third assign");
+
+        // Verify avg_score is 0.5 (all assignments use placeholder score 0.5)
+        assert!(
+            (assigner.performance.avg_score.unwrap() - 0.5).abs() < 1e-10,
+            "All assignments use placeholder 0.5, avg should be 0.5"
+        );
+    }
+
+    /// (4) Verify score propagates through the 6-step cascade to the
+    /// assigner's role components.
+    ///
+    /// The 6-step cascade in record_evaluation:
+    ///   1. Save evaluation JSON
+    ///   2. Update agent performance
+    ///   3. Update role performance
+    ///   4. Update tradeoff performance
+    ///   5. Propagate to each role component
+    ///   6. Propagate to the role's desired outcome
+    #[test]
+    fn test_score_propagates_through_cascade_to_components() {
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+        setup_workgraph(dir_path, vec![make_task("t1", "Test task")]);
+        let (actor_id, assigner_id) = setup_agency_with_assigner(dir_path);
+
+        // Run assign to trigger the cascade
+        run(dir_path, "t1", Some(&actor_id), false).unwrap();
+
+        let agency_dir = dir_path.join("agency");
+        let agents_dir = agency_dir.join("cache/agents");
+        let roles_dir = agency_dir.join("cache/roles");
+        let tradeoffs_dir = agency_dir.join("primitives/tradeoffs");
+        let components_dir = agency_dir.join("primitives/components");
+        let outcomes_dir = agency_dir.join("primitives/outcomes");
+
+        // Step 2: Agent performance updated
+        let assigner = agency::find_agent_by_prefix(&agents_dir, &assigner_id).unwrap();
+        assert_eq!(assigner.performance.task_count, 1);
+        assert!((assigner.performance.avg_score.unwrap() - 0.5).abs() < 1e-10);
+
+        // Step 3: Role performance updated
+        let role = agency::find_role_by_prefix(&roles_dir, &assigner.role_id).unwrap();
+        assert_eq!(
+            role.performance.task_count, 1,
+            "Role should have task_count=1 after cascade"
+        );
+        assert!((role.performance.avg_score.unwrap() - 0.5).abs() < 1e-10);
+        // Role's context_id should be the tradeoff_id
+        assert_eq!(
+            role.performance.evaluations[0].context_id,
+            assigner.tradeoff_id,
+            "Role eval context_id should be tradeoff_id"
+        );
+
+        // Step 4: Tradeoff performance updated
+        let tradeoff =
+            agency::find_tradeoff_by_prefix(&tradeoffs_dir, &assigner.tradeoff_id).unwrap();
+        assert_eq!(
+            tradeoff.performance.task_count, 1,
+            "Tradeoff should have task_count=1 after cascade"
+        );
+        assert!((tradeoff.performance.avg_score.unwrap() - 0.5).abs() < 1e-10);
+        // Tradeoff's context_id should be the role_id
+        assert_eq!(
+            tradeoff.performance.evaluations[0].context_id,
+            assigner.role_id,
+            "Tradeoff eval context_id should be role_id"
+        );
+
+        // Step 5: Each role component's performance updated
+        let assigner_comps = agency::assigner_components();
+        assert!(
+            !role.component_ids.is_empty(),
+            "Assigner role should have components"
+        );
+        for comp_id in &role.component_ids {
+            let component = agency::find_component_by_prefix(&components_dir, comp_id).unwrap();
+            assert_eq!(
+                component.performance.task_count,
+                1,
+                "Component '{}' ({}) should have task_count=1 after cascade",
+                component.name,
+                agency::short_hash(&component.id)
+            );
+            assert!(
+                (component.performance.avg_score.unwrap() - 0.5).abs() < 1e-10,
+                "Component '{}' avg_score should be 0.5",
+                component.name
+            );
+            // Component's context_id should be the role_id
+            assert_eq!(
+                component.performance.evaluations[0].context_id,
+                assigner.role_id,
+                "Component '{}' context_id should be role_id",
+                component.name
+            );
+        }
+        // Verify all expected assigner components were touched
+        assert_eq!(
+            role.component_ids.len(),
+            assigner_comps.len(),
+            "Role should reference all {} assigner components",
+            assigner_comps.len()
+        );
+
+        // Step 6: Desired outcome performance updated
+        assert!(
+            !role.outcome_id.is_empty(),
+            "Assigner role should have an outcome_id"
+        );
+        let outcome = agency::find_outcome_by_prefix(&outcomes_dir, &role.outcome_id).unwrap();
+        assert_eq!(
+            outcome.performance.task_count, 1,
+            "Outcome should have task_count=1 after cascade"
+        );
+        assert!(
+            (outcome.performance.avg_score.unwrap() - 0.5).abs() < 1e-10,
+            "Outcome avg_score should be 0.5"
+        );
+        // Outcome's context_id should be the agent_id
+        assert_eq!(
+            outcome.performance.evaluations[0].context_id,
+            assigner.id,
+            "Outcome eval context_id should be agent_id"
+        );
+    }
+
+    /// Verify no evaluation is recorded when auto_evaluate is disabled.
+    #[test]
+    fn test_no_evaluation_when_auto_evaluate_disabled() {
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+        setup_workgraph(dir_path, vec![make_task("t1", "Test task")]);
+        let (actor_id, assigner_id) = setup_agency_with_assigner(dir_path);
+
+        // Disable auto_evaluate
+        let mut config = Config::load_or_default(dir_path);
+        config.agency.auto_evaluate = false;
+        config.save(dir_path).unwrap();
+
+        run(dir_path, "t1", Some(&actor_id), false).unwrap();
+
+        // Assigner should have no evaluations
+        let agents_dir = dir_path.join("agency/cache/agents");
+        let assigner = agency::find_agent_by_prefix(&agents_dir, &assigner_id).unwrap();
+        assert_eq!(
+            assigner.performance.task_count, 0,
+            "No evaluation should be recorded when auto_evaluate is disabled"
+        );
+    }
+
+    /// Verify no evaluation is recorded when no assigner_agent is configured.
+    #[test]
+    fn test_no_evaluation_when_no_assigner_configured() {
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+        setup_workgraph(dir_path, vec![make_task("t1", "Test task")]);
+        let (actor_id, _assigner_id) = setup_agency_with_assigner(dir_path);
+
+        // Remove assigner_agent from config
+        let mut config = Config::load_or_default(dir_path);
+        config.agency.assigner_agent = None;
+        config.save(dir_path).unwrap();
+
+        run(dir_path, "t1", Some(&actor_id), false).unwrap();
+
+        // No evaluation files should be created for assign-t1
+        let evals_dir = dir_path.join("agency/evaluations");
+        let eval_files: Vec<_> = fs::read_dir(&evals_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .starts_with("eval-assign-t1-")
+            })
+            .collect();
+        assert_eq!(
+            eval_files.len(),
+            0,
+            "No evaluation should be recorded when assigner_agent is not configured"
+        );
+    }
+
+    /// Verify multiple assignments accumulate correctly with the cascade.
+    #[test]
+    fn test_multiple_assignments_cascade_accumulates() {
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+        setup_workgraph(
+            dir_path,
+            vec![make_task("t1", "Task one"), make_task("t2", "Task two")],
+        );
+        let (actor_id, assigner_id) = setup_agency_with_assigner(dir_path);
+
+        run(dir_path, "t1", Some(&actor_id), false).unwrap();
+        run(dir_path, "t2", Some(&actor_id), false).unwrap();
+
+        let agency_dir = dir_path.join("agency");
+
+        // Agent should have 2 evaluations
+        let assigner =
+            agency::find_agent_by_prefix(&agency_dir.join("cache/agents"), &assigner_id).unwrap();
+        assert_eq!(assigner.performance.task_count, 2);
+        assert_eq!(assigner.performance.evaluations.len(), 2);
+
+        // Role should also have 2
+        let role =
+            agency::find_role_by_prefix(&agency_dir.join("cache/roles"), &assigner.role_id)
+                .unwrap();
+        assert_eq!(role.performance.task_count, 2);
+
+        // Each component should have 2
+        for comp_id in &role.component_ids {
+            let comp = agency::find_component_by_prefix(
+                &agency_dir.join("primitives/components"),
+                comp_id,
+            )
+            .unwrap();
+            assert_eq!(
+                comp.performance.task_count, 2,
+                "Component '{}' should have task_count=2 after 2 assignments",
+                comp.name
+            );
+        }
+
+        // Outcome should have 2
+        let outcome = agency::find_outcome_by_prefix(
+            &agency_dir.join("primitives/outcomes"),
+            &role.outcome_id,
+        )
+        .unwrap();
+        assert_eq!(outcome.performance.task_count, 2);
     }
 }
