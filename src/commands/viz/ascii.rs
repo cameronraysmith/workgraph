@@ -279,13 +279,14 @@ pub(crate) fn generate_ascii(
         let loop_info = task
             .filter(|t| t.cycle_config.is_some() || t.loop_iteration > 0)
             .map(|t| {
-                let (iter, max) = if let Some(ref cfg) = t.cycle_config {
-                    (t.loop_iteration, cfg.max_iterations)
+                let (iter, max, forced) = if let Some(ref cfg) = t.cycle_config {
+                    (t.loop_iteration, cfg.max_iterations, cfg.no_converge)
                 } else {
-                    (t.loop_iteration, 0)
+                    (t.loop_iteration, 0, false)
                 };
                 if max > 0 {
-                    format!(" ↺ (iter {}/{})", iter, max)
+                    let label = if forced { "forced" } else { "iter" };
+                    format!(" ↺ ({} {}/{})", label, iter, max)
                 } else {
                     format!(" ↺ (iter {})", iter)
                 }
@@ -1725,6 +1726,7 @@ mod tests {
             max_iterations: 10,
             guard: None,
             delay: None,
+        no_converge: false,
         });
         src.loop_iteration = 3;
         let mut tgt = make_task("tgt", "Target");
@@ -1773,6 +1775,7 @@ mod tests {
             max_iterations: 5,
             guard: None,
             delay: None,
+        no_converge: false,
         });
         task.loop_iteration = 2;
         graph.add_node(Node::Task(task));
@@ -1816,6 +1819,7 @@ mod tests {
             max_iterations: 5,
             guard: None,
             delay: None,
+        no_converge: false,
         });
         let mut tgt = make_task("tgt", "Target");
         tgt.after = vec!["src".to_string()];
@@ -1892,6 +1896,7 @@ mod tests {
             max_iterations: 3,
             guard: None,
             delay: None,
+        no_converge: false,
         });
         a.created_at = Some("2024-01-01T00:00:00Z".to_string());
         let mut b = make_task("verify", "Verify");
@@ -2161,6 +2166,7 @@ mod tests {
             max_iterations: 2,
             guard: None,
             delay: None,
+        no_converge: false,
         });
         a.created_at = Some("2024-01-01T00:00:00Z".to_string());
         let mut b = make_task("child", "Child");
@@ -2211,6 +2217,7 @@ mod tests {
             max_iterations: 2,
             guard: None,
             delay: None,
+        no_converge: false,
         });
         target.created_at = Some("2024-01-01T00:00:00Z".to_string());
 
@@ -2280,6 +2287,7 @@ mod tests {
             max_iterations: 2,
             guard: None,
             delay: None,
+        no_converge: false,
         });
         a.created_at = Some("2024-01-01T00:00:00Z".to_string());
         let mut b = make_task("bb", "BB");
@@ -2560,6 +2568,7 @@ mod tests {
             max_iterations: 2,
             guard: None,
             delay: None,
+        no_converge: false,
         });
         // F also blocks A (non-tree) → part of Arc B
         a.after.push("fff".to_string());

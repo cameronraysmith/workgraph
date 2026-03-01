@@ -41,7 +41,9 @@ pub fn run(dir: &Path, id: &str, converged: bool) -> Result<()> {
                     && cycle_analysis
                         .task_to_cycle
                         .get(&b.id)
-                        .is_some_and(|bc| cycle_analysis.task_to_cycle.get(id) == Some(bc));
+                        .is_some_and(|bc| {
+                            cycle_analysis.task_to_cycle.get(id) == Some(bc)
+                        });
                 !in_same_cycle
             })
             .collect();
@@ -60,13 +62,19 @@ pub fn run(dir: &Path, id: &str, converged: bool) -> Result<()> {
     }
 
     // When --converged is passed, determine whether the task's cycle has a
-    // non-trivial guard. If so, the guard is authoritative — ignore the
-    // converged flag. This prevents workers from bypassing external
-    // validation by self-declaring convergence.
+    // non-trivial guard or no_converge flag. If so, ignore the converged flag.
+    // This prevents workers from bypassing external validation by
+    // self-declaring convergence, and enforces forced cycles.
     //
     // We do this check with immutable access before mutating the task.
     let converged_accepted = if converged {
-        // Check 1: the task itself has a guarded cycle_config
+        // Check 1: the task itself has no_converge or a guarded cycle_config
+        let own_no_converge = graph
+            .get_task(id)
+            .and_then(|t| t.cycle_config.as_ref())
+            .map(|c| c.no_converge)
+            .unwrap_or(false);
+
         let own_guard = graph
             .get_task(id)
             .and_then(|t| t.cycle_config.as_ref())
@@ -75,31 +83,44 @@ pub fn run(dir: &Path, id: &str, converged: bool) -> Result<()> {
             .unwrap_or(false);
 
         // Check 2: the task is a non-header member of a cycle whose header
-        // has a non-trivial guard. This covers workers trying to converge
-        // a cycle they don't own.
-        let cycle_guard = if !own_guard {
+        // has a non-trivial guard or no_converge. This covers workers trying
+        // to converge a cycle they don't own.
+        let (cycle_guard, cycle_no_converge) = if !own_guard && !own_no_converge {
             let ca = graph.compute_cycle_analysis();
-            ca.task_to_cycle
-                .get(id)
-                .map(|&idx| {
-                    let cycle = &ca.cycles[idx];
-                    cycle.members.iter().any(|mid| {
-                        graph
-                            .get_task(mid)
-                            .and_then(|t| t.cycle_config.as_ref())
-                            .and_then(|c| c.guard.as_ref())
-                            .map(|g| !matches!(g, workgraph::graph::LoopGuard::Always))
-                            .unwrap_or(false)
-                    })
-                })
-                .unwrap_or(false)
+            ca.task_to_cycle.get(id).map(|&idx| {
+                let cycle = &ca.cycles[idx];
+                let guard = cycle.members.iter().any(|mid| {
+                    graph
+                        .get_task(mid)
+                        .and_then(|t| t.cycle_config.as_ref())
+                        .and_then(|c| c.guard.as_ref())
+                        .map(|g| !matches!(g, workgraph::graph::LoopGuard::Always))
+                        .unwrap_or(false)
+                });
+                let no_conv = cycle.members.iter().any(|mid| {
+                    graph
+                        .get_task(mid)
+                        .and_then(|t| t.cycle_config.as_ref())
+                        .map(|c| c.no_converge)
+                        .unwrap_or(false)
+                });
+                (guard, no_conv)
+            }).unwrap_or((false, false))
         } else {
-            false
+            (false, false)
         };
 
         let has_guard = own_guard || cycle_guard;
+        let has_no_converge = own_no_converge || cycle_no_converge;
 
-        if has_guard {
+        if has_no_converge {
+            eprintln!(
+                "Warning: --converged ignored for '{}' because the cycle is configured with --no-converge.\n         \
+                 All iterations must run.",
+                id
+            );
+            false
+        } else if has_guard {
             eprintln!(
                 "Warning: --converged ignored for '{}' because a cycle guard is set.\n         \
                  Only the guard condition determines convergence.",
@@ -131,7 +152,7 @@ pub fn run(dir: &Path, id: &str, converged: bool) -> Result<()> {
         message: if converged_accepted {
             "Task marked as done (converged)".to_string()
         } else if converged {
-            "Task marked as done (--converged ignored, guard is authoritative)".to_string()
+            "Task marked as done (--converged ignored, cycle is forced)".to_string()
         } else {
             "Task marked as done".to_string()
         },
@@ -140,19 +161,18 @@ pub fn run(dir: &Path, id: &str, converged: bool) -> Result<()> {
     // Extract token usage from agent output.log if available
     if task.token_usage.is_none()
         && let Ok(registry) = AgentRegistry::load(dir)
-        && let Some(agent) = registry.get_agent_by_task(id)
-    {
-        let output_path = std::path::Path::new(&agent.output_file);
-        // output_file may be relative to the project root (parent of .workgraph)
-        let abs_path = if output_path.is_absolute() {
-            output_path.to_path_buf()
-        } else {
-            dir.parent().unwrap_or(dir).join(output_path)
-        };
-        if let Some(usage) = parse_token_usage(&abs_path) {
-            task.token_usage = Some(usage);
-        }
-    }
+            && let Some(agent) = registry.get_agent_by_task(id) {
+                let output_path = std::path::Path::new(&agent.output_file);
+                // output_file may be relative to the project root (parent of .workgraph)
+                let abs_path = if output_path.is_absolute() {
+                    output_path.to_path_buf()
+                } else {
+                    dir.parent().unwrap_or(dir).join(output_path)
+                };
+                if let Some(usage) = parse_token_usage(&abs_path) {
+                    task.token_usage = Some(usage);
+                }
+            }
 
     // Evaluate structural cycle iteration
     let id_owned = id.to_string();
@@ -210,10 +230,9 @@ pub fn run(dir: &Path, id: &str, converged: bool) -> Result<()> {
 
     // Soft validation nudge: if no log entry mentions validation, print a tip.
     if let Some(task) = graph.get_task(id) {
-        let has_validation = task
-            .log
-            .iter()
-            .any(|entry| entry.message.to_lowercase().contains("validat"));
+        let has_validation = task.log.iter().any(|entry| {
+            entry.message.to_lowercase().contains("validat")
+        });
         if !has_validation {
             eprintln!(
                 "Tip: Log validation steps before wg done (e.g., wg log {} \"Validated: tests pass\")",
@@ -493,6 +512,7 @@ mod tests {
                 status: Status::Failed,
             }),
             delay: None,
+        no_converge: false,
         });
 
         setup_workgraph(dir_path, vec![header]);
@@ -514,7 +534,7 @@ mod tests {
         let last_log = task.log.last().unwrap();
         assert_eq!(
             last_log.message,
-            "Task marked as done (--converged ignored, guard is authoritative)"
+            "Task marked as done (--converged ignored, cycle is forced)"
         );
     }
 
@@ -537,6 +557,7 @@ mod tests {
                 status: Status::Failed,
             }),
             delay: None,
+        no_converge: false,
         });
 
         let mut worker = make_task("worker", "Worker in cycle", Status::Open);
@@ -561,7 +582,7 @@ mod tests {
         let last_log = task.log.last().unwrap();
         assert_eq!(
             last_log.message,
-            "Task marked as done (--converged ignored, guard is authoritative)"
+            "Task marked as done (--converged ignored, cycle is forced)"
         );
     }
 
@@ -578,6 +599,7 @@ mod tests {
             max_iterations: 5,
             guard: Some(LoopGuard::Always),
             delay: None,
+        no_converge: false,
         });
 
         setup_workgraph(dir_path, vec![header]);
@@ -612,6 +634,7 @@ mod tests {
             max_iterations: 5,
             guard: None,
             delay: None,
+        no_converge: false,
         });
 
         setup_workgraph(dir_path, vec![header]);
@@ -681,5 +704,94 @@ mod tests {
             .iter()
             .any(|e| e.message.to_lowercase().contains("validat"));
         assert!(has_validation);
+    }
+
+    #[test]
+    fn test_done_converged_ignored_when_no_converge_set_on_self() {
+        // When the task itself has no_converge, --converged should be ignored.
+        use workgraph::graph::CycleConfig;
+
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+
+        let mut header = make_task("header", "Forced cycle header", Status::Open);
+        header.cycle_config = Some(CycleConfig {
+            max_iterations: 5,
+            guard: None,
+            delay: None,
+            no_converge: true,
+        });
+
+        setup_workgraph(dir_path, vec![header]);
+
+        let result = run(dir_path, "header", true);
+        assert!(result.is_ok());
+
+        let path = graph_path(dir_path);
+        let graph = load_graph(&path).unwrap();
+        let task = graph.get_task("header").unwrap();
+
+        // Converged tag should NOT be present
+        assert!(
+            !task.tags.contains(&"converged".to_string()),
+            "converged tag should not be added when no_converge is set"
+        );
+
+        // Log should contain the forced-ignore message (may not be last due to reactivation)
+        let has_forced_msg = task.log.iter().any(|e| {
+            e.message == "Task marked as done (--converged ignored, cycle is forced)"
+        });
+        assert!(
+            has_forced_msg,
+            "Log should contain forced-ignore message, got: {:?}",
+            task.log.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_done_converged_ignored_for_non_header_in_no_converge_cycle() {
+        // When a task is a non-header member of a cycle with no_converge,
+        // --converged should also be ignored.
+        use workgraph::graph::CycleConfig;
+
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+
+        let mut header = make_task("header", "Forced cycle header", Status::Done);
+        header.after = vec!["worker".to_string()];
+        header.cycle_config = Some(CycleConfig {
+            max_iterations: 5,
+            guard: None,
+            delay: None,
+            no_converge: true,
+        });
+
+        let mut worker = make_task("worker", "Worker in forced cycle", Status::Open);
+        worker.after = vec!["header".to_string()];
+
+        setup_workgraph(dir_path, vec![header, worker]);
+
+        let result = run(dir_path, "worker", true);
+        assert!(result.is_ok());
+
+        let path = graph_path(dir_path);
+        let graph = load_graph(&path).unwrap();
+        let task = graph.get_task("worker").unwrap();
+
+        // Converged tag should NOT be present
+        assert!(
+            !task.tags.contains(&"converged".to_string()),
+            "converged tag should not be added for non-header in no-converge cycle"
+        );
+
+        // Log should contain the forced-ignore message (may not be last due to reactivation)
+        let has_forced_msg = task.log.iter().any(|e| {
+            e.message == "Task marked as done (--converged ignored, cycle is forced)"
+        });
+        assert!(
+            has_forced_msg,
+            "Log should contain forced-ignore message, got: {:?}",
+            task.log.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
     }
 }

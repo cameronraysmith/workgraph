@@ -211,7 +211,11 @@ pub fn generate_graph_with_overrides(
 
             let loop_info = if let Some(ref cfg) = task.cycle_config {
                 if cfg.max_iterations > 0 {
-                    format!(" ↺ {}/{}", task.loop_iteration, cfg.max_iterations)
+                    if cfg.no_converge {
+                        format!(" ↺ forced {}/{}", task.loop_iteration, cfg.max_iterations)
+                    } else {
+                        format!(" ↺ {}/{}", task.loop_iteration, cfg.max_iterations)
+                    }
                 } else {
                     " ↺".to_string()
                 }
@@ -854,6 +858,7 @@ mod tests {
             max_iterations: 5,
             guard: None,
             delay: None,
+        no_converge: false,
         });
         src.loop_iteration = 2;
         let mut tgt = make_task("tgt", "Target");

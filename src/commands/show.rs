@@ -342,6 +342,9 @@ fn print_human_readable(details: &TaskDetails) {
         if let Some(ref delay) = cc.delay {
             println!("  Delay: {}", delay);
         }
+        if cc.no_converge {
+            println!("  No-converge: true (all iterations forced)");
+        }
         if details.loop_iteration > 0 {
             println!("  Current iteration: {}", details.loop_iteration);
         }

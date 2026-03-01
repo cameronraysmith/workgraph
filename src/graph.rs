@@ -14,6 +14,13 @@ pub struct CycleConfig {
     /// Time delay before re-activation (e.g., "30s", "5m", "1h")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delay: Option<String>,
+    /// When true, agents cannot signal convergence — all iterations MUST run
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub no_converge: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !b
 }
 
 /// Guard condition for a loop edge
@@ -226,10 +233,7 @@ pub struct Task {
     /// Visibility zone for trace exports. Controls what crosses organizational boundaries.
     /// Values: "internal" (default, org-only), "public" (sanitized sharing),
     /// "peer" (richer view for credentialed peers).
-    #[serde(
-        default = "default_visibility",
-        skip_serializing_if = "is_default_visibility"
-    )]
+    #[serde(default = "default_visibility", skip_serializing_if = "is_default_visibility")]
     pub visibility: String,
     /// Context scope for prompt assembly: clean, task, graph, full
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -312,10 +316,7 @@ pub fn parse_token_usage(output_log_path: &std::path::Path) -> Option<TokenUsage
             continue;
         }
 
-        let cost_usd = val
-            .get("total_cost_usd")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
+        let cost_usd = val.get("total_cost_usd").and_then(|v| v.as_f64()).unwrap_or(0.0);
         let usage = val.get("usage");
 
         let input_tokens = usage
@@ -390,17 +391,13 @@ pub fn parse_token_usage_live(output_log_path: &std::path::Path) -> Option<Token
             continue;
         }
         // Usage is nested under message.usage
-        let usage = val.get("message").and_then(|m| m.get("usage"));
+        let usage = val
+            .get("message")
+            .and_then(|m| m.get("usage"));
         if let Some(usage) = usage {
             found_any = true;
-            total_input += usage
-                .get("input_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            total_output += usage
-                .get("output_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+            total_input += usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            total_output += usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
             total_cache_read += usage
                 .get("cache_read_input_tokens")
                 .or_else(|| usage.get("cacheReadInputTokens"))
@@ -448,11 +445,7 @@ pub fn format_token_display(
 
     if let Some(u) = usage {
         let cache_total = u.cache_read_input_tokens + u.cache_creation_input_tokens;
-        s.push_str(&format!(
-            "→{} ←{}",
-            format_tokens(u.total_input()),
-            format_tokens(u.output_tokens)
-        ));
+        s.push_str(&format!("→{} ←{}", format_tokens(u.total_input()), format_tokens(u.output_tokens)));
         if cache_total > 0 {
             // ◎ disk/circle symbol for cached tokens
             s.push_str(&format!(" ◎{}", format_tokens(cache_total)));
@@ -1073,11 +1066,10 @@ pub fn evaluate_cycle_iteration(
             let mut found = None;
             for member_id in &cycle.members {
                 if let Some(task) = graph.get_task(member_id)
-                    && let Some(ref config) = task.cycle_config
-                {
-                    found = Some((member_id.clone(), config.clone()));
-                    break;
-                }
+                    && let Some(ref config) = task.cycle_config {
+                        found = Some((member_id.clone(), config.clone()));
+                        break;
+                    }
             }
             match found {
                 Some(pair) => pair,
@@ -1122,17 +1114,19 @@ fn reactivate_cycle(
         }
     }
 
-    // Check convergence tag on config owner — but only if no external guard is set.
-    // When a guard is present, the guard is authoritative over convergence.
-    let guard_is_set =
-        cycle_config.guard.is_some() && !matches!(cycle_config.guard, Some(LoopGuard::Always));
+    // Check convergence tag on config owner — but only if no external guard
+    // is set and no_converge is false. When a guard is present, the guard is
+    // authoritative over convergence. When no_converge is set, convergence
+    // signals are always ignored.
+    let guard_is_set = cycle_config.guard.is_some()
+        && !matches!(cycle_config.guard, Some(LoopGuard::Always));
 
-    if !guard_is_set
+    if !guard_is_set && !cycle_config.no_converge
         && let Some(owner) = graph.get_task(config_owner_id)
-        && owner.tags.contains(&"converged".to_string())
-    {
-        return vec![];
-    }
+            && owner.tags.contains(&"converged".to_string())
+        {
+            return vec![];
+        }
 
     // Check max_iterations
     let current_iter = graph
@@ -1148,10 +1142,9 @@ fn reactivate_cycle(
         return vec![];
     }
     if let Some(LoopGuard::IterationLessThan(n)) = &cycle_config.guard
-        && current_iter >= *n
-    {
-        return vec![];
-    }
+        && current_iter >= *n {
+            return vec![];
+        }
 
     // All checks passed — re-open all members
     let new_iteration = current_iter + 1;
@@ -1192,6 +1185,47 @@ fn reactivate_cycle(
     }
 
     reactivated
+}
+
+/// Scan all detected cycles and reactivate any where all members are Done.
+///
+/// Unlike `evaluate_cycle_iteration` (which is triggered by a single task
+/// completion), this function proactively checks every cycle in the graph.
+/// It is intended to be called by the coordinator as a safety net — if a
+/// `wg done` call reactivated the cycle, there is nothing left to do;
+/// if the reactivation was missed (race, crash, etc.), this catches it.
+///
+/// Returns the list of task IDs that were re-activated across all cycles.
+pub fn evaluate_all_cycle_iterations(
+    graph: &mut WorkGraph,
+    cycle_analysis: &CycleAnalysis,
+) -> Vec<String> {
+    let mut all_reactivated = Vec::new();
+
+    for cycle in &cycle_analysis.cycles {
+        // Find the cycle member with CycleConfig
+        let found = {
+            let mut result = None;
+            for member_id in &cycle.members {
+                if let Some(task) = graph.get_task(member_id)
+                    && let Some(ref config) = task.cycle_config
+                {
+                    result = Some((member_id.clone(), config.clone()));
+                    break;
+                }
+            }
+            result
+        };
+
+        let Some((config_owner_id, cycle_config)) = found else {
+            continue; // No config = no cycle iteration
+        };
+
+        let reactivated = reactivate_cycle(graph, &cycle.members, &config_owner_id, &cycle_config);
+        all_reactivated.extend(reactivated);
+    }
+
+    all_reactivated
 }
 
 /// Compute Levenshtein edit distance between two strings.
@@ -1810,7 +1844,11 @@ mod tests {
     fn test_parse_token_usage_no_result_line() {
         let dir = tempfile::tempdir().unwrap();
         let log_path = dir.path().join("output.log");
-        std::fs::write(&log_path, r#"{"type":"assistant","content":"hello"}"#).unwrap();
+        std::fs::write(
+            &log_path,
+            r#"{"type":"assistant","content":"hello"}"#,
+        )
+        .unwrap();
 
         assert!(parse_token_usage(&log_path).is_none());
     }

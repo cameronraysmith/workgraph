@@ -61,6 +61,7 @@ pub fn run(
     max_iterations: Option<u32>,
     cycle_guard: Option<&str>,
     cycle_delay: Option<&str>,
+    no_converge: bool,
     visibility: &str,
     context_scope: Option<&str>,
     exec_mode: Option<&str>,
@@ -198,10 +199,14 @@ pub fn run(
             max_iterations: max_iter,
             guard,
             delay,
+            no_converge,
         })
     } else {
         if cycle_guard.is_some() || cycle_delay.is_some() {
             anyhow::bail!("--cycle-guard and --cycle-delay require --max-iterations");
+        }
+        if no_converge {
+            anyhow::bail!("--no-converge requires --max-iterations");
         }
         None
     };
@@ -911,6 +916,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             "internal",
             None,
             None,
@@ -948,6 +954,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             "internal",
             None,
             None,
@@ -985,6 +992,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             "internal",
             None,
             None,
@@ -1029,6 +1037,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             "internal",
             None,
             None,
@@ -1070,6 +1079,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             "internal",
             None,
             None,

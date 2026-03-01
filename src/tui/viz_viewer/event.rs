@@ -2,10 +2,7 @@ use std::io;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-    MouseEventKind,
-};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind, EnableMouseCapture, DisableMouseCapture};
 use crossterm::execute;
 use ratatui::DefaultTerminal;
 
@@ -48,7 +45,7 @@ fn run_event_loop_inner(terminal: &mut DefaultTerminal, app: &mut VizApp) -> Res
                     handle_key(app, key.code, key.modifiers);
                 }
                 Event::Mouse(mouse) if app.mouse_enabled => {
-                    handle_mouse(app, mouse.kind);
+                    handle_mouse(app, mouse.kind, mouse.row, mouse.column);
                 }
                 Event::Resize(_, _) => {} // re-render on next iteration
                 _ => {}
@@ -163,6 +160,22 @@ fn handle_normal_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Char('n') => app.next_match(),
         KeyCode::Char('N') | KeyCode::BackTab => app.prev_match(),
 
+        // HUD panel scroll (Shift+Up/Down/PgUp/PgDn) — must come before generic Up/Down.
+        KeyCode::Up if modifiers.contains(KeyModifiers::SHIFT) => {
+            app.hud_scroll_up(1);
+        }
+        KeyCode::Down if modifiers.contains(KeyModifiers::SHIFT) => {
+            let max = app.hud_detail.as_ref().map(|d| d.rendered_lines.len()).unwrap_or(0);
+            app.hud_scroll_down(1, max, app.scroll.viewport_height);
+        }
+        KeyCode::PageUp if modifiers.contains(KeyModifiers::SHIFT) => {
+            app.hud_scroll_up(10);
+        }
+        KeyCode::PageDown if modifiers.contains(KeyModifiers::SHIFT) => {
+            let max = app.hud_detail.as_ref().map(|d| d.rendered_lines.len()).unwrap_or(0);
+            app.hud_scroll_down(10, max, app.scroll.viewport_height);
+        }
+
         // Arrow keys: navigate tasks when trace is visible, scroll viewport when trace is off.
         KeyCode::Up => {
             if app.trace_visible {
@@ -184,23 +197,8 @@ fn handle_normal_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Char('j') => app.scroll.scroll_down(1),
         KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => app.scroll.page_up(),
         KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => app.scroll.page_down(),
-        // PgUp/PgDn: jump by tasks when trace is on, scroll viewport when off.
-        KeyCode::PageUp => {
-            if app.trace_visible {
-                let task_page = (app.scroll.viewport_height / 2).max(1);
-                app.select_prev_task_by(task_page);
-            } else {
-                app.scroll.page_up();
-            }
-        }
-        KeyCode::PageDown => {
-            if app.trace_visible {
-                let task_page = (app.scroll.viewport_height / 2).max(1);
-                app.select_next_task_by(task_page);
-            } else {
-                app.scroll.page_down();
-            }
-        }
+        KeyCode::PageUp => app.scroll.page_up(),
+        KeyCode::PageDown => app.scroll.page_down(),
 
         // Jump to top/bottom
         KeyCode::Char('g') => app.scroll.go_top(),
@@ -237,10 +235,20 @@ fn handle_normal_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
     }
 }
 
-fn handle_mouse(app: &mut VizApp, kind: MouseEventKind) {
+fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, _column: u16) {
     match kind {
         MouseEventKind::ScrollUp => app.scroll.scroll_up(3),
         MouseEventKind::ScrollDown => app.scroll.scroll_down(3),
+        MouseEventKind::Down(MouseButton::Left) => {
+            // Map the click row to a visible line index, then to an original line index.
+            // Row 0 is the top of the terminal; the content area starts at row 0
+            // (status bar is at the bottom). The visible line is offset by scroll position.
+            let visible_idx = app.scroll.offset_y + row as usize;
+            if visible_idx < app.visible_line_count() {
+                let orig_line = app.visible_to_original(visible_idx);
+                app.select_task_at_line(orig_line);
+            }
+        }
         _ => {}
     }
 }

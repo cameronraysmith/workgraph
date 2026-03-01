@@ -1535,6 +1535,7 @@ args = ["--custom-flag"]
             max_iterations: 3,
             guard: None,
             delay: None,
+        no_converge: false,
         });
 
         let vars = TemplateVars::from_task(&task, None, None);
@@ -1606,6 +1607,7 @@ args = ["--custom-flag"]
             max_iterations: 5,
             guard: None,
             delay: None,
+        no_converge: false,
         });
 
         let vars = TemplateVars::from_task(&task, None, None);
@@ -1736,6 +1738,7 @@ args = ["--custom-flag"]
             max_iterations: 5,
             guard: None,
             delay: None,
+        no_converge: false,
         });
 
         let vars = TemplateVars::from_task(&task, None, None);

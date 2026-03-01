@@ -24,6 +24,7 @@ pub fn run(
     max_iterations: Option<u32>,
     cycle_guard: Option<&str>,
     cycle_delay: Option<&str>,
+    no_converge: bool,
     visibility: Option<&str>,
     context_scope: Option<&str>,
     exec_mode: Option<&str>,
@@ -169,11 +170,12 @@ pub fn run(
                 max_iterations: max_iter,
                 guard,
                 delay,
+                no_converge,
             });
-            println!("Set cycle_config: max_iterations={}", max_iter);
+            println!("Set cycle_config: max_iterations={}{}", max_iter, if no_converge { " (no-converge)" } else { "" });
             changed = true;
         } else {
-            // Allow updating guard/delay on existing cycle config
+            // Allow updating guard/delay/no_converge on existing cycle config
             if let Some(expr) = cycle_guard {
                 if let Some(ref mut config) = task.cycle_config {
                     config.guard = Some(crate::commands::add::parse_guard_expr(expr)?);
@@ -199,6 +201,17 @@ pub fn run(
                 } else {
                     anyhow::bail!(
                         "Cannot set --cycle-delay without --max-iterations: task has no cycle_config"
+                    );
+                }
+            }
+            if no_converge {
+                if let Some(ref mut config) = task.cycle_config {
+                    config.no_converge = true;
+                    println!("Set no-converge on cycle");
+                    changed = true;
+                } else {
+                    anyhow::bail!(
+                        "Cannot set --no-converge without --max-iterations: task has no cycle_config"
                     );
                 }
             }
@@ -351,6 +364,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             "internal",
             None,
             None,
@@ -385,6 +399,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             "internal",
             None,
             None,
@@ -410,6 +425,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             "internal",
             None,
             None,
@@ -439,6 +455,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,
@@ -471,6 +488,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,
@@ -503,6 +521,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,
@@ -536,6 +555,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,
@@ -568,6 +588,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,
@@ -601,6 +622,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,
@@ -633,6 +655,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,
@@ -665,6 +688,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,
@@ -698,6 +722,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,
@@ -730,6 +755,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,
@@ -758,6 +784,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,
@@ -785,6 +812,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,
@@ -819,6 +847,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,
@@ -857,6 +886,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,
@@ -879,6 +909,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,
@@ -926,6 +957,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,
@@ -981,6 +1013,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,
@@ -1017,6 +1050,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,
@@ -1048,6 +1082,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             None,

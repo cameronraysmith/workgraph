@@ -13,7 +13,7 @@ use workgraph::agency::{
     render_identity_prompt_rich, resolve_all_components, resolve_outcome, save_assignment_record,
 };
 use workgraph::config::Config;
-use workgraph::graph::{LogEntry, Node, Status, Task};
+use workgraph::graph::{LogEntry, Node, Status, Task, evaluate_all_cycle_iterations};
 use workgraph::parser::{load_graph, save_graph};
 use workgraph::query::ready_tasks_with_peers_cycle_aware;
 use workgraph::service::registry::AgentRegistry;
@@ -1044,6 +1044,25 @@ pub fn coordinator_tick(
     let mut graph = load_graph(&graph_path).context("Failed to load graph")?;
 
     let slots_available = max_agents.saturating_sub(alive_count);
+
+    // Phase 2.5: Cycle iteration — reactivate cycles where all members are Done.
+    // This is the primary mechanism for cycle iteration: when the last task in a
+    // cycle completes, `wg done` may or may not have already triggered reactivation
+    // (it does via evaluate_cycle_iteration). This coordinator-level check acts as
+    // the authoritative sweep that catches all completed cycles each tick.
+    {
+        let cycle_analysis = graph.compute_cycle_analysis();
+        let reactivated = evaluate_all_cycle_iterations(&mut graph, &cycle_analysis);
+        if !reactivated.is_empty() {
+            eprintln!(
+                "[coordinator] Cycle iteration: re-activated {} task(s): {:?}",
+                reactivated.len(),
+                reactivated
+            );
+            save_graph(&graph, &graph_path)
+                .context("Failed to save graph after cycle reactivation")?;
+        }
+    }
 
     // Phase 3: Auto-assign unassigned ready tasks
     // NOTE: These must run BEFORE the early-return check, because they may

@@ -1,15 +1,25 @@
 use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
 use anyhow::Result;
-use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
+use fuzzy_matcher::FuzzyMatcher;
 
 use crate::commands::viz::{VizOptions, VizOutput};
-use workgraph::graph::{Status, TokenUsage, parse_token_usage_live};
+use workgraph::graph::{format_tokens, parse_token_usage_live, Status, TokenUsage};
 use workgraph::parser::load_graph;
 use workgraph::{AgentRegistry, AgentStatus};
+
+/// Loaded detail for the HUD panel showing info about the selected task.
+#[derive(Default)]
+pub struct HudDetail {
+    /// Task ID this detail was loaded for (to detect stale data).
+    pub task_id: String,
+    /// All content lines assembled for rendering (with section headers).
+    pub rendered_lines: Vec<String>,
+}
 
 /// Task status counts for the status bar.
 #[derive(Default)]
@@ -121,6 +131,12 @@ pub struct VizApp {
     /// Empty if the selected task is not in any cycle.
     pub cycle_set: HashSet<String>,
 
+    // ── HUD (info panel) ──
+    /// Loaded HUD detail for the currently selected task.
+    pub hud_detail: Option<HudDetail>,
+    /// Scroll offset within the HUD panel (vertical).
+    pub hud_scroll: usize,
+
     // ── Live refresh ──
     /// Last observed modification time of graph.jsonl.
     last_graph_mtime: Option<SystemTime>,
@@ -153,11 +169,7 @@ impl VizApp {
     ///
     /// `mouse_override`: `Some(false)` forces mouse off (--no-mouse),
     /// `None` means auto-detect (disable in tmux split panes).
-    pub fn new(
-        workgraph_dir: PathBuf,
-        viz_options: VizOptions,
-        mouse_override: Option<bool>,
-    ) -> Self {
+    pub fn new(workgraph_dir: PathBuf, viz_options: VizOptions, mouse_override: Option<bool>) -> Self {
         let mouse_enabled = match mouse_override {
             Some(v) => v,
             None => !detect_tmux_split(),
@@ -204,6 +216,8 @@ impl VizApp {
             char_edge_map: std::collections::HashMap::new(),
             cycle_members: HashMap::new(),
             cycle_set: HashSet::new(),
+            hud_detail: None,
+            hud_scroll: 0,
             last_graph_mtime: graph_mtime,
             last_refresh: Instant::now(),
             last_refresh_display: chrono::Local::now().format("%H:%M:%S").to_string(),
@@ -218,13 +232,10 @@ impl VizApp {
     pub fn load_viz(&mut self) {
         match self.generate_viz() {
             Ok(viz_output) => {
-                self.lines = viz_output
-                    .text
-                    .lines()
+                self.lines = viz_output.text.lines()
                     .map(String::from)
                     .filter(|l| {
-                        let stripped = String::from_utf8(strip_ansi_escapes::strip(l.as_bytes()))
-                            .unwrap_or_default();
+                        let stripped = String::from_utf8(strip_ansi_escapes::strip(l.as_bytes())).unwrap_or_default();
                         !stripped.trim_start().starts_with("Legend:")
                     })
                     .collect();
@@ -232,8 +243,7 @@ impl VizApp {
                     .lines
                     .iter()
                     .map(|l| {
-                        String::from_utf8(strip_ansi_escapes::strip(l.as_bytes()))
-                            .unwrap_or_default()
+                        String::from_utf8(strip_ansi_escapes::strip(l.as_bytes())).unwrap_or_default()
                     })
                     .collect();
                 self.search_lines = self
@@ -241,7 +251,8 @@ impl VizApp {
                     .iter()
                     .map(|l| sanitize_for_search(l))
                     .collect();
-                self.max_line_width = self.plain_lines.iter().map(|l| l.len()).max().unwrap_or(0);
+                self.max_line_width =
+                    self.plain_lines.iter().map(|l| l.len()).max().unwrap_or(0);
 
                 // Store graph metadata for interactive edge tracing.
                 self.node_line_map = viz_output.node_line_map;
@@ -367,35 +378,6 @@ impl VizApp {
         self.scroll_to_selected_task();
     }
 
-    /// Move task selection up by `count` tasks (for PgUp).
-    pub fn select_prev_task_by(&mut self, count: usize) {
-        if self.task_order.is_empty() {
-            return;
-        }
-        let idx = match self.selected_task_idx {
-            Some(i) => i.saturating_sub(count),
-            None => 0,
-        };
-        self.selected_task_idx = Some(idx);
-        self.recompute_trace();
-        self.scroll_to_selected_task();
-    }
-
-    /// Move task selection down by `count` tasks (for PgDn).
-    pub fn select_next_task_by(&mut self, count: usize) {
-        if self.task_order.is_empty() {
-            return;
-        }
-        let last = self.task_order.len() - 1;
-        let idx = match self.selected_task_idx {
-            Some(i) => (i + count).min(last),
-            None => count.min(last),
-        };
-        self.selected_task_idx = Some(idx);
-        self.recompute_trace();
-        self.scroll_to_selected_task();
-    }
-
     /// Select the first task in the viz order.
     pub fn select_first_task(&mut self) {
         if self.task_order.is_empty() {
@@ -469,6 +451,9 @@ impl VizApp {
         if let Some(members) = self.cycle_members.get(&selected_id) {
             self.cycle_set = members.clone();
         }
+
+        // Invalidate HUD so it reloads for the new selection.
+        self.invalidate_hud();
     }
 
     /// Scroll the viewport so the selected task is visible.
@@ -481,14 +466,36 @@ impl VizApp {
             Some(&line) => line,
             None => return,
         };
-        if let Some(visible_pos) = self.original_to_visible(orig_line)
-            && (visible_pos < self.scroll.offset_y
-                || visible_pos >= self.scroll.offset_y + self.scroll.viewport_height)
-        {
-            let half = self.scroll.viewport_height / 2;
-            self.scroll.offset_y = visible_pos.saturating_sub(half);
-            self.scroll.clamp();
+        if let Some(visible_pos) = self.original_to_visible(orig_line) {
+            if visible_pos < self.scroll.offset_y
+                || visible_pos >= self.scroll.offset_y + self.scroll.viewport_height
+            {
+                let half = self.scroll.viewport_height / 2;
+                self.scroll.offset_y = visible_pos.saturating_sub(half);
+                self.scroll.clamp();
+            }
         }
+    }
+
+    /// Select the task at the given original line index, if any.
+    /// Returns true if a task was found and selected.
+    pub fn select_task_at_line(&mut self, orig_line: usize) -> bool {
+        // Reverse lookup: find which task_id lives at this line.
+        let task_id = self.node_line_map.iter()
+            .find(|&(_, line)| *line == orig_line)
+            .map(|(id, _)| id.clone());
+        let task_id = match task_id {
+            Some(id) => id,
+            None => return false,
+        };
+        // Find its index in task_order.
+        let idx = match self.task_order.iter().position(|id| *id == task_id) {
+            Some(i) => i,
+            None => return false,
+        };
+        self.selected_task_idx = Some(idx);
+        self.recompute_trace();
+        true
     }
 
     /// Get the currently selected task ID, if any.
@@ -558,7 +565,6 @@ impl VizApp {
 
     /// Accept search and jump to the current match with a transient highlight.
     /// Called when the user presses Enter on a search match.
-    /// Also selects the nearest task so search and selection are unified.
     pub fn accept_search_and_jump(&mut self) {
         // Capture the current match's original line index before clearing filter.
         let target_line = self.current_match_line();
@@ -568,10 +574,6 @@ impl VizApp {
             // Set the transient highlight target.
             self.jump_target = Some((orig_line, Instant::now()));
 
-            // Select the task at or nearest to the search match and enable trace.
-            self.trace_visible = true;
-            self.select_task_nearest_line(orig_line);
-
             // Scroll to center on the target line in the full (unfiltered) view.
             let half = self.scroll.viewport_height / 2;
             self.scroll.offset_y = orig_line.saturating_sub(half);
@@ -579,7 +581,7 @@ impl VizApp {
         }
     }
 
-    /// Jump to the next search match. Also updates the selected task.
+    /// Jump to the next search match.
     pub fn next_match(&mut self) {
         if self.fuzzy_matches.is_empty() {
             return;
@@ -589,13 +591,10 @@ impl VizApp {
             None => 0,
         };
         self.current_match = Some(next);
-        if let Some(orig_line) = self.current_match_line() {
-            self.select_task_nearest_line(orig_line);
-        }
         self.scroll_to_current_match();
     }
 
-    /// Jump to the previous search match. Also updates the selected task.
+    /// Jump to the previous search match.
     pub fn prev_match(&mut self) {
         if self.fuzzy_matches.is_empty() {
             return;
@@ -606,9 +605,6 @@ impl VizApp {
             None => self.fuzzy_matches.len() - 1,
         };
         self.current_match = Some(prev);
-        if let Some(orig_line) = self.current_match_line() {
-            self.select_task_nearest_line(orig_line);
-        }
         self.scroll_to_current_match();
     }
 
@@ -677,11 +673,11 @@ impl VizApp {
             if let Some(visible_pos) = self.original_to_visible(orig_line)
                 && (visible_pos < self.scroll.offset_y
                     || visible_pos >= self.scroll.offset_y + self.scroll.viewport_height)
-            {
-                let half = self.scroll.viewport_height / 2;
-                self.scroll.offset_y = visible_pos.saturating_sub(half);
-                self.scroll.clamp();
-            }
+                {
+                    let half = self.scroll.viewport_height / 2;
+                    self.scroll.offset_y = visible_pos.saturating_sub(half);
+                    self.scroll.clamp();
+                }
         }
     }
 
@@ -695,9 +691,7 @@ impl VizApp {
         // Re-run the fuzzy match with the current query.
         self.fuzzy_matches.clear();
         for (i, search_line) in self.search_lines.iter().enumerate() {
-            if let Some((score, indices)) =
-                self.matcher.fuzzy_indices(search_line, &self.search_input)
-            {
+            if let Some((score, indices)) = self.matcher.fuzzy_indices(search_line, &self.search_input) {
                 let char_positions = byte_positions_to_char_positions(search_line, &indices);
                 self.fuzzy_matches.push(FuzzyLineMatch {
                     line_idx: i,
@@ -781,9 +775,7 @@ impl VizApp {
 
             // Use stored token_usage if available, otherwise check live agent data
             let usage = task.token_usage.as_ref().or_else(|| {
-                task.assigned
-                    .as_ref()
-                    .and_then(|aid| live_agent_usage.get(aid))
+                task.assigned.as_ref().and_then(|aid| live_agent_usage.get(aid))
             });
 
             if let Some(usage) = usage {
@@ -819,6 +811,7 @@ impl VizApp {
                 }
             }
             self.load_stats();
+            self.invalidate_hud();
             self.last_refresh_display = chrono::Local::now().format("%H:%M:%S").to_string();
         }
 
@@ -862,11 +855,10 @@ impl VizApp {
             let orig_idx = self.visible_to_original(visible_idx);
             if let Some(plain) = self.plain_lines.get(orig_idx)
                 && let Some(task_id) = extract_task_id(plain)
-                && seen.insert(task_id.clone())
-                && let Some(task_usage) = self.task_token_map.get(&task_id)
-            {
-                usage.accumulate(task_usage);
-            }
+                    && seen.insert(task_id.clone())
+                        && let Some(task_usage) = self.task_token_map.get(&task_id) {
+                            usage.accumulate(task_usage);
+                        }
         }
         usage
     }
@@ -877,75 +869,238 @@ impl VizApp {
     }
 
     /// Toggle edge trace highlighting on/off.
-    /// When toggling ON, snap selection to the nearest visible task in the viewport.
     pub fn toggle_trace(&mut self) {
         self.trace_visible = !self.trace_visible;
-        if self.trace_visible {
-            self.select_nearest_visible_task();
-            self.recompute_trace();
+        if !self.trace_visible {
+            self.hud_detail = None;
+            self.hud_scroll = 0;
+        } else {
+            self.load_hud_detail();
         }
     }
 
-    /// Select the task whose line is nearest to the center of the current viewport.
-    /// Used when toggling trace back on after scrolling.
-    fn select_nearest_visible_task(&mut self) {
-        if self.task_order.is_empty() {
-            return;
-        }
-        let viewport_center = self.scroll.offset_y + self.scroll.viewport_height / 2;
-        let mut best_idx: Option<usize> = None;
-        let mut best_dist: usize = usize::MAX;
-        for (idx, task_id) in self.task_order.iter().enumerate() {
-            if let Some(&orig_line) = self.node_line_map.get(task_id) {
-                let visible_pos = match self.original_to_visible(orig_line) {
-                    Some(v) => v,
-                    None => continue,
-                };
-                let dist = visible_pos.abs_diff(viewport_center);
-                if dist < best_dist {
-                    best_dist = dist;
-                    best_idx = Some(idx);
-                }
+    /// Load HUD detail for the currently selected task.
+    /// Called when selection changes or trace is toggled on.
+    pub fn load_hud_detail(&mut self) {
+        let task_id = match self.selected_task_id() {
+            Some(id) => id.to_string(),
+            None => {
+                self.hud_detail = None;
+                return;
+            }
+        };
+
+        // Skip reload if already loaded for this task.
+        if let Some(ref detail) = self.hud_detail {
+            if detail.task_id == task_id {
+                return;
             }
         }
-        if let Some(idx) = best_idx {
-            self.selected_task_idx = Some(idx);
+
+        self.hud_scroll = 0;
+
+        let graph_path = self.workgraph_dir.join("graph.jsonl");
+        let graph = match load_graph(&graph_path) {
+            Ok(g) => g,
+            Err(_) => {
+                self.hud_detail = None;
+                return;
+            }
+        };
+
+        let task = match graph.tasks().find(|t| t.id == task_id) {
+            Some(t) => t.clone(),
+            None => {
+                self.hud_detail = None;
+                return;
+            }
+        };
+
+        let mut lines: Vec<String> = Vec::new();
+
+        // ── Header ──
+        lines.push(format!("── {} ──", task.id));
+        lines.push(format!("Title: {}", task.title));
+        lines.push(format!("Status: {:?}", task.status));
+        if let Some(ref agent) = task.assigned {
+            lines.push(format!("Agent: {}", agent));
         }
+        lines.push(String::new());
+
+        // ── Description ──
+        if let Some(ref desc) = task.description {
+            lines.push("── Description ──".to_string());
+            for (i, line) in desc.lines().enumerate() {
+                if i >= 10 {
+                    lines.push("  ...".to_string());
+                    break;
+                }
+                lines.push(format!("  {}", line));
+            }
+            lines.push(String::new());
+        }
+
+        // ── Agent prompt ──
+        if let Some(ref agent_id) = task.assigned {
+            let prompt_path = self.workgraph_dir.join("agents").join(agent_id).join("prompt.txt");
+            if prompt_path.exists() {
+                lines.push("── Prompt ──".to_string());
+                if let Ok(file) = std::fs::File::open(&prompt_path) {
+                    let reader = BufReader::new(file);
+                    for (i, line) in reader.lines().enumerate() {
+                        if i >= 10 {
+                            lines.push("  ...".to_string());
+                            break;
+                        }
+                        if let Ok(l) = line {
+                            lines.push(format!("  {}", l));
+                        }
+                    }
+                }
+                lines.push(String::new());
+            }
+        }
+
+        // ── Agent output (tail) ──
+        if let Some(ref agent_id) = task.assigned {
+            let output_path = self.workgraph_dir.join("agents").join(agent_id).join("output.log");
+            if output_path.exists() {
+                lines.push("── Output (tail) ──".to_string());
+                if let Ok(content) = std::fs::read_to_string(&output_path) {
+                    let all_lines: Vec<&str> = content.lines().collect();
+                    let start = all_lines.len().saturating_sub(10);
+                    for line in &all_lines[start..] {
+                        lines.push(format!("  {}", line));
+                    }
+                }
+                lines.push(String::new());
+            }
+        }
+
+        // ── Evaluation ──
+        let evals_dir = self.workgraph_dir.join("agency").join("evaluations");
+        if evals_dir.exists() {
+            let prefix = format!("eval-{}-", task.id);
+            if let Ok(entries) = std::fs::read_dir(&evals_dir) {
+                let mut eval_found = false;
+                // Find the most recent evaluation for this task.
+                let mut eval_files: Vec<_> = entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
+                    .collect();
+                eval_files.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+                if let Some(entry) = eval_files.first() {
+                    if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                        if let Ok(eval) = serde_json::from_str::<serde_json::Value>(&content) {
+                            eval_found = true;
+                            lines.push("── Evaluation ──".to_string());
+                            if let Some(score) = eval.get("score").and_then(|v| v.as_f64()) {
+                                lines.push(format!("  Score: {:.2}", score));
+                            }
+                            if let Some(notes) = eval.get("notes").and_then(|v| v.as_str()) {
+                                // Show first ~3 lines of notes.
+                                for (i, line) in notes.lines().enumerate() {
+                                    if i >= 3 {
+                                        lines.push("  ...".to_string());
+                                        break;
+                                    }
+                                    lines.push(format!("  {}", line));
+                                }
+                            }
+                            if let Some(dims) = eval.get("dimensions").and_then(|v| v.as_object()) {
+                                let dim_strs: Vec<String> = dims.iter()
+                                    .map(|(k, v)| format!("{}:{:.2}", k, v.as_f64().unwrap_or(0.0)))
+                                    .collect();
+                                lines.push(format!("  Dims: {}", dim_strs.join(", ")));
+                            }
+                            lines.push(String::new());
+                        }
+                    }
+                }
+                let _ = eval_found;
+            }
+        }
+
+        // ── Token usage ──
+        if let Some(ref usage) = task.token_usage {
+            lines.push("── Tokens ──".to_string());
+            lines.push(format!("  Input:  {} (→{})", format_tokens(usage.total_input()), format_tokens(usage.input_tokens)));
+            lines.push(format!("  Output: {} (←{})", format_tokens(usage.output_tokens), format_tokens(usage.output_tokens)));
+            if usage.cache_read_input_tokens > 0 || usage.cache_creation_input_tokens > 0 {
+                lines.push(format!("  Cache read:  {} (◎)", format_tokens(usage.cache_read_input_tokens)));
+                lines.push(format!("  Cache write: {} (⊳)", format_tokens(usage.cache_creation_input_tokens)));
+            }
+            if usage.cost_usd > 0.0 {
+                lines.push(format!("  Cost: ${:.4}", usage.cost_usd));
+            }
+            lines.push(String::new());
+        }
+
+        // ── Dependencies ──
+        if !task.after.is_empty() || !task.before.is_empty() {
+            lines.push("── Dependencies ──".to_string());
+            if !task.after.is_empty() {
+                lines.push(format!("  After:  {}", task.after.join(", ")));
+            }
+            if !task.before.is_empty() {
+                lines.push(format!("  Before: {}", task.before.join(", ")));
+            }
+            lines.push(String::new());
+        }
+
+        // ── Timing ──
+        let has_timing = task.created_at.is_some() || task.started_at.is_some() || task.completed_at.is_some();
+        if has_timing {
+            lines.push("── Timing ──".to_string());
+            if let Some(ref ts) = task.created_at {
+                lines.push(format!("  Created:   {}", format_timestamp(ts)));
+            }
+            if let Some(ref ts) = task.started_at {
+                lines.push(format!("  Started:   {}", format_timestamp(ts)));
+            }
+            if let Some(ref ts) = task.completed_at {
+                lines.push(format!("  Completed: {}", format_timestamp(ts)));
+            }
+            // Duration
+            if let (Some(start), Some(end)) = (&task.started_at, &task.completed_at) {
+                if let (Ok(s), Ok(e)) = (
+                    chrono::DateTime::parse_from_rfc3339(start),
+                    chrono::DateTime::parse_from_rfc3339(end),
+                ) {
+                    let dur = (e - s).num_seconds();
+                    lines.push(format!("  Duration:  {}", workgraph::format_duration(dur, false)));
+                }
+            }
+            lines.push(String::new());
+        }
+
+        // ── Failure reason ──
+        if let Some(ref reason) = task.failure_reason {
+            lines.push("── Failure ──".to_string());
+            lines.push(format!("  {}", reason));
+            lines.push(String::new());
+        }
+
+        self.hud_detail = Some(HudDetail {
+            task_id,
+            rendered_lines: lines,
+        });
     }
 
-    /// Select the task at or nearest to the given line index.
-    /// Used to unify search results with the selection system.
-    fn select_task_nearest_line(&mut self, orig_line: usize) {
-        if self.task_order.is_empty() {
-            return;
-        }
-        // Try exact match first.
-        let exact = self
-            .node_line_map
-            .iter()
-            .find(|&(_, line)| *line == orig_line)
-            .and_then(|(id, _)| self.task_order.iter().position(|tid| tid == id));
-        if let Some(idx) = exact {
-            self.selected_task_idx = Some(idx);
-            self.recompute_trace();
-            return;
-        }
-        // Otherwise find the nearest task by line distance.
-        let mut best_idx: Option<usize> = None;
-        let mut best_dist: usize = usize::MAX;
-        for (idx, task_id) in self.task_order.iter().enumerate() {
-            if let Some(&task_line) = self.node_line_map.get(task_id) {
-                let dist = task_line.abs_diff(orig_line);
-                if dist < best_dist {
-                    best_dist = dist;
-                    best_idx = Some(idx);
-                }
-            }
-        }
-        if let Some(idx) = best_idx {
-            self.selected_task_idx = Some(idx);
-            self.recompute_trace();
-        }
+    /// Invalidate HUD detail so it reloads on next render.
+    pub fn invalidate_hud(&mut self) {
+        self.hud_detail = None;
+    }
+
+    /// Scroll the HUD panel up.
+    pub fn hud_scroll_up(&mut self, amount: usize) {
+        self.hud_scroll = self.hud_scroll.saturating_sub(amount);
+    }
+
+    /// Scroll the HUD panel down.
+    pub fn hud_scroll_down(&mut self, amount: usize, max_lines: usize, viewport: usize) {
+        let max_scroll = max_lines.saturating_sub(viewport);
+        self.hud_scroll = (self.hud_scroll + amount).min(max_scroll);
     }
 
     /// Construct a VizApp from pre-built VizOutput for unit testing.
@@ -953,16 +1108,13 @@ impl VizApp {
     #[cfg(test)]
     pub(crate) fn from_viz_output_for_test(viz: &crate::commands::viz::VizOutput) -> Self {
         let lines: Vec<String> = viz.text.lines().map(String::from).collect();
-        let plain_lines: Vec<String> = lines
-            .iter()
-            .map(|l| String::from_utf8(strip_ansi_escapes::strip(l.as_bytes())).unwrap_or_default())
-            .collect();
+        let plain_lines: Vec<String> = lines.iter().map(|l| {
+            String::from_utf8(strip_ansi_escapes::strip(l.as_bytes())).unwrap_or_default()
+        }).collect();
         let search_lines = plain_lines.iter().map(|l| sanitize_for_search(l)).collect();
         let max_line_width = plain_lines.iter().map(|l| l.len()).max().unwrap_or(0);
 
-        let mut task_order: Vec<(String, usize)> = viz
-            .node_line_map
-            .iter()
+        let mut task_order: Vec<(String, usize)> = viz.node_line_map.iter()
             .map(|(id, &line)| (id.clone(), line))
             .collect();
         task_order.sort_by_key(|(_, line)| *line);
@@ -1009,6 +1161,8 @@ impl VizApp {
             char_edge_map: viz.char_edge_map.clone(),
             cycle_members: viz.cycle_members.clone(),
             cycle_set: HashSet::new(),
+            hud_detail: None,
+            hud_scroll: 0,
             last_graph_mtime: None,
             last_refresh: Instant::now(),
             last_refresh_display: String::new(),
@@ -1059,7 +1213,7 @@ fn detect_tmux_split() -> bool {
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let parts: Vec<&str> = stdout.split_whitespace().collect();
+    let parts: Vec<&str> = stdout.trim().split_whitespace().collect();
     if parts.len() != 2 {
         return false;
     }
@@ -1149,14 +1303,13 @@ fn compute_filtered_indices(
                     continue;
                 }
                 if let Some(indent) = line_indent_level(&plain_lines[ancestor_idx])
-                    && indent < need_below
-                {
-                    visible.insert(ancestor_idx);
-                    need_below = indent;
-                    if indent == 0 {
-                        break; // reached root
+                    && indent < need_below {
+                        visible.insert(ancestor_idx);
+                        need_below = indent;
+                        if indent == 0 {
+                            break; // reached root
+                        }
                     }
-                }
             }
         }
 
@@ -1184,8 +1337,8 @@ fn extract_task_id(plain: &str) -> Option<String> {
     // Task IDs consist of [a-zA-Z0-9_-].
     let trimmed = plain.trim_start();
     // Strip leading tree connectors (box-drawing + arrows + spaces)
-    let after_connectors: &str =
-        trimmed.trim_start_matches(|c: char| is_box_drawing(c) || c == ' ');
+    let after_connectors: &str = trimmed
+        .trim_start_matches(|c: char| is_box_drawing(c) || c == ' ');
     if after_connectors.is_empty() {
         return None;
     }
@@ -1243,6 +1396,17 @@ pub(super) fn is_box_drawing(c: char) -> bool {
             | '►'
             | '◄'
     )
+}
+
+/// Format an ISO 8601 timestamp for HUD display (shorter, local time).
+fn format_timestamp(ts: &str) -> String {
+    match chrono::DateTime::parse_from_rfc3339(ts) {
+        Ok(dt) => {
+            let local = dt.with_timezone(&chrono::Local);
+            local.format("%Y-%m-%d %H:%M:%S").to_string()
+        }
+        Err(_) => ts.to_string(),
+    }
 }
 
 /// Convert byte positions (from fuzzy_indices) to char positions for a given string.
@@ -1312,5 +1476,535 @@ impl ViewportScroll {
         self.offset_y = self.offset_y.min(max_y);
         let max_x = self.content_width.saturating_sub(self.viewport_width);
         self.offset_x = self.offset_x.min(max_x);
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Tests for HUD state and behavior
+// ══════════════════════════════════════════════════════════════════════════════
+#[cfg(test)]
+mod hud_tests {
+    use super::*;
+    use std::collections::{HashMap, HashSet};
+    use workgraph::graph::{Node, Status, TokenUsage, WorkGraph};
+    use workgraph::parser::save_graph;
+    use workgraph::test_helpers::make_task_with_status;
+
+    use crate::commands::viz::ascii::generate_ascii;
+    use crate::commands::viz::{LayoutMode, VizOutput};
+
+    /// Build a chain graph a -> b -> c plus standalone d, with rich metadata on task a.
+    /// Returns (VizOutput, WorkGraph, TempDir) — keep TempDir alive while using the app.
+    fn build_chain_plus_isolated() -> (VizOutput, WorkGraph, tempfile::TempDir) {
+        let mut graph = WorkGraph::new();
+        let mut a = make_task_with_status("a", "Task Alpha", Status::Done);
+        a.description = Some(
+            "This is the description for task Alpha.\nLine two.\nLine three.\nLine four."
+                .to_string(),
+        );
+        a.assigned = Some("agent-001".to_string());
+        a.created_at = Some("2026-01-15T10:00:00Z".to_string());
+        a.started_at = Some("2026-01-15T10:05:00Z".to_string());
+        a.completed_at = Some("2026-01-15T10:30:00Z".to_string());
+        a.token_usage = Some(TokenUsage {
+            cost_usd: 0.05,
+            input_tokens: 1000,
+            output_tokens: 500,
+            cache_read_input_tokens: 200,
+            cache_creation_input_tokens: 100,
+        });
+
+        let mut b = make_task_with_status("b", "Task Bravo", Status::InProgress);
+        b.after = vec!["a".to_string()];
+        b.assigned = Some("agent-002".to_string());
+        b.description = Some("Description for Bravo.".to_string());
+
+        let mut c = make_task_with_status("c", "Task Charlie", Status::Open);
+        c.after = vec!["b".to_string()];
+        // No description, no agent, no tokens — for missing-data tests.
+
+        let mut d = make_task_with_status("d", "Task Delta", Status::Failed);
+        d.failure_reason = Some("Timed out after 30 minutes".to_string());
+        d.description = Some("Delta task description.".to_string());
+
+        graph.add_node(Node::Task(a));
+        graph.add_node(Node::Task(b));
+        graph.add_node(Node::Task(c));
+        graph.add_node(Node::Task(d));
+
+        // Create a temp directory with graph.jsonl so load_hud_detail works.
+        let tmp = tempfile::tempdir().unwrap();
+        let graph_path = tmp.path().join("graph.jsonl");
+        save_graph(&graph, &graph_path).unwrap();
+
+        let tasks: Vec<_> = graph.tasks().collect();
+        let task_ids: HashSet<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
+        let result = generate_ascii(
+            &graph,
+            &tasks,
+            &task_ids,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            LayoutMode::Tree,
+            &HashSet::new(),
+            "gray",
+        );
+        (result, graph, tmp)
+    }
+
+    /// Build a VizApp with a specific task selected, pointed at a real workgraph dir.
+    fn build_app(viz: &VizOutput, selected_id: &str, workgraph_dir: &std::path::Path) -> VizApp {
+        let mut app = VizApp::from_viz_output_for_test(viz);
+        app.workgraph_dir = workgraph_dir.to_path_buf();
+        let idx = app.task_order.iter().position(|id| id == selected_id);
+        app.selected_task_idx = idx;
+        app.recompute_trace();
+        app
+    }
+
+    // ── TEST 1: HUD APPEARS WITH TAB ──
+
+    #[test]
+    fn hud_visible_when_trace_on_and_task_selected() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let app = build_app(&viz, "a", _tmp.path());
+
+        assert!(app.trace_visible, "trace_visible should default to true");
+        assert!(app.selected_task_idx.is_some(), "should have a selected task");
+        let show_hud = app.trace_visible && app.selected_task_idx.is_some();
+        assert!(show_hud, "HUD should be visible when trace is on and task is selected");
+    }
+
+    // ── TEST 2: HUD DISAPPEARS WITH TAB ──
+
+    #[test]
+    fn hud_hidden_when_trace_toggled_off() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+
+        app.toggle_trace();
+        assert!(!app.trace_visible, "trace should be off after toggle");
+        assert!(app.hud_detail.is_none(), "HUD detail should be cleared when trace is off");
+        assert_eq!(app.hud_scroll, 0, "HUD scroll should reset");
+
+        let show_hud = app.trace_visible && app.selected_task_idx.is_some();
+        assert!(!show_hud, "HUD should NOT be visible when trace is off");
+    }
+
+    #[test]
+    fn hud_reappears_after_double_toggle() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+
+        app.toggle_trace(); // off
+        app.toggle_trace(); // on
+        assert!(app.trace_visible);
+        let show_hud = app.trace_visible && app.selected_task_idx.is_some();
+        assert!(show_hud, "HUD should reappear after toggling back on");
+    }
+
+    // ── TEST 3: HUD CONTENT CORRECT ──
+
+    #[test]
+    fn hud_shows_task_id_and_title() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+        app.load_hud_detail();
+
+        let detail = app.hud_detail.as_ref().expect("HUD detail should load");
+        assert_eq!(detail.task_id, "a");
+        assert!(detail.rendered_lines.iter().any(|l| l.contains("── a ──")));
+        assert!(detail.rendered_lines.iter().any(|l| l.contains("Title: Task Alpha")));
+    }
+
+    #[test]
+    fn hud_shows_status() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+        app.load_hud_detail();
+
+        let detail = app.hud_detail.as_ref().unwrap();
+        assert!(detail.rendered_lines.iter().any(|l| l.contains("Status: Done")));
+    }
+
+    #[test]
+    fn hud_shows_agent() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+        app.load_hud_detail();
+
+        let detail = app.hud_detail.as_ref().unwrap();
+        assert!(detail.rendered_lines.iter().any(|l| l.contains("Agent: agent-001")));
+    }
+
+    #[test]
+    fn hud_shows_description_excerpt() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+        app.load_hud_detail();
+
+        let detail = app.hud_detail.as_ref().unwrap();
+        assert!(detail.rendered_lines.iter().any(|l| l.contains("── Description ──")));
+        assert!(detail
+            .rendered_lines
+            .iter()
+            .any(|l| l.contains("This is the description for task Alpha.")));
+    }
+
+    #[test]
+    fn hud_shows_token_usage() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+        app.load_hud_detail();
+
+        let detail = app.hud_detail.as_ref().unwrap();
+        assert!(detail.rendered_lines.iter().any(|l| l.contains("── Tokens ──")));
+        assert!(detail.rendered_lines.iter().any(|l| l.contains("Cost: $0.05")));
+        assert!(detail.rendered_lines.iter().any(|l| l.contains("Cache read:")));
+    }
+
+    #[test]
+    fn hud_shows_dependencies() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "b", _tmp.path());
+        app.load_hud_detail();
+
+        let detail = app.hud_detail.as_ref().unwrap();
+        assert!(detail.rendered_lines.iter().any(|l| l.contains("── Dependencies ──")));
+        assert!(detail.rendered_lines.iter().any(|l| l.contains("After:") && l.contains("a")));
+    }
+
+    #[test]
+    fn hud_shows_timing() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+        app.load_hud_detail();
+
+        let detail = app.hud_detail.as_ref().unwrap();
+        assert!(detail.rendered_lines.iter().any(|l| l.contains("── Timing ──")));
+        assert!(detail.rendered_lines.iter().any(|l| l.contains("Created:")));
+        assert!(detail.rendered_lines.iter().any(|l| l.contains("Started:")));
+        assert!(detail.rendered_lines.iter().any(|l| l.contains("Completed:")));
+        assert!(detail.rendered_lines.iter().any(|l| l.contains("Duration:")));
+    }
+
+    #[test]
+    fn hud_shows_failure_reason() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "d", _tmp.path());
+        app.load_hud_detail();
+
+        let detail = app.hud_detail.as_ref().unwrap();
+        assert!(detail.rendered_lines.iter().any(|l| l.contains("── Failure ──")));
+        assert!(detail.rendered_lines.iter().any(|l| l.contains("Timed out after 30 minutes")));
+    }
+
+    // ── TEST 4: HUD UPDATES ON SELECTION ──
+
+    #[test]
+    fn hud_invalidates_on_selection_change() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+        app.load_hud_detail();
+        assert_eq!(app.hud_detail.as_ref().unwrap().task_id, "a");
+
+        app.select_next_task();
+        // recompute_trace calls invalidate_hud
+        assert!(app.hud_detail.is_none(), "HUD should be invalidated after selection change");
+
+        app.load_hud_detail();
+        let new_id = app.hud_detail.as_ref().unwrap().task_id.clone();
+        assert_ne!(new_id, "a", "HUD should now show a different task");
+    }
+
+    #[test]
+    fn hud_content_changes_on_navigation() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+        app.load_hud_detail();
+        let initial = app.hud_detail.as_ref().unwrap().rendered_lines.clone();
+
+        app.select_next_task();
+        app.load_hud_detail();
+        let next = app.hud_detail.as_ref().unwrap().rendered_lines.clone();
+
+        assert_ne!(initial, next, "HUD content should change when selecting a different task");
+    }
+
+    #[test]
+    fn hud_updates_on_prev_task() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+
+        app.select_next_task();
+        app.load_hud_detail();
+        let second_id = app.hud_detail.as_ref().unwrap().task_id.clone();
+
+        app.select_prev_task();
+        app.load_hud_detail();
+        let back_id = app.hud_detail.as_ref().unwrap().task_id.clone();
+
+        assert_ne!(second_id, back_id, "HUD should show different content after navigating back");
+    }
+
+    // ── TEST 5: NARROW TERMINAL FALLBACK ──
+    // (Layout tests are in render.rs test module below)
+
+    // ── TEST 6: HUD SCROLLABLE ──
+
+    #[test]
+    fn hud_scroll_down() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+        app.load_hud_detail();
+
+        let total = app.hud_detail.as_ref().unwrap().rendered_lines.len();
+        assert!(total > 5, "precondition: need >5 lines to test scrolling");
+
+        assert_eq!(app.hud_scroll, 0);
+        app.hud_scroll_down(3, total, 10);
+        assert_eq!(app.hud_scroll, 3);
+    }
+
+    #[test]
+    fn hud_scroll_up() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+        app.load_hud_detail();
+
+        let total = app.hud_detail.as_ref().unwrap().rendered_lines.len();
+        app.hud_scroll_down(5, total, 10);
+        assert_eq!(app.hud_scroll, 5);
+
+        app.hud_scroll_up(2);
+        assert_eq!(app.hud_scroll, 3);
+    }
+
+    #[test]
+    fn hud_scroll_clamps_at_zero() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+        app.load_hud_detail();
+
+        app.hud_scroll_up(10);
+        assert_eq!(app.hud_scroll, 0, "scroll should not go below 0");
+    }
+
+    #[test]
+    fn hud_scroll_clamps_at_max() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+        app.load_hud_detail();
+
+        let total = app.hud_detail.as_ref().unwrap().rendered_lines.len();
+        let viewport = 10;
+        let max_scroll = total.saturating_sub(viewport);
+
+        app.hud_scroll_down(1000, total, viewport);
+        assert_eq!(app.hud_scroll, max_scroll, "scroll should clamp at max");
+    }
+
+    #[test]
+    fn hud_scroll_resets_on_selection_change() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+        app.load_hud_detail();
+
+        let total = app.hud_detail.as_ref().unwrap().rendered_lines.len();
+        app.hud_scroll_down(5, total, 10);
+        assert!(app.hud_scroll > 0);
+
+        app.select_next_task();
+        app.load_hud_detail();
+        assert_eq!(app.hud_scroll, 0, "scroll should reset for new task");
+    }
+
+    // ── TEST 7: NO CRASH ON MISSING DATA ──
+
+    #[test]
+    fn hud_no_crash_no_agent() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "c", _tmp.path());
+        app.load_hud_detail();
+
+        let detail = app.hud_detail.as_ref().expect("should load even with no agent");
+        assert_eq!(detail.task_id, "c");
+        assert!(!detail.rendered_lines.iter().any(|l| l.starts_with("Agent:")));
+    }
+
+    #[test]
+    fn hud_no_crash_no_description() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "c", _tmp.path());
+        app.load_hud_detail();
+
+        let detail = app.hud_detail.as_ref().unwrap();
+        assert!(!detail.rendered_lines.iter().any(|l| l.contains("── Description ──")));
+    }
+
+    #[test]
+    fn hud_no_crash_no_tokens() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "c", _tmp.path());
+        app.load_hud_detail();
+
+        let detail = app.hud_detail.as_ref().unwrap();
+        assert!(!detail.rendered_lines.iter().any(|l| l.contains("── Tokens ──")));
+    }
+
+    #[test]
+    fn hud_no_crash_no_timing() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "c", _tmp.path());
+        app.load_hud_detail();
+
+        let detail = app.hud_detail.as_ref().unwrap();
+        assert!(!detail.rendered_lines.iter().any(|l| l.contains("── Timing ──")));
+    }
+
+    #[test]
+    fn hud_no_crash_no_failure() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+        app.load_hud_detail();
+
+        let detail = app.hud_detail.as_ref().unwrap();
+        assert!(!detail.rendered_lines.iter().any(|l| l.contains("── Failure ──")));
+    }
+
+    #[test]
+    fn hud_no_crash_no_dependencies() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "d", _tmp.path());
+        app.load_hud_detail();
+
+        let detail = app.hud_detail.as_ref().unwrap();
+        assert!(!detail.rendered_lines.iter().any(|l| l.contains("── Dependencies ──")));
+    }
+
+    #[test]
+    fn hud_no_crash_no_selection() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = VizApp::from_viz_output_for_test(&viz);
+        app.workgraph_dir = _tmp.path().to_path_buf();
+        app.selected_task_idx = None;
+
+        app.load_hud_detail();
+        assert!(app.hud_detail.is_none());
+    }
+
+    #[test]
+    fn hud_no_crash_empty_graph() {
+        let empty_viz = crate::commands::viz::VizOutput {
+            text: "(no tasks to display)".to_string(),
+            node_line_map: HashMap::new(),
+            task_order: Vec::new(),
+            forward_edges: HashMap::new(),
+            reverse_edges: HashMap::new(),
+            char_edge_map: HashMap::new(),
+            cycle_members: HashMap::new(),
+        };
+
+        let mut app = VizApp::from_viz_output_for_test(&empty_viz);
+        assert!(app.selected_task_idx.is_none());
+
+        app.load_hud_detail();
+        assert!(app.hud_detail.is_none());
+
+        // Toggle trace on empty graph should not panic
+        app.toggle_trace();
+        assert!(!app.trace_visible);
+        app.toggle_trace();
+        assert!(app.trace_visible);
+    }
+
+    // ── ADDITIONAL: skip-reload optimization ──
+
+    #[test]
+    fn hud_skips_reload_for_same_task() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+        app.load_hud_detail();
+        assert_eq!(app.hud_detail.as_ref().unwrap().task_id, "a");
+
+        // Second load should be a no-op
+        app.load_hud_detail();
+        assert_eq!(app.hud_detail.as_ref().unwrap().task_id, "a");
+    }
+
+    #[test]
+    fn hud_invalidate_forces_reload() {
+        let (viz, _, _tmp) = build_chain_plus_isolated();
+        let mut app = build_app(&viz, "a", _tmp.path());
+        app.load_hud_detail();
+        assert!(app.hud_detail.is_some());
+
+        app.invalidate_hud();
+        assert!(app.hud_detail.is_none());
+
+        app.load_hud_detail();
+        assert_eq!(app.hud_detail.as_ref().unwrap().task_id, "a");
+    }
+
+    // ── ADDITIONAL: description truncation ──
+
+    #[test]
+    fn hud_description_truncated_to_10_lines() {
+        let mut graph = WorkGraph::new();
+        let mut task = make_task_with_status("long-desc", "Long Description Task", Status::Open);
+        task.description = Some(
+            (0..15)
+                .map(|i| format!("Line {}", i))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        graph.add_node(Node::Task(task));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let graph_path = tmp.path().join("graph.jsonl");
+        save_graph(&graph, &graph_path).unwrap();
+
+        let tasks: Vec<_> = graph.tasks().collect();
+        let task_ids: HashSet<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
+        let viz = generate_ascii(
+            &graph,
+            &tasks,
+            &task_ids,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            LayoutMode::Tree,
+            &HashSet::new(),
+            "gray",
+        );
+
+        let mut app = build_app(&viz, "long-desc", tmp.path());
+        app.load_hud_detail();
+
+        let detail = app.hud_detail.as_ref().unwrap();
+        let desc_start = detail
+            .rendered_lines
+            .iter()
+            .position(|l| l.contains("── Description ──"))
+            .expect("should have description section");
+
+        let desc_lines: Vec<_> = detail.rendered_lines[desc_start + 1..]
+            .iter()
+            .take_while(|l| !l.is_empty())
+            .collect();
+
+        // Should have at most 11 lines (10 content + 1 "  ..." truncation indicator)
+        assert!(
+            desc_lines.len() <= 11,
+            "Description should be truncated, got {} lines",
+            desc_lines.len()
+        );
+        assert!(
+            desc_lines.iter().any(|l| l.contains("...")),
+            "Truncated description should show '...' indicator"
+        );
     }
 }

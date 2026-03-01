@@ -110,6 +110,10 @@ pub enum Commands {
         #[arg(long = "cycle-delay")]
         cycle_delay: Option<String>,
 
+        /// Force all cycle iterations to run (agents cannot signal convergence)
+        #[arg(long = "no-converge")]
+        no_converge: bool,
+
         /// Task visibility zone for trace exports (internal, public, peer)
         #[arg(long, default_value = "internal")]
         visibility: String,
@@ -184,6 +188,10 @@ pub enum Commands {
         /// Set delay between cycle iterations (e.g., 30s, 5m, 1h)
         #[arg(long = "cycle-delay")]
         cycle_delay: Option<String>,
+
+        /// Force all cycle iterations to run (agents cannot signal convergence)
+        #[arg(long = "no-converge")]
+        no_converge: bool,
 
         /// Set task visibility zone (internal, public, peer)
         #[arg(long)]

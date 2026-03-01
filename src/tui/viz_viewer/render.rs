@@ -8,6 +8,13 @@ use ratatui::widgets::{
 use super::state::VizApp;
 use workgraph::graph::{TokenUsage, format_tokens};
 
+/// Minimum terminal width for side-by-side HUD layout.
+const HUD_SIDE_MIN_WIDTH: u16 = 100;
+/// HUD panel width as a percentage of terminal width (side layout).
+const HUD_SIDE_PERCENT: u16 = 35;
+/// HUD panel height as a percentage of terminal height (bottom layout).
+const HUD_BOTTOM_PERCENT: u16 = 40;
+
 pub fn draw(frame: &mut Frame, app: &mut VizApp) {
     // Clear expired jump targets (>2 seconds old).
     if let Some((_, when)) = app.jump_target
@@ -22,24 +29,77 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(1),    // viz content
+            Constraint::Min(1),    // viz content (+ optional HUD)
             Constraint::Length(1), // status bar
         ])
         .split(area);
 
-    let content_area = chunks[0];
+    let main_area = chunks[0];
     let status_area = chunks[1];
 
-    // Update viewport dimensions from terminal size.
-    app.scroll.viewport_height = content_area.height as usize;
-    app.scroll.viewport_width = content_area.width as usize;
+    // Determine if HUD should be shown: trace visible + a task selected.
+    let show_hud = app.trace_visible && app.selected_task_idx.is_some();
 
-    // Viz content
-    draw_viz_content(frame, app, content_area);
+    if show_hud {
+        // Lazily load HUD detail if needed.
+        if app.hud_detail.is_none() {
+            app.load_hud_detail();
+        }
 
-    // Vertical scrollbar (only if content overflows)
-    if app.scroll.content_height > app.scroll.viewport_height {
-        draw_scrollbar(frame, app, content_area);
+        if area.width >= HUD_SIDE_MIN_WIDTH {
+            // Side-by-side: viz on left, HUD on right.
+            let hud_width = (area.width as u32 * HUD_SIDE_PERCENT as u32 / 100) as u16;
+            let split = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Min(1),
+                    Constraint::Length(hud_width),
+                ])
+                .split(main_area);
+
+            let viz_area = split[0];
+            let hud_area = split[1];
+
+            app.scroll.viewport_height = viz_area.height as usize;
+            app.scroll.viewport_width = viz_area.width as usize;
+
+            draw_viz_content(frame, app, viz_area);
+            if app.scroll.content_height > app.scroll.viewport_height {
+                draw_scrollbar(frame, app, viz_area);
+            }
+            draw_hud_panel(frame, app, hud_area);
+        } else {
+            // Narrow: viz on top, HUD on bottom.
+            let hud_height = (main_area.height as u32 * HUD_BOTTOM_PERCENT as u32 / 100).max(5) as u16;
+            let split = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(1),
+                    Constraint::Length(hud_height),
+                ])
+                .split(main_area);
+
+            let viz_area = split[0];
+            let hud_area = split[1];
+
+            app.scroll.viewport_height = viz_area.height as usize;
+            app.scroll.viewport_width = viz_area.width as usize;
+
+            draw_viz_content(frame, app, viz_area);
+            if app.scroll.content_height > app.scroll.viewport_height {
+                draw_scrollbar(frame, app, viz_area);
+            }
+            draw_hud_panel(frame, app, hud_area);
+        }
+    } else {
+        // No HUD — full width viz.
+        app.scroll.viewport_height = main_area.height as usize;
+        app.scroll.viewport_width = main_area.width as usize;
+
+        draw_viz_content(frame, app, main_area);
+        if app.scroll.content_height > app.scroll.viewport_height {
+            draw_scrollbar(frame, app, main_area);
+        }
     }
 
     // Status bar
@@ -226,6 +286,66 @@ fn draw_viz_content(frame: &mut Frame, app: &VizApp, area: Rect) {
                 frame.render_widget(arrow, arrow_area);
             }
         }
+    }
+}
+
+/// Draw the HUD (info panel) for the selected task.
+fn draw_hud_panel(frame: &mut Frame, app: &mut VizApp, area: Rect) {
+    let block = Block::default()
+        .title(" Task Info ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let detail = match &app.hud_detail {
+        Some(d) => d,
+        None => {
+            let msg = Paragraph::new("No task selected")
+                .style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(msg, inner);
+            return;
+        }
+    };
+
+    let total_lines = detail.rendered_lines.len();
+    let viewport_h = inner.height as usize;
+
+    // Clamp HUD scroll.
+    let max_scroll = total_lines.saturating_sub(viewport_h);
+    if app.hud_scroll > max_scroll {
+        app.hud_scroll = max_scroll;
+    }
+
+    let start = app.hud_scroll;
+    let end = (start + viewport_h).min(total_lines);
+
+    let lines: Vec<Line> = detail.rendered_lines[start..end]
+        .iter()
+        .map(|s| {
+            if s.starts_with("──") {
+                // Section headers in cyan + bold.
+                Line::from(Span::styled(
+                    s.clone(),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ))
+            } else if s.starts_with("  ...") {
+                Line::from(Span::styled(s.clone(), Style::default().fg(Color::DarkGray)))
+            } else {
+                Line::from(Span::raw(s.clone()))
+            }
+        })
+        .collect();
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
+
+    // HUD scrollbar if content overflows.
+    if total_lines > viewport_h {
+        let mut state = ScrollbarState::new(total_lines).position(app.hud_scroll);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+        frame.render_stateful_widget(scrollbar, inner, &mut state);
     }
 }
 
@@ -707,7 +827,7 @@ fn draw_status_bar(frame: &mut Frame, app: &VizApp, area: Rect) {
 fn draw_help_overlay(frame: &mut Frame) {
     let size = frame.area();
     let width = 56.min(size.width.saturating_sub(4));
-    let height = 40.min(size.height.saturating_sub(4));
+    let height = 42.min(size.height.saturating_sub(4));
     let x = (size.width.saturating_sub(width)) / 2;
     let y = (size.height.saturating_sub(height)) / 2;
     let area = Rect::new(x, y, width, height);
@@ -751,9 +871,11 @@ fn draw_help_overlay(frame: &mut Frame) {
         binding("Ctrl-d / u", "Page down / up"),
         binding("g / G", "Jump to top / bottom"),
         blank(),
-        heading("Edge Tracing"),
-        binding("Tab", "Toggle trace highlighting on/off"),
+        heading("Edge Tracing + HUD"),
+        binding("Tab", "Toggle trace + HUD panel on/off"),
         binding("↑ / ↓", "Select task (highlights deps)"),
+        binding("Shift-↑/↓", "Scroll HUD panel"),
+        binding("Shift-PgUp/Dn", "Scroll HUD panel (fast)"),
         binding("", "Bold=selected  Magenta=upstream"),
         binding("", "Cyan=downstream"),
         blank(),
@@ -3226,5 +3348,165 @@ mod tests {
             "Cycle edges should be yellow, but none found.\nViz:\n{}",
             app.lines.join("\n")
         );
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // HUD LAYOUT AND RENDER TESTS
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// Build a chain graph a -> b -> c plus standalone d for HUD tests.
+    fn build_hud_test_graph() -> (VizOutput, WorkGraph) {
+        let mut graph = WorkGraph::new();
+        let mut a = make_task_with_status("a", "Task Alpha", Status::Done);
+        a.description = Some("Description for Alpha.".to_string());
+
+        let mut b = make_task_with_status("b", "Task Bravo", Status::InProgress);
+        b.after = vec!["a".to_string()];
+
+        let mut c = make_task_with_status("c", "Task Charlie", Status::Open);
+        c.after = vec!["b".to_string()];
+
+        let d = make_task_with_status("d", "Task Delta", Status::Failed);
+
+        graph.add_node(Node::Task(a));
+        graph.add_node(Node::Task(b));
+        graph.add_node(Node::Task(c));
+        graph.add_node(Node::Task(d));
+
+        let tasks: Vec<_> = graph.tasks().collect();
+        let task_ids: HashSet<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
+        let no_annots = HashMap::new();
+        let result = generate_ascii(
+            &graph, &tasks, &task_ids, &no_annots,
+            &HashMap::new(), &HashMap::new(), &HashMap::new(),
+            LayoutMode::Tree, &HashSet::new(), "gray",
+        );
+        (result, graph)
+    }
+
+    // ── TEST 5: NARROW TERMINAL FALLBACK ──
+
+    #[test]
+    fn hud_layout_side_by_side_at_wide_terminal() {
+        use ratatui::layout::{Constraint, Direction, Layout, Rect};
+
+        let wide_area = Rect::new(0, 0, 120, 40);
+        let hud_side_min_width: u16 = HUD_SIDE_MIN_WIDTH;
+
+        assert!(wide_area.width >= hud_side_min_width);
+
+        let hud_width = (wide_area.width as u32 * HUD_SIDE_PERCENT as u32 / 100) as u16;
+        let split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(1), Constraint::Length(hud_width)])
+            .split(wide_area);
+
+        assert!(split[0].width > 0, "viz area should have non-zero width");
+        assert_eq!(split[1].width, hud_width, "HUD should have computed width");
+        assert_eq!(split[1].height, wide_area.height, "HUD should span full height");
+        assert_eq!(split[1].x, wide_area.width - hud_width, "HUD on right side");
+    }
+
+    #[test]
+    fn hud_layout_bottom_panel_at_narrow_terminal() {
+        use ratatui::layout::{Constraint, Direction, Layout, Rect};
+
+        let narrow_area = Rect::new(0, 0, 80, 40);
+        assert!(narrow_area.width < HUD_SIDE_MIN_WIDTH);
+
+        let hud_height = (narrow_area.height as u32 * HUD_BOTTOM_PERCENT as u32 / 100).max(5) as u16;
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(hud_height)])
+            .split(narrow_area);
+
+        assert!(split[0].height > 0, "viz area should have non-zero height");
+        assert_eq!(split[1].height, hud_height, "HUD should have computed height");
+        assert_eq!(split[1].width, narrow_area.width, "HUD should span full width");
+        assert!(split[1].y > 0, "HUD should be below viz area");
+    }
+
+    // ── RENDER DRAW TESTS (no-panic) ──
+
+    #[test]
+    fn draw_with_hud_does_not_panic_wide() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let (viz, _) = build_hud_test_graph();
+        let mut app = build_app_from_viz_output(&viz, "a");
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .unwrap();
+    }
+
+    #[test]
+    fn draw_with_hud_does_not_panic_narrow() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let (viz, _) = build_hud_test_graph();
+        let mut app = build_app_from_viz_output(&viz, "a");
+
+        let backend = TestBackend::new(60, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .unwrap();
+    }
+
+    #[test]
+    fn draw_without_hud_does_not_panic() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let (viz, _) = build_hud_test_graph();
+        let mut app = build_app_from_viz_output(&viz, "a");
+        app.toggle_trace();
+
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .unwrap();
+    }
+
+    #[test]
+    fn draw_hud_no_selection_does_not_panic() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let (viz, _) = build_hud_test_graph();
+        let mut app = VizApp::from_viz_output_for_test(&viz);
+        app.selected_task_idx = None;
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .unwrap();
+    }
+
+    #[test]
+    fn draw_hud_very_small_terminal_does_not_panic() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let (viz, _) = build_hud_test_graph();
+        let mut app = build_app_from_viz_output(&viz, "a");
+
+        let backend = TestBackend::new(20, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .unwrap();
     }
 }
