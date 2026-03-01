@@ -172,7 +172,11 @@ pub fn run(
                 delay,
                 no_converge,
             });
-            println!("Set cycle_config: max_iterations={}{}", max_iter, if no_converge { " (no-converge)" } else { "" });
+            println!(
+                "Set cycle_config: max_iterations={}{}",
+                max_iter,
+                if no_converge { " (no-converge)" } else { "" }
+            );
             changed = true;
         } else {
             // Allow updating guard/delay/no_converge on existing cycle config

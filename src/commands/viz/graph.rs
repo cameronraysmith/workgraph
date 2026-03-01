@@ -858,7 +858,7 @@ mod tests {
             max_iterations: 5,
             guard: None,
             delay: None,
-        no_converge: false,
+            no_converge: false,
         });
         src.loop_iteration = 2;
         let mut tgt = make_task("tgt", "Target");

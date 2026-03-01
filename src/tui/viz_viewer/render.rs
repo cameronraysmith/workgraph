@@ -51,10 +51,7 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
             let hud_width = (area.width as u32 * HUD_SIDE_PERCENT as u32 / 100) as u16;
             let split = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Min(1),
-                    Constraint::Length(hud_width),
-                ])
+                .constraints([Constraint::Min(1), Constraint::Length(hud_width)])
                 .split(main_area);
 
             let viz_area = split[0];
@@ -70,13 +67,11 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
             draw_hud_panel(frame, app, hud_area);
         } else {
             // Narrow: viz on top, HUD on bottom.
-            let hud_height = (main_area.height as u32 * HUD_BOTTOM_PERCENT as u32 / 100).max(5) as u16;
+            let hud_height =
+                (main_area.height as u32 * HUD_BOTTOM_PERCENT as u32 / 100).max(5) as u16;
             let split = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Min(1),
-                    Constraint::Length(hud_height),
-                ])
+                .constraints([Constraint::Min(1), Constraint::Length(hud_height)])
                 .split(main_area);
 
             let viz_area = split[0];
@@ -302,8 +297,8 @@ fn draw_hud_panel(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     let detail = match &app.hud_detail {
         Some(d) => d,
         None => {
-            let msg = Paragraph::new("No task selected")
-                .style(Style::default().fg(Color::DarkGray));
+            let msg =
+                Paragraph::new("No task selected").style(Style::default().fg(Color::DarkGray));
             frame.render_widget(msg, inner);
             return;
         }
@@ -328,10 +323,15 @@ fn draw_hud_panel(frame: &mut Frame, app: &mut VizApp, area: Rect) {
                 // Section headers in cyan + bold.
                 Line::from(Span::styled(
                     s.clone(),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 ))
             } else if s.starts_with("  ...") {
-                Line::from(Span::styled(s.clone(), Style::default().fg(Color::DarkGray)))
+                Line::from(Span::styled(
+                    s.clone(),
+                    Style::default().fg(Color::DarkGray),
+                ))
             } else {
                 Line::from(Span::raw(s.clone()))
             }
@@ -3377,9 +3377,16 @@ mod tests {
         let task_ids: HashSet<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
         let no_annots = HashMap::new();
         let result = generate_ascii(
-            &graph, &tasks, &task_ids, &no_annots,
-            &HashMap::new(), &HashMap::new(), &HashMap::new(),
-            LayoutMode::Tree, &HashSet::new(), "gray",
+            &graph,
+            &tasks,
+            &task_ids,
+            &no_annots,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            LayoutMode::Tree,
+            &HashSet::new(),
+            "gray",
         );
         (result, graph)
     }
@@ -3403,7 +3410,10 @@ mod tests {
 
         assert!(split[0].width > 0, "viz area should have non-zero width");
         assert_eq!(split[1].width, hud_width, "HUD should have computed width");
-        assert_eq!(split[1].height, wide_area.height, "HUD should span full height");
+        assert_eq!(
+            split[1].height, wide_area.height,
+            "HUD should span full height"
+        );
         assert_eq!(split[1].x, wide_area.width - hud_width, "HUD on right side");
     }
 
@@ -3414,15 +3424,22 @@ mod tests {
         let narrow_area = Rect::new(0, 0, 80, 40);
         assert!(narrow_area.width < HUD_SIDE_MIN_WIDTH);
 
-        let hud_height = (narrow_area.height as u32 * HUD_BOTTOM_PERCENT as u32 / 100).max(5) as u16;
+        let hud_height =
+            (narrow_area.height as u32 * HUD_BOTTOM_PERCENT as u32 / 100).max(5) as u16;
         let split = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(1), Constraint::Length(hud_height)])
             .split(narrow_area);
 
         assert!(split[0].height > 0, "viz area should have non-zero height");
-        assert_eq!(split[1].height, hud_height, "HUD should have computed height");
-        assert_eq!(split[1].width, narrow_area.width, "HUD should span full width");
+        assert_eq!(
+            split[1].height, hud_height,
+            "HUD should have computed height"
+        );
+        assert_eq!(
+            split[1].width, narrow_area.width,
+            "HUD should span full width"
+        );
         assert!(split[1].y > 0, "HUD should be below viz area");
     }
 
@@ -3430,8 +3447,8 @@ mod tests {
 
     #[test]
     fn draw_with_hud_does_not_panic_wide() {
-        use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
 
         let (viz, _) = build_hud_test_graph();
         let mut app = build_app_from_viz_output(&viz, "a");
@@ -3439,15 +3456,13 @@ mod tests {
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal
-            .draw(|frame| draw(frame, &mut app))
-            .unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
     }
 
     #[test]
     fn draw_with_hud_does_not_panic_narrow() {
-        use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
 
         let (viz, _) = build_hud_test_graph();
         let mut app = build_app_from_viz_output(&viz, "a");
@@ -3455,15 +3470,13 @@ mod tests {
         let backend = TestBackend::new(60, 30);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal
-            .draw(|frame| draw(frame, &mut app))
-            .unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
     }
 
     #[test]
     fn draw_without_hud_does_not_panic() {
-        use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
 
         let (viz, _) = build_hud_test_graph();
         let mut app = build_app_from_viz_output(&viz, "a");
@@ -3472,15 +3485,13 @@ mod tests {
         let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal
-            .draw(|frame| draw(frame, &mut app))
-            .unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
     }
 
     #[test]
     fn draw_hud_no_selection_does_not_panic() {
-        use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
 
         let (viz, _) = build_hud_test_graph();
         let mut app = VizApp::from_viz_output_for_test(&viz);
@@ -3489,15 +3500,13 @@ mod tests {
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal
-            .draw(|frame| draw(frame, &mut app))
-            .unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
     }
 
     #[test]
     fn draw_hud_very_small_terminal_does_not_panic() {
-        use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
 
         let (viz, _) = build_hud_test_graph();
         let mut app = build_app_from_viz_output(&viz, "a");
@@ -3505,8 +3514,6 @@ mod tests {
         let backend = TestBackend::new(20, 5);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal
-            .draw(|frame| draw(frame, &mut app))
-            .unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
     }
 }

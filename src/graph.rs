@@ -233,7 +233,10 @@ pub struct Task {
     /// Visibility zone for trace exports. Controls what crosses organizational boundaries.
     /// Values: "internal" (default, org-only), "public" (sanitized sharing),
     /// "peer" (richer view for credentialed peers).
-    #[serde(default = "default_visibility", skip_serializing_if = "is_default_visibility")]
+    #[serde(
+        default = "default_visibility",
+        skip_serializing_if = "is_default_visibility"
+    )]
     pub visibility: String,
     /// Context scope for prompt assembly: clean, task, graph, full
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -316,7 +319,10 @@ pub fn parse_token_usage(output_log_path: &std::path::Path) -> Option<TokenUsage
             continue;
         }
 
-        let cost_usd = val.get("total_cost_usd").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let cost_usd = val
+            .get("total_cost_usd")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
         let usage = val.get("usage");
 
         let input_tokens = usage
@@ -391,13 +397,17 @@ pub fn parse_token_usage_live(output_log_path: &std::path::Path) -> Option<Token
             continue;
         }
         // Usage is nested under message.usage
-        let usage = val
-            .get("message")
-            .and_then(|m| m.get("usage"));
+        let usage = val.get("message").and_then(|m| m.get("usage"));
         if let Some(usage) = usage {
             found_any = true;
-            total_input += usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-            total_output += usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            total_input += usage
+                .get("input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            total_output += usage
+                .get("output_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             total_cache_read += usage
                 .get("cache_read_input_tokens")
                 .or_else(|| usage.get("cacheReadInputTokens"))
@@ -445,7 +455,11 @@ pub fn format_token_display(
 
     if let Some(u) = usage {
         let cache_total = u.cache_read_input_tokens + u.cache_creation_input_tokens;
-        s.push_str(&format!("→{} ←{}", format_tokens(u.total_input()), format_tokens(u.output_tokens)));
+        s.push_str(&format!(
+            "→{} ←{}",
+            format_tokens(u.total_input()),
+            format_tokens(u.output_tokens)
+        ));
         if cache_total > 0 {
             // ◎ disk/circle symbol for cached tokens
             s.push_str(&format!(" ◎{}", format_tokens(cache_total)));
@@ -1066,10 +1080,11 @@ pub fn evaluate_cycle_iteration(
             let mut found = None;
             for member_id in &cycle.members {
                 if let Some(task) = graph.get_task(member_id)
-                    && let Some(ref config) = task.cycle_config {
-                        found = Some((member_id.clone(), config.clone()));
-                        break;
-                    }
+                    && let Some(ref config) = task.cycle_config
+                {
+                    found = Some((member_id.clone(), config.clone()));
+                    break;
+                }
             }
             match found {
                 Some(pair) => pair,
@@ -1118,15 +1133,16 @@ fn reactivate_cycle(
     // is set and no_converge is false. When a guard is present, the guard is
     // authoritative over convergence. When no_converge is set, convergence
     // signals are always ignored.
-    let guard_is_set = cycle_config.guard.is_some()
-        && !matches!(cycle_config.guard, Some(LoopGuard::Always));
+    let guard_is_set =
+        cycle_config.guard.is_some() && !matches!(cycle_config.guard, Some(LoopGuard::Always));
 
-    if !guard_is_set && !cycle_config.no_converge
+    if !guard_is_set
+        && !cycle_config.no_converge
         && let Some(owner) = graph.get_task(config_owner_id)
-            && owner.tags.contains(&"converged".to_string())
-        {
-            return vec![];
-        }
+        && owner.tags.contains(&"converged".to_string())
+    {
+        return vec![];
+    }
 
     // Check max_iterations
     let current_iter = graph
@@ -1142,9 +1158,10 @@ fn reactivate_cycle(
         return vec![];
     }
     if let Some(LoopGuard::IterationLessThan(n)) = &cycle_config.guard
-        && current_iter >= *n {
-            return vec![];
-        }
+        && current_iter >= *n
+    {
+        return vec![];
+    }
 
     // All checks passed — re-open all members
     let new_iteration = current_iter + 1;
@@ -1844,11 +1861,7 @@ mod tests {
     fn test_parse_token_usage_no_result_line() {
         let dir = tempfile::tempdir().unwrap();
         let log_path = dir.path().join("output.log");
-        std::fs::write(
-            &log_path,
-            r#"{"type":"assistant","content":"hello"}"#,
-        )
-        .unwrap();
+        std::fs::write(&log_path, r#"{"type":"assistant","content":"hello"}"#).unwrap();
 
         assert!(parse_token_usage(&log_path).is_none());
     }

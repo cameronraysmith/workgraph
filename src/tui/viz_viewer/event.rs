@@ -2,7 +2,10 @@ use std::io;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind, EnableMouseCapture, DisableMouseCapture};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    MouseButton, MouseEventKind,
+};
 use crossterm::execute;
 use ratatui::DefaultTerminal;
 
@@ -165,14 +168,22 @@ fn handle_normal_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
             app.hud_scroll_up(1);
         }
         KeyCode::Down if modifiers.contains(KeyModifiers::SHIFT) => {
-            let max = app.hud_detail.as_ref().map(|d| d.rendered_lines.len()).unwrap_or(0);
+            let max = app
+                .hud_detail
+                .as_ref()
+                .map(|d| d.rendered_lines.len())
+                .unwrap_or(0);
             app.hud_scroll_down(1, max, app.scroll.viewport_height);
         }
         KeyCode::PageUp if modifiers.contains(KeyModifiers::SHIFT) => {
             app.hud_scroll_up(10);
         }
         KeyCode::PageDown if modifiers.contains(KeyModifiers::SHIFT) => {
-            let max = app.hud_detail.as_ref().map(|d| d.rendered_lines.len()).unwrap_or(0);
+            let max = app
+                .hud_detail
+                .as_ref()
+                .map(|d| d.rendered_lines.len())
+                .unwrap_or(0);
             app.hud_scroll_down(10, max, app.scroll.viewport_height);
         }
 

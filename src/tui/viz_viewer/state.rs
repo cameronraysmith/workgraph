@@ -4,11 +4,11 @@ use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
 use anyhow::Result;
-use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 
 use crate::commands::viz::{VizOptions, VizOutput};
-use workgraph::graph::{format_tokens, parse_token_usage_live, Status, TokenUsage};
+use workgraph::graph::{Status, TokenUsage, format_tokens, parse_token_usage_live};
 use workgraph::parser::load_graph;
 use workgraph::{AgentRegistry, AgentStatus};
 
@@ -169,7 +169,11 @@ impl VizApp {
     ///
     /// `mouse_override`: `Some(false)` forces mouse off (--no-mouse),
     /// `None` means auto-detect (disable in tmux split panes).
-    pub fn new(workgraph_dir: PathBuf, viz_options: VizOptions, mouse_override: Option<bool>) -> Self {
+    pub fn new(
+        workgraph_dir: PathBuf,
+        viz_options: VizOptions,
+        mouse_override: Option<bool>,
+    ) -> Self {
         let mouse_enabled = match mouse_override {
             Some(v) => v,
             None => !detect_tmux_split(),
@@ -232,10 +236,13 @@ impl VizApp {
     pub fn load_viz(&mut self) {
         match self.generate_viz() {
             Ok(viz_output) => {
-                self.lines = viz_output.text.lines()
+                self.lines = viz_output
+                    .text
+                    .lines()
                     .map(String::from)
                     .filter(|l| {
-                        let stripped = String::from_utf8(strip_ansi_escapes::strip(l.as_bytes())).unwrap_or_default();
+                        let stripped = String::from_utf8(strip_ansi_escapes::strip(l.as_bytes()))
+                            .unwrap_or_default();
                         !stripped.trim_start().starts_with("Legend:")
                     })
                     .collect();
@@ -243,7 +250,8 @@ impl VizApp {
                     .lines
                     .iter()
                     .map(|l| {
-                        String::from_utf8(strip_ansi_escapes::strip(l.as_bytes())).unwrap_or_default()
+                        String::from_utf8(strip_ansi_escapes::strip(l.as_bytes()))
+                            .unwrap_or_default()
                     })
                     .collect();
                 self.search_lines = self
@@ -251,8 +259,7 @@ impl VizApp {
                     .iter()
                     .map(|l| sanitize_for_search(l))
                     .collect();
-                self.max_line_width =
-                    self.plain_lines.iter().map(|l| l.len()).max().unwrap_or(0);
+                self.max_line_width = self.plain_lines.iter().map(|l| l.len()).max().unwrap_or(0);
 
                 // Store graph metadata for interactive edge tracing.
                 self.node_line_map = viz_output.node_line_map;
@@ -481,7 +488,9 @@ impl VizApp {
     /// Returns true if a task was found and selected.
     pub fn select_task_at_line(&mut self, orig_line: usize) -> bool {
         // Reverse lookup: find which task_id lives at this line.
-        let task_id = self.node_line_map.iter()
+        let task_id = self
+            .node_line_map
+            .iter()
             .find(|&(_, line)| *line == orig_line)
             .map(|(id, _)| id.clone());
         let task_id = match task_id {
@@ -673,11 +682,11 @@ impl VizApp {
             if let Some(visible_pos) = self.original_to_visible(orig_line)
                 && (visible_pos < self.scroll.offset_y
                     || visible_pos >= self.scroll.offset_y + self.scroll.viewport_height)
-                {
-                    let half = self.scroll.viewport_height / 2;
-                    self.scroll.offset_y = visible_pos.saturating_sub(half);
-                    self.scroll.clamp();
-                }
+            {
+                let half = self.scroll.viewport_height / 2;
+                self.scroll.offset_y = visible_pos.saturating_sub(half);
+                self.scroll.clamp();
+            }
         }
     }
 
@@ -691,7 +700,9 @@ impl VizApp {
         // Re-run the fuzzy match with the current query.
         self.fuzzy_matches.clear();
         for (i, search_line) in self.search_lines.iter().enumerate() {
-            if let Some((score, indices)) = self.matcher.fuzzy_indices(search_line, &self.search_input) {
+            if let Some((score, indices)) =
+                self.matcher.fuzzy_indices(search_line, &self.search_input)
+            {
                 let char_positions = byte_positions_to_char_positions(search_line, &indices);
                 self.fuzzy_matches.push(FuzzyLineMatch {
                     line_idx: i,
@@ -775,7 +786,9 @@ impl VizApp {
 
             // Use stored token_usage if available, otherwise check live agent data
             let usage = task.token_usage.as_ref().or_else(|| {
-                task.assigned.as_ref().and_then(|aid| live_agent_usage.get(aid))
+                task.assigned
+                    .as_ref()
+                    .and_then(|aid| live_agent_usage.get(aid))
             });
 
             if let Some(usage) = usage {
@@ -855,10 +868,11 @@ impl VizApp {
             let orig_idx = self.visible_to_original(visible_idx);
             if let Some(plain) = self.plain_lines.get(orig_idx)
                 && let Some(task_id) = extract_task_id(plain)
-                    && seen.insert(task_id.clone())
-                        && let Some(task_usage) = self.task_token_map.get(&task_id) {
-                            usage.accumulate(task_usage);
-                        }
+                && seen.insert(task_id.clone())
+                && let Some(task_usage) = self.task_token_map.get(&task_id)
+            {
+                usage.accumulate(task_usage);
+            }
         }
         usage
     }
@@ -942,7 +956,11 @@ impl VizApp {
 
         // ── Agent prompt ──
         if let Some(ref agent_id) = task.assigned {
-            let prompt_path = self.workgraph_dir.join("agents").join(agent_id).join("prompt.txt");
+            let prompt_path = self
+                .workgraph_dir
+                .join("agents")
+                .join(agent_id)
+                .join("prompt.txt");
             if prompt_path.exists() {
                 lines.push("── Prompt ──".to_string());
                 if let Ok(file) = std::fs::File::open(&prompt_path) {
@@ -963,7 +981,11 @@ impl VizApp {
 
         // ── Agent output (tail) ──
         if let Some(ref agent_id) = task.assigned {
-            let output_path = self.workgraph_dir.join("agents").join(agent_id).join("output.log");
+            let output_path = self
+                .workgraph_dir
+                .join("agents")
+                .join(agent_id)
+                .join("output.log");
             if output_path.exists() {
                 lines.push("── Output (tail) ──".to_string());
                 if let Ok(content) = std::fs::read_to_string(&output_path) {
@@ -1008,7 +1030,8 @@ impl VizApp {
                                 }
                             }
                             if let Some(dims) = eval.get("dimensions").and_then(|v| v.as_object()) {
-                                let dim_strs: Vec<String> = dims.iter()
+                                let dim_strs: Vec<String> = dims
+                                    .iter()
                                     .map(|(k, v)| format!("{}:{:.2}", k, v.as_f64().unwrap_or(0.0)))
                                     .collect();
                                 lines.push(format!("  Dims: {}", dim_strs.join(", ")));
@@ -1024,11 +1047,25 @@ impl VizApp {
         // ── Token usage ──
         if let Some(ref usage) = task.token_usage {
             lines.push("── Tokens ──".to_string());
-            lines.push(format!("  Input:  {} (→{})", format_tokens(usage.total_input()), format_tokens(usage.input_tokens)));
-            lines.push(format!("  Output: {} (←{})", format_tokens(usage.output_tokens), format_tokens(usage.output_tokens)));
+            lines.push(format!(
+                "  Input:  {} (→{})",
+                format_tokens(usage.total_input()),
+                format_tokens(usage.input_tokens)
+            ));
+            lines.push(format!(
+                "  Output: {} (←{})",
+                format_tokens(usage.output_tokens),
+                format_tokens(usage.output_tokens)
+            ));
             if usage.cache_read_input_tokens > 0 || usage.cache_creation_input_tokens > 0 {
-                lines.push(format!("  Cache read:  {} (◎)", format_tokens(usage.cache_read_input_tokens)));
-                lines.push(format!("  Cache write: {} (⊳)", format_tokens(usage.cache_creation_input_tokens)));
+                lines.push(format!(
+                    "  Cache read:  {} (◎)",
+                    format_tokens(usage.cache_read_input_tokens)
+                ));
+                lines.push(format!(
+                    "  Cache write: {} (⊳)",
+                    format_tokens(usage.cache_creation_input_tokens)
+                ));
             }
             if usage.cost_usd > 0.0 {
                 lines.push(format!("  Cost: ${:.4}", usage.cost_usd));
@@ -1049,7 +1086,8 @@ impl VizApp {
         }
 
         // ── Timing ──
-        let has_timing = task.created_at.is_some() || task.started_at.is_some() || task.completed_at.is_some();
+        let has_timing =
+            task.created_at.is_some() || task.started_at.is_some() || task.completed_at.is_some();
         if has_timing {
             lines.push("── Timing ──".to_string());
             if let Some(ref ts) = task.created_at {
@@ -1068,7 +1106,10 @@ impl VizApp {
                     chrono::DateTime::parse_from_rfc3339(end),
                 ) {
                     let dur = (e - s).num_seconds();
-                    lines.push(format!("  Duration:  {}", workgraph::format_duration(dur, false)));
+                    lines.push(format!(
+                        "  Duration:  {}",
+                        workgraph::format_duration(dur, false)
+                    ));
                 }
             }
             lines.push(String::new());
@@ -1108,13 +1149,16 @@ impl VizApp {
     #[cfg(test)]
     pub(crate) fn from_viz_output_for_test(viz: &crate::commands::viz::VizOutput) -> Self {
         let lines: Vec<String> = viz.text.lines().map(String::from).collect();
-        let plain_lines: Vec<String> = lines.iter().map(|l| {
-            String::from_utf8(strip_ansi_escapes::strip(l.as_bytes())).unwrap_or_default()
-        }).collect();
+        let plain_lines: Vec<String> = lines
+            .iter()
+            .map(|l| String::from_utf8(strip_ansi_escapes::strip(l.as_bytes())).unwrap_or_default())
+            .collect();
         let search_lines = plain_lines.iter().map(|l| sanitize_for_search(l)).collect();
         let max_line_width = plain_lines.iter().map(|l| l.len()).max().unwrap_or(0);
 
-        let mut task_order: Vec<(String, usize)> = viz.node_line_map.iter()
+        let mut task_order: Vec<(String, usize)> = viz
+            .node_line_map
+            .iter()
             .map(|(id, &line)| (id.clone(), line))
             .collect();
         task_order.sort_by_key(|(_, line)| *line);
@@ -1303,13 +1347,14 @@ fn compute_filtered_indices(
                     continue;
                 }
                 if let Some(indent) = line_indent_level(&plain_lines[ancestor_idx])
-                    && indent < need_below {
-                        visible.insert(ancestor_idx);
-                        need_below = indent;
-                        if indent == 0 {
-                            break; // reached root
-                        }
+                    && indent < need_below
+                {
+                    visible.insert(ancestor_idx);
+                    need_below = indent;
+                    if indent == 0 {
+                        break; // reached root
                     }
+                }
             }
         }
 
@@ -1337,8 +1382,8 @@ fn extract_task_id(plain: &str) -> Option<String> {
     // Task IDs consist of [a-zA-Z0-9_-].
     let trimmed = plain.trim_start();
     // Strip leading tree connectors (box-drawing + arrows + spaces)
-    let after_connectors: &str = trimmed
-        .trim_start_matches(|c: char| is_box_drawing(c) || c == ' ');
+    let after_connectors: &str =
+        trimmed.trim_start_matches(|c: char| is_box_drawing(c) || c == ' ');
     if after_connectors.is_empty() {
         return None;
     }
@@ -1572,9 +1617,15 @@ mod hud_tests {
         let app = build_app(&viz, "a", _tmp.path());
 
         assert!(app.trace_visible, "trace_visible should default to true");
-        assert!(app.selected_task_idx.is_some(), "should have a selected task");
+        assert!(
+            app.selected_task_idx.is_some(),
+            "should have a selected task"
+        );
         let show_hud = app.trace_visible && app.selected_task_idx.is_some();
-        assert!(show_hud, "HUD should be visible when trace is on and task is selected");
+        assert!(
+            show_hud,
+            "HUD should be visible when trace is on and task is selected"
+        );
     }
 
     // ── TEST 2: HUD DISAPPEARS WITH TAB ──
@@ -1586,7 +1637,10 @@ mod hud_tests {
 
         app.toggle_trace();
         assert!(!app.trace_visible, "trace should be off after toggle");
-        assert!(app.hud_detail.is_none(), "HUD detail should be cleared when trace is off");
+        assert!(
+            app.hud_detail.is_none(),
+            "HUD detail should be cleared when trace is off"
+        );
         assert_eq!(app.hud_scroll, 0, "HUD scroll should reset");
 
         let show_hud = app.trace_visible && app.selected_task_idx.is_some();
@@ -1616,7 +1670,12 @@ mod hud_tests {
         let detail = app.hud_detail.as_ref().expect("HUD detail should load");
         assert_eq!(detail.task_id, "a");
         assert!(detail.rendered_lines.iter().any(|l| l.contains("── a ──")));
-        assert!(detail.rendered_lines.iter().any(|l| l.contains("Title: Task Alpha")));
+        assert!(
+            detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("Title: Task Alpha"))
+        );
     }
 
     #[test]
@@ -1626,7 +1685,12 @@ mod hud_tests {
         app.load_hud_detail();
 
         let detail = app.hud_detail.as_ref().unwrap();
-        assert!(detail.rendered_lines.iter().any(|l| l.contains("Status: Done")));
+        assert!(
+            detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("Status: Done"))
+        );
     }
 
     #[test]
@@ -1636,7 +1700,12 @@ mod hud_tests {
         app.load_hud_detail();
 
         let detail = app.hud_detail.as_ref().unwrap();
-        assert!(detail.rendered_lines.iter().any(|l| l.contains("Agent: agent-001")));
+        assert!(
+            detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("Agent: agent-001"))
+        );
     }
 
     #[test]
@@ -1646,11 +1715,18 @@ mod hud_tests {
         app.load_hud_detail();
 
         let detail = app.hud_detail.as_ref().unwrap();
-        assert!(detail.rendered_lines.iter().any(|l| l.contains("── Description ──")));
-        assert!(detail
-            .rendered_lines
-            .iter()
-            .any(|l| l.contains("This is the description for task Alpha.")));
+        assert!(
+            detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("── Description ──"))
+        );
+        assert!(
+            detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("This is the description for task Alpha."))
+        );
     }
 
     #[test]
@@ -1660,9 +1736,24 @@ mod hud_tests {
         app.load_hud_detail();
 
         let detail = app.hud_detail.as_ref().unwrap();
-        assert!(detail.rendered_lines.iter().any(|l| l.contains("── Tokens ──")));
-        assert!(detail.rendered_lines.iter().any(|l| l.contains("Cost: $0.05")));
-        assert!(detail.rendered_lines.iter().any(|l| l.contains("Cache read:")));
+        assert!(
+            detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("── Tokens ──"))
+        );
+        assert!(
+            detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("Cost: $0.05"))
+        );
+        assert!(
+            detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("Cache read:"))
+        );
     }
 
     #[test]
@@ -1672,8 +1763,18 @@ mod hud_tests {
         app.load_hud_detail();
 
         let detail = app.hud_detail.as_ref().unwrap();
-        assert!(detail.rendered_lines.iter().any(|l| l.contains("── Dependencies ──")));
-        assert!(detail.rendered_lines.iter().any(|l| l.contains("After:") && l.contains("a")));
+        assert!(
+            detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("── Dependencies ──"))
+        );
+        assert!(
+            detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("After:") && l.contains("a"))
+        );
     }
 
     #[test]
@@ -1683,11 +1784,26 @@ mod hud_tests {
         app.load_hud_detail();
 
         let detail = app.hud_detail.as_ref().unwrap();
-        assert!(detail.rendered_lines.iter().any(|l| l.contains("── Timing ──")));
+        assert!(
+            detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("── Timing ──"))
+        );
         assert!(detail.rendered_lines.iter().any(|l| l.contains("Created:")));
         assert!(detail.rendered_lines.iter().any(|l| l.contains("Started:")));
-        assert!(detail.rendered_lines.iter().any(|l| l.contains("Completed:")));
-        assert!(detail.rendered_lines.iter().any(|l| l.contains("Duration:")));
+        assert!(
+            detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("Completed:"))
+        );
+        assert!(
+            detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("Duration:"))
+        );
     }
 
     #[test]
@@ -1697,8 +1813,18 @@ mod hud_tests {
         app.load_hud_detail();
 
         let detail = app.hud_detail.as_ref().unwrap();
-        assert!(detail.rendered_lines.iter().any(|l| l.contains("── Failure ──")));
-        assert!(detail.rendered_lines.iter().any(|l| l.contains("Timed out after 30 minutes")));
+        assert!(
+            detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("── Failure ──"))
+        );
+        assert!(
+            detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("Timed out after 30 minutes"))
+        );
     }
 
     // ── TEST 4: HUD UPDATES ON SELECTION ──
@@ -1712,7 +1838,10 @@ mod hud_tests {
 
         app.select_next_task();
         // recompute_trace calls invalidate_hud
-        assert!(app.hud_detail.is_none(), "HUD should be invalidated after selection change");
+        assert!(
+            app.hud_detail.is_none(),
+            "HUD should be invalidated after selection change"
+        );
 
         app.load_hud_detail();
         let new_id = app.hud_detail.as_ref().unwrap().task_id.clone();
@@ -1730,7 +1859,10 @@ mod hud_tests {
         app.load_hud_detail();
         let next = app.hud_detail.as_ref().unwrap().rendered_lines.clone();
 
-        assert_ne!(initial, next, "HUD content should change when selecting a different task");
+        assert_ne!(
+            initial, next,
+            "HUD content should change when selecting a different task"
+        );
     }
 
     #[test]
@@ -1746,7 +1878,10 @@ mod hud_tests {
         app.load_hud_detail();
         let back_id = app.hud_detail.as_ref().unwrap().task_id.clone();
 
-        assert_ne!(second_id, back_id, "HUD should show different content after navigating back");
+        assert_ne!(
+            second_id, back_id,
+            "HUD should show different content after navigating back"
+        );
     }
 
     // ── TEST 5: NARROW TERMINAL FALLBACK ──
@@ -1829,9 +1964,17 @@ mod hud_tests {
         let mut app = build_app(&viz, "c", _tmp.path());
         app.load_hud_detail();
 
-        let detail = app.hud_detail.as_ref().expect("should load even with no agent");
+        let detail = app
+            .hud_detail
+            .as_ref()
+            .expect("should load even with no agent");
         assert_eq!(detail.task_id, "c");
-        assert!(!detail.rendered_lines.iter().any(|l| l.starts_with("Agent:")));
+        assert!(
+            !detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.starts_with("Agent:"))
+        );
     }
 
     #[test]
@@ -1841,7 +1984,12 @@ mod hud_tests {
         app.load_hud_detail();
 
         let detail = app.hud_detail.as_ref().unwrap();
-        assert!(!detail.rendered_lines.iter().any(|l| l.contains("── Description ──")));
+        assert!(
+            !detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("── Description ──"))
+        );
     }
 
     #[test]
@@ -1851,7 +1999,12 @@ mod hud_tests {
         app.load_hud_detail();
 
         let detail = app.hud_detail.as_ref().unwrap();
-        assert!(!detail.rendered_lines.iter().any(|l| l.contains("── Tokens ──")));
+        assert!(
+            !detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("── Tokens ──"))
+        );
     }
 
     #[test]
@@ -1861,7 +2014,12 @@ mod hud_tests {
         app.load_hud_detail();
 
         let detail = app.hud_detail.as_ref().unwrap();
-        assert!(!detail.rendered_lines.iter().any(|l| l.contains("── Timing ──")));
+        assert!(
+            !detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("── Timing ──"))
+        );
     }
 
     #[test]
@@ -1871,7 +2029,12 @@ mod hud_tests {
         app.load_hud_detail();
 
         let detail = app.hud_detail.as_ref().unwrap();
-        assert!(!detail.rendered_lines.iter().any(|l| l.contains("── Failure ──")));
+        assert!(
+            !detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("── Failure ──"))
+        );
     }
 
     #[test]
@@ -1881,7 +2044,12 @@ mod hud_tests {
         app.load_hud_detail();
 
         let detail = app.hud_detail.as_ref().unwrap();
-        assert!(!detail.rendered_lines.iter().any(|l| l.contains("── Dependencies ──")));
+        assert!(
+            !detail
+                .rendered_lines
+                .iter()
+                .any(|l| l.contains("── Dependencies ──"))
+        );
     }
 
     #[test]
