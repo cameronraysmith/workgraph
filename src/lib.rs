@@ -19,6 +19,7 @@ pub mod runs;
 pub mod service;
 pub mod function;
 pub mod function_memory;
+pub mod messages;
 pub mod usage;
 
 pub use config::MatrixConfig;

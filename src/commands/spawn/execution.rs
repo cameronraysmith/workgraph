@@ -323,6 +323,14 @@ pub(crate) fn spawn_agent_inner(
         return Err(save_err.context("Failed to persist agent registry after spawn"));
     }
 
+    // Advance message cursor for this agent so queued messages aren't re-read.
+    // The queued messages were already included in the prompt via ScopeContext.
+    if let Ok(all_msgs) = workgraph::messages::list_messages(dir, task_id) {
+        if let Some(last) = all_msgs.last() {
+            let _ = workgraph::messages::write_cursor(dir, &agent_id, task_id, last.id);
+        }
+    }
+
     // Write metadata
     let metadata_path = output_dir.join("metadata.json");
     let metadata = serde_json::json!({
@@ -491,18 +499,67 @@ fn write_wrapper_script(
         String::new()
     };
 
+    let pending_messages_file = output_dir.join("pending_messages.txt");
+    let pending_messages_str = pending_messages_file.to_string_lossy().to_string();
+
     let wrapper_script = format!(
         r#"#!/bin/bash
 TASK_ID={escaped_task_id}
 OUTPUT_FILE={escaped_output_file}
+PENDING_MESSAGES={escaped_pending_messages}
 
 # Allow nested Claude Code sessions (spawned agents are independent)
 unset CLAUDECODE
 unset CLAUDE_CODE_ENTRYPOINT
+
+# Background message polling loop
+# Checks for messages delivered via the message adapter and logs them
+poll_messages() {{
+    while true; do
+        sleep 10
+        # Check if pending messages file exists and has content
+        if [ -s "$PENDING_MESSAGES" ]; then
+            # Atomically move pending messages to a temp file for processing
+            TEMP_MSG=$(mktemp)
+            if mv "$PENDING_MESSAGES" "$TEMP_MSG" 2>/dev/null; then
+                echo "" >> "$OUTPUT_FILE"
+                echo "[workgraph] === New messages received ===" >> "$OUTPUT_FILE"
+                cat "$TEMP_MSG" >> "$OUTPUT_FILE"
+                echo "[workgraph] === End messages ===" >> "$OUTPUT_FILE"
+                rm -f "$TEMP_MSG"
+            fi
+        fi
+        # Also check the message queue directly via wg msg
+        if wg msg poll "$TASK_ID" --agent "$WG_AGENT_ID" --json > /dev/null 2>&1; then
+            NEW_MSGS=$(wg msg read "$TASK_ID" --agent "$WG_AGENT_ID" 2>/dev/null)
+            if [ -n "$NEW_MSGS" ]; then
+                echo "" >> "$OUTPUT_FILE"
+                echo "[workgraph] === New queued messages ===" >> "$OUTPUT_FILE"
+                echo "$NEW_MSGS" >> "$OUTPUT_FILE"
+                echo "[workgraph] === End queued messages ===" >> "$OUTPUT_FILE"
+            fi
+        fi
+    done
+}}
+
+# Start message polling in background
+poll_messages &
+MSG_POLL_PID=$!
+
+# Ensure polling is cleaned up on exit
+cleanup() {{
+    kill $MSG_POLL_PID 2>/dev/null
+    wait $MSG_POLL_PID 2>/dev/null
+}}
+trap cleanup EXIT
 {timeout_note}
 # Run the agent command
 {timed_command} >> "$OUTPUT_FILE" 2>&1
 EXIT_CODE=$?
+
+# Stop message polling
+kill $MSG_POLL_PID 2>/dev/null
+wait $MSG_POLL_PID 2>/dev/null
 
 # Check if task is still in progress (agent didn't mark it done/failed)
 TASK_STATUS=$(wg show "$TASK_ID" --json 2>/dev/null | grep -o '"status": *"[^"]*"' | head -1 | sed 's/.*"status": *"//;s/"//' || echo "unknown")
@@ -527,6 +584,7 @@ exit $EXIT_CODE
 "#,
         escaped_task_id = shell_escape(task_id),
         escaped_output_file = shell_escape(output_file_str),
+        escaped_pending_messages = shell_escape(&pending_messages_str),
         timed_command = timed_command,
         timeout_note = timeout_note,
         complete_cmd = complete_cmd,

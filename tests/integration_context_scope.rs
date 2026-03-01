@@ -315,6 +315,7 @@ fn test_full_scope_prompt_includes_everything() {
         graph_summary: "## Graph Status\n\n5 tasks".to_string(),
         full_graph_summary: "## Full Graph Summary\n\n- t1 [done]\n- t2 [open]".to_string(),
         claude_md_content: "Always use workgraph.".to_string(),
+        queued_messages: String::new(),
     };
 
     let prompt = build_prompt(&vars, ContextScope::Full, &ctx);

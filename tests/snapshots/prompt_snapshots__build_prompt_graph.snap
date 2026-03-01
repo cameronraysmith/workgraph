@@ -1,5 +1,6 @@
 ---
 source: tests/prompt_snapshots.rs
+assertion_line: 335
 expression: output
 ---
 # Task Assignment
@@ -70,6 +71,16 @@ You MUST use these commands to track your work:
 - Validate BEFORE running `wg done`
 - Run `wg done` BEFORE you finish responding
 - If the task description is unclear, do your best interpretation
+
+
+## Messages
+
+Check for new messages periodically during long-running tasks:
+```bash
+wg msg read test-task-123 --agent $WG_AGENT_ID
+```
+Messages may contain updated requirements, context from other agents,
+or instructions from the user. Check at natural breakpoints in your work.
 
 
 ## The Graph is Alive

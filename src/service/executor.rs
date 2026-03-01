@@ -161,6 +161,18 @@ The coordinator will dispatch them automatically.
 - Decomposition overhead exceeds the work itself
 - The subtasks would all modify the same files (serialize instead)\n";
 
+/// Message polling instructions for agents.
+/// Contains {{task_id}} placeholder for variable substitution.
+pub const MESSAGE_POLLING_SECTION: &str = "\
+## Messages
+
+Check for new messages periodically during long-running tasks:
+```bash
+wg msg read {{task_id}} --agent $WG_AGENT_ID
+```
+Messages may contain updated requirements, context from other agents,
+or instructions from the user. Check at natural breakpoints in your work.\n";
+
 /// Hint for task+ scopes about using wg context/show to get more info (R2).
 const WG_CONTEXT_HINT: &str = "\
 ## Additional Context
@@ -183,6 +195,8 @@ pub struct ScopeContext {
     pub full_graph_summary: String,
     /// CLAUDE.md content (full scope)
     pub claude_md_content: String,
+    /// Queued messages for this task (task+ scope)
+    pub queued_messages: String,
 }
 
 /// Build a scope-aware prompt for built-in executors.
@@ -241,6 +255,11 @@ pub fn build_prompt(vars: &TemplateVars, scope: ContextScope, ctx: &ScopeContext
         vars.task_context
     ));
 
+    // Task+ scope: queued messages
+    if scope >= ContextScope::Task && !ctx.queued_messages.is_empty() {
+        parts.push(ctx.queued_messages.clone());
+    }
+
     // Task+ scope: downstream awareness (R1)
     if scope >= ContextScope::Task && !ctx.downstream_info.is_empty() {
         parts.push(ctx.downstream_info.clone());
@@ -254,6 +273,7 @@ pub fn build_prompt(vars: &TemplateVars, scope: ContextScope, ctx: &ScopeContext
     // Task+ scope: workflow sections (with {{task_id}} substitution)
     if scope >= ContextScope::Task {
         parts.push(vars.apply(REQUIRED_WORKFLOW_SECTION));
+        parts.push(vars.apply(MESSAGE_POLLING_SECTION));
         parts.push(vars.apply(ETHOS_SECTION));
         parts.push(vars.apply(AUTOPOIETIC_GUIDANCE));
         parts.push(GRAPH_PATTERNS_SECTION.to_string());
@@ -1695,6 +1715,7 @@ args = ["--custom-flag"]
             graph_summary: "## Graph Status\n\n10 tasks".to_string(),
             full_graph_summary: "## Full Graph Summary\n\n- task-a [done]".to_string(),
             claude_md_content: "Always use bun.".to_string(),
+            queued_messages: String::new(),
         };
         let prompt = build_prompt(&vars, ContextScope::Full, &ctx);
 

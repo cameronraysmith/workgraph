@@ -739,6 +739,45 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Commands::Msg { command } => {
+            let agent_id_from_env = std::env::var("WG_AGENT_ID").ok();
+            match command {
+                MsgCommands::Send {
+                    task_id,
+                    message,
+                    from,
+                    priority,
+                    stdin,
+                } => commands::msg::run_send(
+                    &workgraph_dir,
+                    &task_id,
+                    message.as_deref(),
+                    &from,
+                    &priority,
+                    stdin,
+                ),
+                MsgCommands::List { task_id } => {
+                    commands::msg::run_list(&workgraph_dir, &task_id, cli.json)
+                }
+                MsgCommands::Read { task_id, agent } => {
+                    let agent_id = agent
+                        .or(agent_id_from_env)
+                        .unwrap_or_else(|| "user".to_string());
+                    commands::msg::run_read(&workgraph_dir, &task_id, &agent_id, cli.json)
+                }
+                MsgCommands::Poll { task_id, agent } => {
+                    let agent_id = agent
+                        .or(agent_id_from_env)
+                        .unwrap_or_else(|| "user".to_string());
+                    let has_messages =
+                        commands::msg::run_poll(&workgraph_dir, &task_id, &agent_id, cli.json)?;
+                    if !has_messages {
+                        std::process::exit(1);
+                    }
+                    Ok(())
+                }
+            }
+        }
         Commands::Resource { command } => match command {
             ResourceCommands::Add {
                 id,

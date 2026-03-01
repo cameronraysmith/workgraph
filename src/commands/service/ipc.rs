@@ -95,6 +95,15 @@ pub enum IpcRequest {
     QueryTask {
         task_id: String,
     },
+    /// Send a message to a task's message queue
+    SendMessage {
+        task_id: String,
+        body: String,
+        #[serde(default)]
+        sender: Option<String>,
+        #[serde(default)]
+        priority: Option<String>,
+    },
 }
 
 /// IPC Response types
@@ -327,6 +336,20 @@ fn handle_request(
         IpcRequest::QueryTask { task_id } => {
             logger.info(&format!("IPC QueryTask: task_id={}", task_id));
             handle_query_task(dir, &task_id)
+        }
+        IpcRequest::SendMessage {
+            task_id,
+            body,
+            sender,
+            priority,
+        } => {
+            let sender = sender.as_deref().unwrap_or("coordinator");
+            let priority = priority.as_deref().unwrap_or("normal");
+            logger.info(&format!(
+                "IPC SendMessage: task_id={}, sender={}, priority={}",
+                task_id, sender, priority
+            ));
+            handle_send_message(dir, &task_id, &body, sender, priority)
         }
     }
 }
@@ -683,6 +706,33 @@ fn handle_add_task(
         "task_id": task_id,
         "title": title,
     }))
+}
+
+/// Handle SendMessage IPC request — send a message to a task's queue.
+fn handle_send_message(
+    dir: &Path,
+    task_id: &str,
+    body: &str,
+    sender: &str,
+    priority: &str,
+) -> IpcResponse {
+    // Validate task exists
+    let graph_path = graph_path(dir);
+    let graph = match load_graph(&graph_path) {
+        Ok(g) => g,
+        Err(e) => return IpcResponse::error(&format!("Failed to load graph: {}", e)),
+    };
+    if graph.get_task(task_id).is_none() {
+        return IpcResponse::error(&format!("Task '{}' not found", task_id));
+    }
+
+    match workgraph::messages::send_message(dir, task_id, body, sender, priority) {
+        Ok(msg_id) => IpcResponse::success(serde_json::json!({
+            "task_id": task_id,
+            "message_id": msg_id,
+        })),
+        Err(e) => IpcResponse::error(&format!("Failed to send message: {}", e)),
+    }
 }
 
 /// Handle QueryTask IPC request — return a task's status for cross-repo dependency checking.

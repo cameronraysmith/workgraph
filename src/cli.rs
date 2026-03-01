@@ -598,6 +598,12 @@ pub enum Commands {
         operations: bool,
     },
 
+    /// Send and receive messages to/from tasks and agents
+    Msg {
+        #[command(subcommand)]
+        command: MsgCommands,
+    },
+
     /// Manage resources
     Resource {
         #[command(subcommand)]
@@ -1035,6 +1041,56 @@ pub enum Commands {
     Matrix {
         #[command(subcommand)]
         command: MatrixCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum MsgCommands {
+    /// Send a message to a task/agent
+    Send {
+        /// Task ID
+        task_id: String,
+
+        /// Message body
+        message: Option<String>,
+
+        /// Sender identifier (default: "user")
+        #[arg(long, default_value = "user")]
+        from: String,
+
+        /// Message priority: normal or urgent
+        #[arg(long, default_value = "normal")]
+        priority: String,
+
+        /// Read message body from stdin
+        #[arg(long)]
+        stdin: bool,
+    },
+
+    /// List all messages for a task
+    List {
+        /// Task ID
+        task_id: String,
+    },
+
+    /// Read unread messages (marks as read, advances cursor)
+    Read {
+        /// Task ID
+        task_id: String,
+
+        /// Agent ID (default: from WG_AGENT_ID env var, or "user")
+        #[arg(long)]
+        agent: Option<String>,
+    },
+
+    /// Poll for new messages (exit code 0 = new messages, 1 = none)
+    Poll {
+        /// Task ID
+        task_id: String,
+
+        /// Agent ID (default: from WG_AGENT_ID env var, or "user")
+        #[arg(long)]
+        agent: Option<String>,
     },
 }
 
@@ -2077,6 +2133,7 @@ pub fn command_name(cmd: &Commands) -> &'static str {
         Commands::Replay { .. } => "replay",
         Commands::Runs { .. } => "runs",
         Commands::Log { .. } => "log",
+        Commands::Msg { .. } => "msg",
         Commands::Resource { .. } => "resource",
         Commands::Skill { .. } => "skill",
         Commands::Agency { .. } => "agency",
@@ -2140,6 +2197,7 @@ pub fn supports_json(cmd: &Commands) -> bool {
             | Commands::Replay { .. }
             | Commands::Runs { .. }
             | Commands::Log { .. }
+            | Commands::Msg { .. }
             | Commands::Resource { .. }
             | Commands::Skill { .. }
             | Commands::Agency { .. }

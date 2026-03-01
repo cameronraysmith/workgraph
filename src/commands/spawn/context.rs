@@ -124,6 +124,14 @@ pub(crate) fn build_scope_context(
         ctx.claude_md_content = read_claude_md(workgraph_dir);
     }
 
+    // Task+ scope: queued messages
+    if scope >= ContextScope::Task {
+        ctx.queued_messages = workgraph::messages::format_queued_messages(workgraph_dir, &task.id);
+    }
+
+    // Note: cursor advancement happens after spawn in execution.rs,
+    // where the agent_id is known.
+
     ctx
 }
 

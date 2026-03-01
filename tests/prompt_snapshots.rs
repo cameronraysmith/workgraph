@@ -95,6 +95,7 @@ fn test_scope_context() -> ScopeContext {
         graph_summary: "\n## Graph Status\n\n50 tasks — 45 done, 2 in-progress, 3 open".into(),
         full_graph_summary: "\n## Full Graph\n\nDetailed graph with all 50 tasks and their relationships.".into(),
         claude_md_content: "Use workgraph for task management.\nAlways run tests before marking done.".into(),
+        queued_messages: String::new(),
     }
 }
 
