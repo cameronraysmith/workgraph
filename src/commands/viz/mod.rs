@@ -454,17 +454,42 @@ pub fn generate_viz_output_from_graph(
         HashSet::new()
     };
 
-    // Enrich in-progress/done tasks with live token usage from agent output logs
+    // Enrich tasks with live token usage from agent output logs when not persisted.
+    // Includes InProgress, Done, and Failed tasks — any with an assigned agent.
     let agents_dir = dir.join("agents");
     let live_token_usage: HashMap<String, TokenUsage> = tasks_to_show
         .iter()
         .filter(|t| t.token_usage.is_none())
-        .filter(|t| t.status == Status::InProgress || t.status == Status::Done)
+        .filter(|t| matches!(t.status, Status::InProgress | Status::Done | Status::Failed))
         .filter_map(|t| {
-            let agent_id = t.assigned.as_deref()?;
-            let log_path = agents_dir.join(agent_id).join("output.log");
-            let usage = parse_token_usage_live(&log_path)?;
-            Some((t.id.clone(), usage))
+            // Try live agent dir first
+            let usage = t.assigned.as_deref().and_then(|agent_id| {
+                let log_path = agents_dir.join(agent_id).join("output.log");
+                parse_token_usage_live(&log_path)
+            });
+            if let Some(u) = usage {
+                return Some((t.id.clone(), u));
+            }
+            // Fall back to archived output
+            let archive_base = dir.join("log").join("agents").join(&t.id);
+            if !archive_base.exists() {
+                return None;
+            }
+            let mut entries: Vec<_> = std::fs::read_dir(&archive_base)
+                .ok()?
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().ok().is_some_and(|ft| ft.is_dir()))
+                .collect();
+            entries.sort_by_key(|b| std::cmp::Reverse(b.file_name()));
+            for entry in entries {
+                let candidate = entry.path().join("output.txt");
+                if candidate.exists()
+                    && let Some(u) = parse_token_usage_live(&candidate)
+                {
+                    return Some((t.id.clone(), u));
+                }
+            }
+            None
         })
         .collect();
 
@@ -484,11 +509,38 @@ pub fn generate_viz_output_from_graph(
             )
         };
         let Some(pid) = parent_id else { continue };
-        let usage = task.token_usage.as_ref().cloned().or_else(|| {
-            let agent_id = task.assigned.as_deref()?;
-            let log_path = agents_dir.join(agent_id).join("output.log");
-            parse_token_usage_live(&log_path)
-        });
+        let usage = task
+            .token_usage
+            .as_ref()
+            .cloned()
+            .or_else(|| {
+                // Try live agent dir first
+                let agent_id = task.assigned.as_deref()?;
+                let log_path = agents_dir.join(agent_id).join("output.log");
+                parse_token_usage_live(&log_path)
+            })
+            .or_else(|| {
+                // Fall back to archived output for cleaned-up agents
+                let archive_base = dir.join("log").join("agents").join(&task.id);
+                if !archive_base.exists() {
+                    return None;
+                }
+                let mut entries: Vec<_> = std::fs::read_dir(&archive_base)
+                    .ok()?
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().ok().is_some_and(|ft| ft.is_dir()))
+                    .collect();
+                entries.sort_by_key(|b| std::cmp::Reverse(b.file_name()));
+                for entry in entries {
+                    let candidate = entry.path().join("output.txt");
+                    if candidate.exists()
+                        && let Some(usage) = parse_token_usage_live(&candidate)
+                    {
+                        return Some(usage);
+                    }
+                }
+                None
+            });
         if let Some(u) = usage {
             let map = if is_assign {
                 &mut assign_token_usage

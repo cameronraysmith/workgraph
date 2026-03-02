@@ -1,6 +1,6 @@
+use chrono::Utc;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::IsTerminal;
-use chrono::Utc;
 use workgraph::graph::{Status, Task, TokenUsage, WorkGraph, format_token_display};
 use workgraph::messages::MessageStats;
 
