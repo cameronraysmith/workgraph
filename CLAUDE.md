@@ -32,6 +32,10 @@ done — create a `wg add` task and let the coordinator dispatch it.
 
 ALL tasks — including research, exploration, and planning — should be workgraph tasks.
 
+### Cycles
+
+Workgraph is a directed graph, NOT a DAG — it supports cycles. For repeating workflows, create ONE cycle with `--max-iterations` instead of duplicating tasks for each pass. Use `wg done --converged` to stop the cycle when the work has converged. See `wg quickstart` for examples.
+
 ### Orchestrating agent role
 
 The orchestrating agent (the one the user interacts with directly) does ONLY:
