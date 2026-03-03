@@ -6,6 +6,16 @@ use std::path::Path;
 
 use workgraph::messages;
 
+/// Status icon for CLI display.
+fn status_icon_for(status: &messages::DeliveryStatus) -> &'static str {
+    match status {
+        messages::DeliveryStatus::Sent => "\u{2709}",       // ✉
+        messages::DeliveryStatus::Delivered => "\u{1f4ec}", // 📬
+        messages::DeliveryStatus::Read => "\u{1f441}",      // 👁
+        messages::DeliveryStatus::Acknowledged => "\u{2705}", // ✅
+    }
+}
+
 /// Send a message to a task's queue.
 pub fn run_send(
     dir: &Path,
@@ -67,9 +77,10 @@ pub fn run_list(dir: &Path, task_id: &str, json: bool) -> Result<()> {
         } else {
             ""
         };
+        let status_icon = status_icon_for(&msg.status);
         println!(
-            "  #{} [{}] {}{}",
-            msg.id, msg.timestamp, msg.sender, priority_marker
+            "  #{} {} [{}] {}{}",
+            msg.id, status_icon, msg.timestamp, msg.sender, priority_marker
         );
         // Indent multi-line bodies
         for line in msg.body.lines() {
@@ -117,9 +128,10 @@ pub fn run_read(dir: &Path, task_id: &str, agent_id: &str, json: bool) -> Result
         } else {
             ""
         };
+        let status_icon = status_icon_for(&msg.status);
         println!(
-            "  #{} [{}] {}{}",
-            msg.id, msg.timestamp, msg.sender, priority_marker
+            "  #{} {} [{}] {}{}",
+            msg.id, status_icon, msg.timestamp, msg.sender, priority_marker
         );
         for line in msg.body.lines() {
             println!("    {}", line);
@@ -169,9 +181,10 @@ pub fn run_poll(dir: &Path, task_id: &str, agent_id: &str, json: bool) -> Result
             } else {
                 ""
             };
+            let status_icon = status_icon_for(&msg.status);
             println!(
-                "  #{} [{}] {}{}",
-                msg.id, msg.timestamp, msg.sender, priority_marker
+                "  #{} {} [{}] {}{}",
+                msg.id, status_icon, msg.timestamp, msg.sender, priority_marker
             );
             for line in msg.body.lines() {
                 println!("    {}", line);

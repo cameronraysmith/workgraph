@@ -522,10 +522,7 @@ pub struct ChatState {
     pub total_rendered_lines: usize,
     /// Viewport height for the message area (set each frame by renderer).
     pub viewport_height: usize,
-    /// Set of message indices that are expanded (coordinator messages are collapsed by default).
-    pub expanded_messages: HashSet<usize>,
     /// Map from rendered line index → message index, populated each frame by the renderer.
-    /// Used for click-to-toggle on coordinator messages.
     pub line_to_message: Vec<Option<usize>>,
     /// Scroll offset from top (set each frame by renderer for click hit-testing).
     pub scroll_from_top: usize,
@@ -698,6 +695,8 @@ pub struct MessageEntry {
     pub is_urgent: bool,
     /// Direction: incoming to the task, or outgoing from the task's agent.
     pub direction: MessageDirection,
+    /// Delivery status of this message.
+    pub delivery_status: workgraph::messages::DeliveryStatus,
 }
 
 /// Summary stats for the messages panel header.
@@ -3436,6 +3435,7 @@ impl VizApp {
                         timestamp: time_str,
                         is_urgent,
                         direction,
+                        delivery_status: msg.status.clone(),
                     });
                 }
 

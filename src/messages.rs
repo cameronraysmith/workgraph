@@ -10,6 +10,32 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
+/// Delivery status of a message through its lifecycle.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DeliveryStatus {
+    /// Message created in queue, waiting for delivery.
+    #[default]
+    Sent,
+    /// Message was included in an agent's prompt (pre-spawn only).
+    Delivered,
+    /// Agent ran `wg msg read` and this message was returned.
+    Read,
+    /// Agent explicitly replied to/acknowledged this message.
+    Acknowledged,
+}
+
+impl std::fmt::Display for DeliveryStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeliveryStatus::Sent => write!(f, "sent"),
+            DeliveryStatus::Delivered => write!(f, "delivered"),
+            DeliveryStatus::Read => write!(f, "read"),
+            DeliveryStatus::Acknowledged => write!(f, "acknowledged"),
+        }
+    }
+}
+
 /// A single message in the queue.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Message {
@@ -24,6 +50,9 @@ pub struct Message {
     /// Priority: "normal" (default) or "urgent"
     #[serde(default = "default_priority")]
     pub priority: String,
+    /// Delivery status tracking.
+    #[serde(default)]
+    pub status: DeliveryStatus,
 }
 
 fn default_priority() -> String {
@@ -115,6 +144,7 @@ pub fn send_message(
         sender: sender.to_string(),
         body: body.to_string(),
         priority: priority.to_string(),
+        status: DeliveryStatus::Sent,
     };
 
     // Append the message as a single JSON line
@@ -247,6 +277,70 @@ pub fn list_messages(workgraph_dir: &Path, task_id: &str) -> Result<Vec<Message>
     Ok(messages)
 }
 
+/// Update the delivery status of specific messages in a task's JSONL file.
+///
+/// Rewrites the file with updated statuses for messages whose IDs are in `ids`.
+/// Only upgrades status (sent → delivered → read → acknowledged), never downgrades.
+pub fn update_message_statuses(
+    workgraph_dir: &Path,
+    task_id: &str,
+    ids: &[u64],
+    new_status: DeliveryStatus,
+) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+
+    let path = message_file(workgraph_dir, task_id);
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let id_set: std::collections::HashSet<u64> = ids.iter().copied().collect();
+
+    // Read all messages
+    let mut messages = list_messages(workgraph_dir, task_id)?;
+    let mut changed = false;
+
+    for msg in &mut messages {
+        if id_set.contains(&msg.id) && status_rank(&new_status) > status_rank(&msg.status) {
+            msg.status = new_status.clone();
+            changed = true;
+        }
+    }
+
+    if !changed {
+        return Ok(());
+    }
+
+    // Rewrite the file atomically
+    let tmp_path = path.with_extension("tmp");
+    {
+        let mut file = fs::File::create(&tmp_path).with_context(|| {
+            format!("Failed to create temp message file: {}", tmp_path.display())
+        })?;
+        for msg in &messages {
+            let mut json = serde_json::to_string(msg).context("Failed to serialize message")?;
+            json.push('\n');
+            file.write_all(json.as_bytes())?;
+        }
+    }
+    fs::rename(&tmp_path, &path)
+        .with_context(|| format!("Failed to rename message file: {}", path.display()))?;
+
+    Ok(())
+}
+
+/// Numeric rank for status ordering (higher = further along lifecycle).
+fn status_rank(status: &DeliveryStatus) -> u8 {
+    match status {
+        DeliveryStatus::Sent => 0,
+        DeliveryStatus::Delivered => 1,
+        DeliveryStatus::Read => 2,
+        DeliveryStatus::Acknowledged => 3,
+    }
+}
+
 /// Read the cursor (last-read message ID) for an agent on a task.
 ///
 /// Returns 0 if no cursor exists (meaning all messages are unread).
@@ -295,7 +389,8 @@ pub fn write_cursor(
 
 /// Read unread messages for an agent on a task.
 ///
-/// Returns messages with ID > cursor, and updates the cursor to the max ID seen.
+/// Returns messages with ID > cursor, updates the cursor to the max ID seen,
+/// and marks returned messages as "read" (delivery status).
 pub fn read_unread(workgraph_dir: &Path, task_id: &str, agent_id: &str) -> Result<Vec<Message>> {
     let cursor = read_cursor(workgraph_dir, agent_id, task_id)?;
     let all = list_messages(workgraph_dir, task_id)?;
@@ -304,6 +399,10 @@ pub fn read_unread(workgraph_dir: &Path, task_id: &str, agent_id: &str) -> Resul
 
     if let Some(last) = unread.last() {
         write_cursor(workgraph_dir, agent_id, task_id, last.id)?;
+
+        // Mark all returned messages as read.
+        let ids: Vec<u64> = unread.iter().map(|m| m.id).collect();
+        let _ = update_message_statuses(workgraph_dir, task_id, &ids, DeliveryStatus::Read);
     }
 
     Ok(unread)
@@ -336,6 +435,7 @@ fn format_notification_line(msg: &Message) -> String {
 /// Format queued messages for inclusion in a prompt context.
 ///
 /// Returns an empty string if there are no messages.
+/// Marks all formatted messages as "delivered" since they are being embedded in the prompt.
 pub fn format_queued_messages(workgraph_dir: &Path, task_id: &str) -> String {
     let messages = match list_messages(workgraph_dir, task_id) {
         Ok(msgs) => msgs,
@@ -345,6 +445,10 @@ pub fn format_queued_messages(workgraph_dir: &Path, task_id: &str) -> String {
     if messages.is_empty() {
         return String::new();
     }
+
+    // Mark all messages as delivered (included in agent's prompt).
+    let ids: Vec<u64> = messages.iter().map(|m| m.id).collect();
+    let _ = update_message_statuses(workgraph_dir, task_id, &ids, DeliveryStatus::Delivered);
 
     let mut lines = vec![
         "## Queued Messages\n\nThe following messages were sent to this task before you started:\n"
@@ -548,6 +652,7 @@ pub fn deliver_message(
         sender: sender.to_string(),
         body: body.to_string(),
         priority: priority.to_string(),
+        status: DeliveryStatus::Sent,
     };
     let delivered = adapter.deliver(workgraph_dir, agent, &msg)?;
 
@@ -911,6 +1016,7 @@ mod tests {
             sender: "user".to_string(),
             body: "Hello agent".to_string(),
             priority: "normal".to_string(),
+            status: DeliveryStatus::Sent,
         };
 
         let delivered = adapter.deliver(&wg_dir, &agent, &msg).unwrap();
@@ -942,6 +1048,7 @@ mod tests {
             sender: "coordinator".to_string(),
             body: "Context update".to_string(),
             priority: "urgent".to_string(),
+            status: DeliveryStatus::Sent,
         };
 
         let delivered = adapter.deliver(&wg_dir, &agent, &msg).unwrap();
@@ -975,6 +1082,7 @@ mod tests {
                 sender: "user".to_string(),
                 body: format!("Message {}", i),
                 priority: "normal".to_string(),
+                status: DeliveryStatus::Sent,
             };
             adapter.deliver(&wg_dir, &agent, &msg).unwrap();
         }
@@ -1032,6 +1140,7 @@ mod tests {
             sender: "user".to_string(),
             body: "Auto-create dir".to_string(),
             priority: "normal".to_string(),
+            status: DeliveryStatus::Sent,
         };
 
         let adapter = ClaudeMessageAdapter;

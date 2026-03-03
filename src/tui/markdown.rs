@@ -6,13 +6,14 @@
 
 use std::sync::OnceLock;
 
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
+use unicode_width::UnicodeWidthStr;
 
 const COLOR_H1: Color = Color::Indexed(75);
 const COLOR_H2: Color = Color::Indexed(114);
@@ -29,6 +30,8 @@ const COLOR_LINK_URL: Color = Color::Indexed(245);
 const COLOR_BLOCKQUOTE_BAR: Color = Color::Indexed(244);
 const COLOR_BLOCKQUOTE_TEXT: Color = Color::Indexed(250);
 const COLOR_RULE: Color = Color::Indexed(240);
+const COLOR_TABLE_BORDER: Color = Color::Indexed(240);
+const COLOR_TABLE_HEADER: Color = Color::Indexed(75);
 const BULLETS: &[char] = &['•', '◦', '▸'];
 
 struct SyntectAssets {
@@ -50,6 +53,7 @@ fn syntect_assets() -> &'static SyntectAssets {
 pub fn markdown_to_lines(md: &str, width: usize) -> Vec<Line<'static>> {
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_STRIKETHROUGH);
+    opts.insert(Options::ENABLE_TABLES);
     let parser = Parser::new_ext(md, opts);
     let mut renderer = MdRenderer::new(width);
     for event in parser {
@@ -70,6 +74,13 @@ struct MdRenderer {
     blockquote_depth: usize,
     heading_level: Option<HeadingLevel>,
     link_url: Option<String>,
+    // Table state
+    in_table: bool,
+    table_alignments: Vec<Alignment>,
+    table_rows: Vec<Vec<String>>, // rows of cells (plain text per cell)
+    current_row: Vec<String>,     // cells accumulated for the current row
+    current_cell: String,         // text accumulated for the current cell
+    table_header_row: bool,       // true when inside TableHead
 }
 
 impl MdRenderer {
@@ -86,6 +97,12 @@ impl MdRenderer {
             blockquote_depth: 0,
             heading_level: None,
             link_url: None,
+            in_table: false,
+            table_alignments: Vec::new(),
+            table_rows: Vec::new(),
+            current_row: Vec::new(),
+            current_cell: String::new(),
+            table_header_row: false,
         }
     }
 
@@ -189,6 +206,37 @@ impl MdRenderer {
             Event::Start(Tag::Strikethrough) => {
                 self.push_style(|s| s.add_modifier(Modifier::CROSSED_OUT));
             }
+            Event::Start(Tag::Table(alignments)) => {
+                if !self.lines.is_empty() {
+                    self.blank_line();
+                }
+                self.in_table = true;
+                self.table_alignments = alignments;
+                self.table_rows.clear();
+            }
+            Event::Start(Tag::TableHead) => {
+                self.table_header_row = true;
+                self.current_row.clear();
+            }
+            Event::Start(Tag::TableRow) => {
+                self.table_header_row = false;
+                self.current_row.clear();
+            }
+            Event::Start(Tag::TableCell) => {
+                self.current_cell.clear();
+            }
+            Event::End(TagEnd::TableCell) => {
+                self.current_row
+                    .push(std::mem::take(&mut self.current_cell));
+            }
+            Event::End(TagEnd::TableHead) | Event::End(TagEnd::TableRow) => {
+                self.table_rows.push(std::mem::take(&mut self.current_row));
+            }
+            Event::End(TagEnd::Table) => {
+                self.emit_table();
+                self.in_table = false;
+                self.table_alignments.clear();
+            }
             Event::Start(Tag::Link { dest_url, .. }) => {
                 self.link_url = Some(dest_url.to_string());
                 self.push_style(|s| s.fg(COLOR_LINK).add_modifier(Modifier::UNDERLINED));
@@ -242,6 +290,8 @@ impl MdRenderer {
             Event::Text(text) => {
                 if self.in_code_block {
                     self.code_buffer.push_str(&text);
+                } else if self.in_table {
+                    self.current_cell.push_str(&text);
                 } else {
                     let style = self.current_style();
                     self.current_spans
@@ -249,15 +299,21 @@ impl MdRenderer {
                 }
             }
             Event::Code(code) => {
-                let style = Style::default()
-                    .fg(COLOR_INLINE_CODE_FG)
-                    .bg(COLOR_INLINE_CODE_BG);
-                self.current_spans
-                    .push(Span::styled(format!(" {code} "), style));
+                if self.in_table {
+                    self.current_cell.push_str(&code);
+                } else {
+                    let style = Style::default()
+                        .fg(COLOR_INLINE_CODE_FG)
+                        .bg(COLOR_INLINE_CODE_BG);
+                    self.current_spans
+                        .push(Span::styled(format!(" {code} "), style));
+                }
             }
             Event::SoftBreak => {
                 if self.in_code_block {
                     self.code_buffer.push('\n');
+                } else if self.in_table {
+                    self.current_cell.push(' ');
                 } else {
                     let style = self.current_style();
                     self.current_spans
@@ -321,6 +377,102 @@ impl MdRenderer {
             }
             self.lines.push(Line::from(spans));
         }
+    }
+
+    fn emit_table(&mut self) {
+        if self.table_rows.is_empty() {
+            return;
+        }
+
+        let border_style = Style::default().fg(COLOR_TABLE_BORDER);
+        let header_style = Style::default()
+            .fg(COLOR_TABLE_HEADER)
+            .add_modifier(Modifier::BOLD);
+
+        // Compute the number of columns and max width per column.
+        let num_cols = self
+            .table_rows
+            .iter()
+            .map(|row| row.len())
+            .max()
+            .unwrap_or(0);
+        if num_cols == 0 {
+            return;
+        }
+
+        let mut col_widths = vec![0usize; num_cols];
+        for row in &self.table_rows {
+            for (c, cell) in row.iter().enumerate() {
+                col_widths[c] = col_widths[c].max(cell.width());
+            }
+        }
+        // Ensure minimum column width of 3.
+        for w in &mut col_widths {
+            *w = (*w).max(3);
+        }
+
+        // Helper: build a horizontal border line.
+        let make_border = |left: &str, mid: &str, right: &str| -> Line<'static> {
+            let mut s = String::from(left);
+            for (i, &w) in col_widths.iter().enumerate() {
+                s.push_str(&"─".repeat(w + 2)); // +2 for padding
+                if i < num_cols - 1 {
+                    s.push_str(mid);
+                }
+            }
+            s.push_str(right);
+            Line::from(Span::styled(s, border_style))
+        };
+
+        // Helper: build a data row.
+        let make_row = |cells: &[String], style: Style| -> Line<'static> {
+            let mut spans = Vec::new();
+            spans.push(Span::styled("│", border_style));
+            for (c, w) in col_widths.iter().enumerate() {
+                let text = cells.get(c).map(|s| s.as_str()).unwrap_or("");
+                let text_w = text.width();
+                let padding = w.saturating_sub(text_w);
+                let align = self
+                    .table_alignments
+                    .get(c)
+                    .copied()
+                    .unwrap_or(Alignment::None);
+                let (pad_left, pad_right) = match align {
+                    Alignment::Center => (padding / 2, padding - padding / 2),
+                    Alignment::Right => (padding, 0),
+                    _ => (0, padding),
+                };
+                spans.push(Span::styled(
+                    format!(
+                        " {}{}{} ",
+                        " ".repeat(pad_left),
+                        text,
+                        " ".repeat(pad_right)
+                    ),
+                    style,
+                ));
+                spans.push(Span::styled("│", border_style));
+            }
+            Line::from(spans)
+        };
+
+        // Top border.
+        self.lines.push(make_border("┌", "┬", "┐"));
+
+        // Header row (first row).
+        if let Some(header) = self.table_rows.first() {
+            self.lines.push(make_row(header, header_style));
+            // Header separator.
+            self.lines.push(make_border("├", "┼", "┤"));
+        }
+
+        // Body rows.
+        for row in self.table_rows.iter().skip(1) {
+            self.lines.push(make_row(row, Style::default()));
+        }
+
+        // Bottom border.
+        self.lines.push(make_border("└", "┴", "┘"));
     }
 
     fn finish(mut self) -> Vec<Line<'static>> {
@@ -417,5 +569,44 @@ mod tests {
         assert!(!lines.is_empty());
         let text = line_text(&lines[lines.len() - 1]);
         assert!(text.contains('│'));
+    }
+
+    #[test]
+    fn test_table_rendering() {
+        let md = "| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |";
+        let lines = markdown_to_lines(md, 80);
+        assert!(!lines.is_empty(), "table should produce lines");
+
+        let texts: Vec<String> = lines.iter().map(|l| line_text(l)).collect();
+
+        // Should have box-drawing borders.
+        assert!(texts[0].contains('┌'), "first line should be top border");
+        assert!(
+            texts.last().unwrap().contains('└'),
+            "last line should be bottom border"
+        );
+
+        // Should contain cell content.
+        let all_text = texts.join("\n");
+        assert!(all_text.contains("Alice"), "table should contain Alice");
+        assert!(all_text.contains("Bob"), "table should contain Bob");
+        assert!(all_text.contains("Age"), "table should contain Age header");
+
+        // Should have header separator.
+        assert!(
+            texts.iter().any(|t| t.contains('┼')),
+            "should have header separator with ┼"
+        );
+    }
+
+    #[test]
+    fn test_table_alignment() {
+        let md = "| Left | Center | Right |\n|:-----|:------:|------:|\n| a | b | c |";
+        let lines = markdown_to_lines(md, 80);
+        let texts: Vec<String> = lines.iter().map(|l| line_text(l)).collect();
+        let all_text = texts.join("\n");
+        assert!(all_text.contains("Left"));
+        assert!(all_text.contains("Center"));
+        assert!(all_text.contains("Right"));
     }
 }

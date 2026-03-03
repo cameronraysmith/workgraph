@@ -1241,7 +1241,6 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
 
     for (msg_idx, msg) in app.chat.messages.iter().enumerate() {
         let is_coordinator = msg.role == super::state::ChatRole::Coordinator;
-        let is_expanded = app.chat.expanded_messages.contains(&msg_idx);
 
         let (role_label, role_style) = match msg.role {
             super::state::ChatRole::User => (
@@ -1262,106 +1261,77 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
             ),
         };
 
-        // For coordinator messages, prepend a toggle indicator.
-        let toggle_indicator = if is_coordinator {
-            if is_expanded { "▼ " } else { "▶ " }
-        } else {
-            ""
-        };
-
-        // Inline prefix: "▶ ↯↯↯: message text" with continuation lines indented.
-        let prefix = format!("{}{}: ", toggle_indicator, role_label);
+        let prefix = format!("{}: ", role_label);
         let prefix_len = prefix.width();
         let indent = " ".repeat(prefix_len);
         let text_width = content_width.saturating_sub(prefix_len);
 
-        if is_coordinator && !is_expanded {
-            // Collapsed: show only a single summary line (first line of text, truncated).
-            let summary = msg
-                .text
-                .lines()
-                .next()
-                .unwrap_or("")
-                .chars()
-                .take(text_width)
-                .collect::<String>();
-            rendered_lines.push(Line::from(vec![
-                Span::styled(prefix.clone(), role_style),
-                Span::raw(summary),
-            ]));
-            line_to_message.push(Some(msg_idx));
-            // Blank line separator.
-            rendered_lines.push(Line::from(""));
-            line_to_message.push(Some(msg_idx));
+        // Render full content with markdown for all messages.
+        // For coordinator messages with full_text, use the full response.
+        let display_text = if is_coordinator {
+            msg.full_text.as_deref().unwrap_or(&msg.text)
         } else {
-            // Expanded (or non-coordinator): render full content with markdown.
-            // For expanded coordinator messages with full_text, use the full response.
-            let display_text = if is_coordinator && is_expanded {
-                msg.full_text.as_deref().unwrap_or(&msg.text)
-            } else {
-                &msg.text
-            };
+            &msg.text
+        };
 
-            // Render markdown to styled lines, then word-wrap.
-            let md_lines = markdown_to_lines(display_text, text_width);
-            let wrapped = if md_lines.is_empty() {
-                vec![Line::from("")]
-            } else {
-                wrap_line_spans(&md_lines, text_width)
-            };
+        // Render markdown to styled lines, then word-wrap.
+        let md_lines = markdown_to_lines(display_text, text_width);
+        let wrapped = if md_lines.is_empty() {
+            vec![Line::from("")]
+        } else {
+            wrap_line_spans(&md_lines, text_width)
+        };
 
-            let mut first_line = true;
-            for line in &wrapped {
-                let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        let mut first_line = true;
+        for line in &wrapped {
+            let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
 
-                // For expanded coordinator messages, detect tool call box-drawing lines.
-                let is_tool_line = is_coordinator
-                    && is_expanded
-                    && (line_text.starts_with("┌─")
-                        || line_text.starts_with("└─")
-                        || line_text.starts_with("│ "));
+            // For coordinator messages, detect tool call box-drawing lines.
+            let is_tool_line = is_coordinator
+                && (line_text.starts_with("┌─")
+                    || line_text.starts_with("└─")
+                    || line_text.starts_with("│ "));
 
-                if first_line {
-                    let mut spans = vec![Span::styled(prefix.clone(), role_style)];
-                    spans.extend(line.spans.iter().cloned());
-                    rendered_lines.push(Line::from(spans));
-                    first_line = false;
-                } else if is_coordinator && is_expanded {
-                    if is_tool_line {
-                        // Tool call lines: dim styling
-                        rendered_lines.push(Line::from(vec![
-                            Span::styled("  ", Style::default()),
-                            Span::styled(line_text, Style::default().fg(Color::DarkGray)),
-                        ]));
-                    } else {
-                        // Regular text lines in expanded coordinator: │ gutter
-                        let mut spans =
-                            vec![Span::styled("  │ ", Style::default().fg(Color::DarkGray))];
-                        spans.extend(line.spans.iter().cloned());
-                        rendered_lines.push(Line::from(spans));
-                    }
+            if first_line {
+                let mut spans = vec![Span::styled(prefix.clone(), role_style)];
+                spans.extend(line.spans.iter().cloned());
+                rendered_lines.push(Line::from(spans));
+                first_line = false;
+            } else if is_coordinator {
+                if is_tool_line {
+                    // Tool call lines: dim styling
+                    rendered_lines.push(Line::from(vec![
+                        Span::styled("  ", Style::default()),
+                        Span::styled(line_text, Style::default().fg(Color::DarkGray)),
+                    ]));
                 } else {
-                    let mut spans = vec![Span::raw(indent.clone())];
+                    // Regular text lines in coordinator: │ gutter
+                    let mut spans =
+                        vec![Span::styled("  │ ", Style::default().fg(Color::DarkGray))];
                     spans.extend(line.spans.iter().cloned());
                     rendered_lines.push(Line::from(spans));
                 }
-                line_to_message.push(Some(msg_idx));
+            } else {
+                let mut spans = vec![Span::raw(indent.clone())];
+                spans.extend(line.spans.iter().cloned());
+                rendered_lines.push(Line::from(spans));
             }
-            // Show attachment indicators.
-            for att_name in &msg.attachments {
-                let att_text = format!("{}[Attached: {}]", indent, att_name);
-                rendered_lines.push(Line::from(Span::styled(
-                    att_text,
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::ITALIC),
-                )));
-                line_to_message.push(Some(msg_idx));
-            }
-            // Blank line between messages.
-            rendered_lines.push(Line::from(""));
-            line_to_message.push(None);
+            line_to_message.push(Some(msg_idx));
         }
+        // Show attachment indicators.
+        for att_name in &msg.attachments {
+            let att_text = format!("{}[Attached: {}]", indent, att_name);
+            rendered_lines.push(Line::from(Span::styled(
+                att_text,
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::ITALIC),
+            )));
+            line_to_message.push(Some(msg_idx));
+        }
+        // Blank line between messages.
+        rendered_lines.push(Line::from(""));
+        line_to_message.push(None);
     }
 
     // Streaming indicator when awaiting response.
@@ -2154,6 +2124,17 @@ fn draw_messages_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         header_spans.push(Span::styled(
             format!("  {}", entry.timestamp),
             Style::default().fg(Color::DarkGray),
+        ));
+        // Delivery status indicator.
+        let (status_icon, status_color) = match entry.delivery_status {
+            workgraph::messages::DeliveryStatus::Sent => ("\u{2709}", Color::DarkGray), // ✉
+            workgraph::messages::DeliveryStatus::Delivered => ("\u{1f4ec}", Color::Blue), // 📬
+            workgraph::messages::DeliveryStatus::Read => ("\u{1f441}", Color::Yellow),  // 👁
+            workgraph::messages::DeliveryStatus::Acknowledged => ("\u{2705}", Color::Green), // ✅
+        };
+        header_spans.push(Span::styled(
+            format!(" {}", status_icon),
+            Style::default().fg(status_color),
         ));
         if !unanswered_marker.is_empty() {
             header_spans.push(Span::styled(

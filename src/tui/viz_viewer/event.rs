@@ -1576,22 +1576,6 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
                     app.input_mode = InputMode::Normal;
                     app.chat_input_dismissed = true;
                 }
-
-                // Check if click landed on a coordinator message → toggle expand/collapse.
-                let click_row_in_area = (row.saturating_sub(app.last_chat_message_area.y)) as usize;
-                let rendered_line_idx = app.chat.scroll_from_top + click_row_in_area;
-                if let Some(Some(msg_idx)) = app.chat.line_to_message.get(rendered_line_idx) {
-                    let msg_idx = *msg_idx;
-                    if msg_idx < app.chat.messages.len()
-                        && app.chat.messages[msg_idx].role == super::state::ChatRole::Coordinator
-                    {
-                        if app.chat.expanded_messages.contains(&msg_idx) {
-                            app.chat.expanded_messages.remove(&msg_idx);
-                        } else {
-                            app.chat.expanded_messages.insert(msg_idx);
-                        }
-                    }
-                }
             } else if in_right_content {
                 // Click in right panel content: focus the right panel.
                 app.focused_panel = FocusedPanel::RightPanel;

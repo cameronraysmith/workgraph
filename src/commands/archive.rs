@@ -108,6 +108,137 @@ fn load_archive(archive_path: &Path) -> Result<Vec<Task>> {
     Ok(tasks)
 }
 
+/// Rewrite the archive file, excluding a specific task by ID.
+fn remove_from_archive(archive_path: &Path, task_id: &str) -> Result<()> {
+    let tasks = load_archive(archive_path)?;
+    // Rewrite the file with all tasks except the one being restored
+    let file = File::create(archive_path).with_context(|| {
+        format!(
+            "Failed to open archive file for writing: {:?}",
+            archive_path
+        )
+    })?;
+    let mut writer = std::io::BufWriter::new(file);
+    for task in &tasks {
+        if task.id != task_id {
+            let node = Node::Task(task.clone());
+            let json = serde_json::to_string(&node)
+                .with_context(|| format!("Failed to serialize task: {}", task.id))?;
+            writeln!(writer, "{}", json)?;
+        }
+    }
+    Ok(())
+}
+
+/// Search archived tasks by title, description, and tags.
+pub fn search(dir: &Path, query: &str, limit: usize, json: bool) -> Result<()> {
+    let arch_path = archive_path(dir);
+    let tasks = load_archive(&arch_path)?;
+    let query_lower = query.to_lowercase();
+
+    let matches: Vec<&Task> = tasks
+        .iter()
+        .filter(|t| {
+            t.title.to_lowercase().contains(&query_lower)
+                || t.description
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains(&query_lower)
+                || t.tags
+                    .iter()
+                    .any(|tag| tag.to_lowercase().contains(&query_lower))
+        })
+        .take(limit)
+        .collect();
+
+    if json {
+        let items: Vec<serde_json::Value> = matches
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "id": t.id,
+                    "title": t.title,
+                    "completed_at": t.completed_at,
+                    "tags": t.tags,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&items)?);
+    } else if matches.is_empty() {
+        println!("No archived tasks matching '{}'.", query);
+    } else {
+        println!(
+            "Archived tasks matching '{}' ({} result{}):",
+            query,
+            matches.len(),
+            if matches.len() == 1 { "" } else { "s" }
+        );
+        for task in &matches {
+            let completed = task.completed_at.as_deref().unwrap_or("unknown");
+            let tags = if task.tags.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", task.tags.join(", "))
+            };
+            println!(
+                "  {} - {} (completed: {}){}",
+                task.id, task.title, completed, tags
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Restore an archived task back into the active graph.
+pub fn restore(dir: &Path, task_id: &str, reopen: bool) -> Result<()> {
+    let path = graph_path(dir);
+    let arch_path = archive_path(dir);
+
+    if !path.exists() {
+        anyhow::bail!("Workgraph not initialized. Run 'wg init' first.");
+    }
+
+    let tasks = load_archive(&arch_path)?;
+    let task = tasks
+        .iter()
+        .find(|t| t.id == task_id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("Task '{}' not found in archive", task_id))?;
+
+    let mut restored_task = task;
+    if reopen {
+        restored_task.status = Status::Open;
+        restored_task.completed_at = None;
+        restored_task.assigned = None;
+    }
+
+    // Add back to graph
+    let mut graph = load_graph(&path).context("Failed to load graph")?;
+    if graph.get_task(&restored_task.id).is_some() {
+        anyhow::bail!(
+            "Task '{}' already exists in the active graph",
+            restored_task.id
+        );
+    }
+    graph.add_node(Node::Task(restored_task.clone()));
+    save_graph(&graph, &path).context("Failed to save graph")?;
+
+    // Remove from archive
+    remove_from_archive(&arch_path, task_id)?;
+
+    super::notify_graph_changed(dir);
+
+    let status = if reopen { "open" } else { "done" };
+    println!(
+        "Restored task '{}' ({}) to active graph with status '{}'",
+        task_id, restored_task.title, status
+    );
+
+    Ok(())
+}
+
 pub fn run(dir: &Path, dry_run: bool, older: Option<&str>, list: bool, json: bool) -> Result<()> {
     let path = graph_path(dir);
     let arch_path = archive_path(dir);
@@ -424,5 +555,424 @@ mod tests {
 
         // Run list with json=true (output goes to stdout, just verify no error)
         run(wg_dir, false, None, true, true).unwrap();
+    }
+
+    fn make_task_with_tags(
+        id: &str,
+        title: &str,
+        status: Status,
+        completed_at: Option<&str>,
+        description: Option<&str>,
+        tags: Vec<&str>,
+    ) -> Task {
+        Task {
+            id: id.to_string(),
+            title: title.to_string(),
+            status,
+            completed_at: completed_at.map(String::from),
+            description: description.map(String::from),
+            tags: tags.into_iter().map(String::from).collect(),
+            ..Task::default()
+        }
+    }
+
+    #[test]
+    fn test_search_by_title() {
+        let dir = tempdir().unwrap();
+        let wg_dir = dir.path();
+        std::fs::create_dir_all(wg_dir).unwrap();
+        let graph_file = wg_dir.join("graph.jsonl");
+        save_graph(&WorkGraph::new(), &graph_file).unwrap();
+
+        let arch_path = wg_dir.join("archive.jsonl");
+        let tasks = vec![
+            make_task(
+                "t1",
+                "Implement login feature",
+                Status::Done,
+                Some("2024-01-01T00:00:00Z"),
+            ),
+            make_task(
+                "t2",
+                "Fix database bug",
+                Status::Done,
+                Some("2024-01-02T00:00:00Z"),
+            ),
+            make_task(
+                "t3",
+                "Login page styling",
+                Status::Done,
+                Some("2024-01-03T00:00:00Z"),
+            ),
+        ];
+        append_to_archive(&tasks, &arch_path).unwrap();
+
+        // Search should find tasks matching by title
+        search(wg_dir, "login", 20, false).unwrap();
+
+        // Verify by loading and filtering manually
+        let loaded = load_archive(&arch_path).unwrap();
+        let matches: Vec<_> = loaded
+            .iter()
+            .filter(|t| t.title.to_lowercase().contains("login"))
+            .collect();
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].id, "t1");
+        assert_eq!(matches[1].id, "t3");
+    }
+
+    #[test]
+    fn test_search_by_description() {
+        let dir = tempdir().unwrap();
+        let wg_dir = dir.path();
+        std::fs::create_dir_all(wg_dir).unwrap();
+        let graph_file = wg_dir.join("graph.jsonl");
+        save_graph(&WorkGraph::new(), &graph_file).unwrap();
+
+        let arch_path = wg_dir.join("archive.jsonl");
+        let tasks = vec![
+            make_task_with_tags(
+                "t1",
+                "Task A",
+                Status::Done,
+                Some("2024-01-01T00:00:00Z"),
+                Some("Contains authentication logic"),
+                vec![],
+            ),
+            make_task_with_tags(
+                "t2",
+                "Task B",
+                Status::Done,
+                Some("2024-01-02T00:00:00Z"),
+                Some("Contains database logic"),
+                vec![],
+            ),
+        ];
+        append_to_archive(&tasks, &arch_path).unwrap();
+
+        // Should find by description content
+        search(wg_dir, "authentication", 20, false).unwrap();
+
+        let loaded = load_archive(&arch_path).unwrap();
+        let matches: Vec<_> = loaded
+            .iter()
+            .filter(|t| {
+                t.description
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains("authentication")
+            })
+            .collect();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].id, "t1");
+    }
+
+    #[test]
+    fn test_search_by_tags() {
+        let dir = tempdir().unwrap();
+        let wg_dir = dir.path();
+        std::fs::create_dir_all(wg_dir).unwrap();
+        let graph_file = wg_dir.join("graph.jsonl");
+        save_graph(&WorkGraph::new(), &graph_file).unwrap();
+
+        let arch_path = wg_dir.join("archive.jsonl");
+        let tasks = vec![
+            make_task_with_tags(
+                "t1",
+                "Task A",
+                Status::Done,
+                Some("2024-01-01T00:00:00Z"),
+                None,
+                vec!["frontend", "urgent"],
+            ),
+            make_task_with_tags(
+                "t2",
+                "Task B",
+                Status::Done,
+                Some("2024-01-02T00:00:00Z"),
+                None,
+                vec!["backend"],
+            ),
+        ];
+        append_to_archive(&tasks, &arch_path).unwrap();
+
+        // Search by tag
+        search(wg_dir, "frontend", 20, false).unwrap();
+
+        let loaded = load_archive(&arch_path).unwrap();
+        let matches: Vec<_> = loaded
+            .iter()
+            .filter(|t| {
+                t.tags
+                    .iter()
+                    .any(|tag| tag.to_lowercase().contains("frontend"))
+            })
+            .collect();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].id, "t1");
+    }
+
+    #[test]
+    fn test_search_case_insensitive() {
+        let dir = tempdir().unwrap();
+        let wg_dir = dir.path();
+        std::fs::create_dir_all(wg_dir).unwrap();
+        let graph_file = wg_dir.join("graph.jsonl");
+        save_graph(&WorkGraph::new(), &graph_file).unwrap();
+
+        let arch_path = wg_dir.join("archive.jsonl");
+        let tasks = vec![make_task(
+            "t1",
+            "IMPORTANT Feature",
+            Status::Done,
+            Some("2024-01-01T00:00:00Z"),
+        )];
+        append_to_archive(&tasks, &arch_path).unwrap();
+
+        // Case-insensitive search
+        search(wg_dir, "important", 20, false).unwrap();
+
+        let loaded = load_archive(&arch_path).unwrap();
+        let matches: Vec<_> = loaded
+            .iter()
+            .filter(|t| t.title.to_lowercase().contains("important"))
+            .collect();
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn test_search_with_limit() {
+        let dir = tempdir().unwrap();
+        let wg_dir = dir.path();
+        std::fs::create_dir_all(wg_dir).unwrap();
+        let graph_file = wg_dir.join("graph.jsonl");
+        save_graph(&WorkGraph::new(), &graph_file).unwrap();
+
+        let arch_path = wg_dir.join("archive.jsonl");
+        let tasks = vec![
+            make_task(
+                "t1",
+                "Test task one",
+                Status::Done,
+                Some("2024-01-01T00:00:00Z"),
+            ),
+            make_task(
+                "t2",
+                "Test task two",
+                Status::Done,
+                Some("2024-01-02T00:00:00Z"),
+            ),
+            make_task(
+                "t3",
+                "Test task three",
+                Status::Done,
+                Some("2024-01-03T00:00:00Z"),
+            ),
+        ];
+        append_to_archive(&tasks, &arch_path).unwrap();
+
+        // Search with limit=1 should not error
+        search(wg_dir, "test", 1, false).unwrap();
+    }
+
+    #[test]
+    fn test_search_json_output() {
+        let dir = tempdir().unwrap();
+        let wg_dir = dir.path();
+        std::fs::create_dir_all(wg_dir).unwrap();
+        let graph_file = wg_dir.join("graph.jsonl");
+        save_graph(&WorkGraph::new(), &graph_file).unwrap();
+
+        let arch_path = wg_dir.join("archive.jsonl");
+        let tasks = vec![make_task(
+            "t1",
+            "Test task",
+            Status::Done,
+            Some("2024-01-01T00:00:00Z"),
+        )];
+        append_to_archive(&tasks, &arch_path).unwrap();
+
+        // JSON output should not error
+        search(wg_dir, "test", 20, true).unwrap();
+    }
+
+    #[test]
+    fn test_search_no_matches() {
+        let dir = tempdir().unwrap();
+        let wg_dir = dir.path();
+        std::fs::create_dir_all(wg_dir).unwrap();
+        let graph_file = wg_dir.join("graph.jsonl");
+        save_graph(&WorkGraph::new(), &graph_file).unwrap();
+
+        let arch_path = wg_dir.join("archive.jsonl");
+        let tasks = vec![make_task(
+            "t1",
+            "Some task",
+            Status::Done,
+            Some("2024-01-01T00:00:00Z"),
+        )];
+        append_to_archive(&tasks, &arch_path).unwrap();
+
+        // No matches
+        search(wg_dir, "nonexistent", 20, false).unwrap();
+    }
+
+    #[test]
+    fn test_restore_as_done() {
+        let dir = tempdir().unwrap();
+        let wg_dir = dir.path();
+        std::fs::create_dir_all(wg_dir).unwrap();
+        let graph_file = wg_dir.join("graph.jsonl");
+        let arch_path = wg_dir.join("archive.jsonl");
+
+        // Create an empty graph
+        save_graph(&WorkGraph::new(), &graph_file).unwrap();
+
+        // Create archive with a task
+        let tasks = vec![
+            make_task(
+                "t1",
+                "Archived Task",
+                Status::Done,
+                Some("2024-01-01T00:00:00Z"),
+            ),
+            make_task(
+                "t2",
+                "Other Archived",
+                Status::Done,
+                Some("2024-01-02T00:00:00Z"),
+            ),
+        ];
+        append_to_archive(&tasks, &arch_path).unwrap();
+
+        // Restore t1 without --reopen
+        restore(wg_dir, "t1", false).unwrap();
+
+        // Verify task is in graph with status Done
+        let graph = load_graph(&graph_file).unwrap();
+        let task = graph.get_task("t1").unwrap();
+        assert_eq!(task.status, Status::Done);
+        assert_eq!(task.title, "Archived Task");
+
+        // Verify task is removed from archive
+        let archived = load_archive(&arch_path).unwrap();
+        assert_eq!(archived.len(), 1);
+        assert_eq!(archived[0].id, "t2");
+    }
+
+    #[test]
+    fn test_restore_with_reopen() {
+        let dir = tempdir().unwrap();
+        let wg_dir = dir.path();
+        std::fs::create_dir_all(wg_dir).unwrap();
+        let graph_file = wg_dir.join("graph.jsonl");
+        let arch_path = wg_dir.join("archive.jsonl");
+
+        save_graph(&WorkGraph::new(), &graph_file).unwrap();
+
+        let tasks = vec![make_task(
+            "t1",
+            "Archived Task",
+            Status::Done,
+            Some("2024-01-01T00:00:00Z"),
+        )];
+        append_to_archive(&tasks, &arch_path).unwrap();
+
+        // Restore with --reopen
+        restore(wg_dir, "t1", true).unwrap();
+
+        // Verify task is in graph with status Open
+        let graph = load_graph(&graph_file).unwrap();
+        let task = graph.get_task("t1").unwrap();
+        assert_eq!(task.status, Status::Open);
+        assert!(task.completed_at.is_none());
+
+        // Verify archive is now empty
+        let archived = load_archive(&arch_path).unwrap();
+        assert!(archived.is_empty());
+    }
+
+    #[test]
+    fn test_restore_nonexistent_task() {
+        let dir = tempdir().unwrap();
+        let wg_dir = dir.path();
+        std::fs::create_dir_all(wg_dir).unwrap();
+        let graph_file = wg_dir.join("graph.jsonl");
+        let arch_path = wg_dir.join("archive.jsonl");
+
+        save_graph(&WorkGraph::new(), &graph_file).unwrap();
+
+        let tasks = vec![make_task(
+            "t1",
+            "Archived Task",
+            Status::Done,
+            Some("2024-01-01T00:00:00Z"),
+        )];
+        append_to_archive(&tasks, &arch_path).unwrap();
+
+        // Restoring a nonexistent task should fail
+        let result = restore(wg_dir, "nonexistent", false);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not found in archive")
+        );
+    }
+
+    #[test]
+    fn test_restore_duplicate_in_graph() {
+        let dir = tempdir().unwrap();
+        let wg_dir = dir.path();
+        std::fs::create_dir_all(wg_dir).unwrap();
+        let graph_file = wg_dir.join("graph.jsonl");
+        let arch_path = wg_dir.join("archive.jsonl");
+
+        // Create graph with existing task "t1"
+        let mut graph = WorkGraph::new();
+        graph.add_node(Node::Task(make_task(
+            "t1",
+            "Active Task",
+            Status::Open,
+            None,
+        )));
+        save_graph(&graph, &graph_file).unwrap();
+
+        // Archive also has t1
+        let tasks = vec![make_task(
+            "t1",
+            "Archived Task",
+            Status::Done,
+            Some("2024-01-01T00:00:00Z"),
+        )];
+        append_to_archive(&tasks, &arch_path).unwrap();
+
+        // Should fail because t1 already exists in graph
+        let result = restore(wg_dir, "t1", false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn test_remove_from_archive() {
+        let dir = tempdir().unwrap();
+        let arch_path = dir.path().join("archive.jsonl");
+
+        let tasks = vec![
+            make_task("t1", "Task 1", Status::Done, Some("2024-01-01T00:00:00Z")),
+            make_task("t2", "Task 2", Status::Done, Some("2024-01-02T00:00:00Z")),
+            make_task("t3", "Task 3", Status::Done, Some("2024-01-03T00:00:00Z")),
+        ];
+        append_to_archive(&tasks, &arch_path).unwrap();
+
+        // Remove t2
+        remove_from_archive(&arch_path, "t2").unwrap();
+
+        let remaining = load_archive(&arch_path).unwrap();
+        assert_eq!(remaining.len(), 2);
+        assert_eq!(remaining[0].id, "t1");
+        assert_eq!(remaining[1].id, "t3");
     }
 }

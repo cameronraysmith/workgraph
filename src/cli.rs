@@ -569,6 +569,9 @@ pub enum Commands {
         /// List archived tasks instead of archiving
         #[arg(long)]
         list: bool,
+
+        #[command(subcommand)]
+        command: Option<ArchiveCommands>,
     },
 
     /// Garbage collect terminal tasks (failed, abandoned) from the graph
@@ -1343,6 +1346,30 @@ pub enum EvolveReviewCommands {
         /// Optional note explaining rejection
         #[arg(long, short = 'n')]
         note: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ArchiveCommands {
+    /// Search archived tasks by title, description, and tags
+    Search {
+        /// Search query (case-insensitive substring match)
+        query: String,
+
+        /// Maximum number of results to show
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+
+    /// Restore an archived task back into the active graph
+    Restore {
+        /// Task ID to restore
+        #[arg(value_name = "TASK")]
+        task_id: String,
+
+        /// Reopen the task (set status to 'open' instead of 'done')
+        #[arg(long)]
+        reopen: bool,
     },
 }
 

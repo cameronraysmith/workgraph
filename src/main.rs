@@ -551,7 +551,18 @@ fn main() -> Result<()> {
             dry_run,
             older,
             list,
-        } => commands::archive::run(&workgraph_dir, dry_run, older.as_deref(), list, cli.json),
+            command,
+        } => match command {
+            Some(cli::ArchiveCommands::Search { query, limit }) => {
+                commands::archive::search(&workgraph_dir, &query, limit, cli.json)
+            }
+            Some(cli::ArchiveCommands::Restore { task_id, reopen }) => {
+                commands::archive::restore(&workgraph_dir, &task_id, reopen)
+            }
+            None => {
+                commands::archive::run(&workgraph_dir, dry_run, older.as_deref(), list, cli.json)
+            }
+        },
         Commands::Gc {
             dry_run,
             include_done,
