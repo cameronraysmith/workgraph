@@ -284,7 +284,8 @@ pub fn run(
             let new_ts = (chrono::Utc::now() + chrono::Duration::seconds(secs as i64)).to_rfc3339();
             let old = task.not_before.clone();
             task.not_before = Some(new_ts.clone());
-            field_changes.push(serde_json::json!({"field": "not_before", "old": old, "new": new_ts}));
+            field_changes
+                .push(serde_json::json!({"field": "not_before", "old": old, "new": new_ts}));
             println!("Set not_before: {} (delay {})", new_ts, d);
             changed = true;
         } else if let Some(ts) = not_before {
@@ -293,9 +294,7 @@ pub fn run(
                     chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S")
                         .map(|ndt| ndt.and_utc())
                 })
-                .map_err(|_| {
-                    anyhow::anyhow!("Invalid timestamp '{}'. Use ISO 8601 format", ts)
-                })?;
+                .map_err(|_| anyhow::anyhow!("Invalid timestamp '{}'. Use ISO 8601 format", ts))?;
             let old = task.not_before.clone();
             task.not_before = Some(ts.to_string());
             field_changes.push(serde_json::json!({"field": "not_before", "old": old, "new": ts}));
