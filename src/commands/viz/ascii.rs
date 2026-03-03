@@ -400,7 +400,15 @@ pub(crate) fn generate_ascii(
             .unwrap_or_default();
         format!(
             "{}{}{}  ({}){}{}{}{}{}",
-            color, id, reset, status_with_tokens, delay_hint, relative_ts, msg_indicator, phase_info, loop_info
+            color,
+            id,
+            reset,
+            status_with_tokens,
+            delay_hint,
+            relative_ts,
+            msg_indicator,
+            phase_info,
+            loop_info
         )
     };
 

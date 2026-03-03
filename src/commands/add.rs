@@ -231,9 +231,7 @@ pub fn run(
                 chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S")
                     .map(|ndt| ndt.and_utc())
             })
-            .map_err(|_| {
-                anyhow::anyhow!("Invalid timestamp '{}'. Use ISO 8601 format", ts)
-            })?;
+            .map_err(|_| anyhow::anyhow!("Invalid timestamp '{}'. Use ISO 8601 format", ts))?;
         Some(ts.to_string())
     } else {
         None
