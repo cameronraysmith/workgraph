@@ -585,6 +585,8 @@ pub struct LogPaneState {
     pub task_id: Option<String>,
     /// Height of the log pane viewport (set each frame).
     pub viewport_height: usize,
+    /// Total wrapped line count (set each frame by render, used for scroll bounds).
+    pub total_wrapped_lines: usize,
 }
 
 impl Default for LogPaneState {
@@ -596,6 +598,7 @@ impl Default for LogPaneState {
             rendered_lines: Vec::new(),
             task_id: None,
             viewport_height: 0,
+            total_wrapped_lines: 0,
         }
     }
 }
@@ -970,6 +973,10 @@ pub struct VizApp {
     pub task_snapshots: HashMap<String, TaskSnapshot>,
     /// Animation mode (from config: normal/fast/slow/reduced/off).
     pub animation_mode: AnimationMode,
+    /// Cached: name length threshold for inline vs above-line display.
+    pub message_name_threshold: u16,
+    /// Cached: indent for message body when name is on its own line.
+    pub message_indent: u16,
 
     // ── Scrollbar auto-hide ──
     /// Timestamp of the last scroll activity. Scrollbar is shown for 2 seconds after activity.
@@ -1099,6 +1106,8 @@ impl VizApp {
             splash_animations: HashMap::new(),
             task_snapshots: HashMap::new(),
             animation_mode,
+            message_name_threshold: config.tui.message_name_threshold,
+            message_indent: config.tui.message_indent,
             last_scroll_activity: None,
             last_graph_mtime: graph_mtime,
             last_refresh: Instant::now(),
@@ -2782,12 +2791,10 @@ impl VizApp {
             }
         }
 
-        let new_count = self.log_pane.rendered_lines.len();
-
         // If auto-tail is on, scroll to bottom so newest entries are visible.
+        // Use usize::MAX — the render function clamps to the actual wrapped line count.
         if self.log_pane.auto_tail {
-            let max_scroll = new_count.saturating_sub(self.log_pane.viewport_height);
-            self.log_pane.scroll = max_scroll;
+            self.log_pane.scroll = usize::MAX;
         }
 
         self.log_pane.task_id = Some(task_id);
@@ -2809,14 +2816,29 @@ impl VizApp {
     pub fn log_scroll_down(&mut self, amount: usize) {
         let max_scroll = self
             .log_pane
-            .rendered_lines
-            .len()
+            .total_wrapped_lines
             .saturating_sub(self.log_pane.viewport_height);
         self.log_pane.scroll = (self.log_pane.scroll + amount).min(max_scroll);
         // If we reached the bottom, resume auto-tail.
         if self.log_pane.scroll >= max_scroll {
             self.log_pane.auto_tail = true;
         }
+    }
+
+    /// Scroll log pane to the very top.
+    pub fn log_scroll_to_top(&mut self) {
+        self.log_pane.scroll = 0;
+        self.log_pane.auto_tail = false;
+    }
+
+    /// Scroll log pane to the very bottom.
+    pub fn log_scroll_to_bottom(&mut self) {
+        let max_scroll = self
+            .log_pane
+            .total_wrapped_lines
+            .saturating_sub(self.log_pane.viewport_height);
+        self.log_pane.scroll = max_scroll;
+        self.log_pane.auto_tail = true;
     }
 
     /// Toggle log pane as right panel tab: switch to Log tab in right panel.
@@ -2986,6 +3008,8 @@ impl VizApp {
             splash_animations: HashMap::new(),
             task_snapshots: HashMap::new(),
             animation_mode: AnimationMode::Normal,
+            message_name_threshold: 8,
+            message_indent: 2,
             last_scroll_activity: None,
             last_graph_mtime: None,
             last_refresh: Instant::now(),
@@ -3942,6 +3966,20 @@ impl VizApp {
             edit_kind: ConfigEditKind::Choice(vec!["gray".into(), "white".into(), "mixed".into()]),
             section: ConfigSection::TuiSettings,
         });
+        entries.push(ConfigEntry {
+            key: "tui.message_name_threshold".into(),
+            label: "Name threshold".into(),
+            value: config.tui.message_name_threshold.to_string(),
+            edit_kind: ConfigEditKind::TextInput,
+            section: ConfigSection::TuiSettings,
+        });
+        entries.push(ConfigEntry {
+            key: "tui.message_indent".into(),
+            label: "Message indent".into(),
+            value: config.tui.message_indent.to_string(),
+            edit_kind: ConfigEditKind::TextInput,
+            section: ConfigSection::TuiSettings,
+        });
 
         // ── 5. Agent Defaults ──
         entries.push(ConfigEntry {
@@ -4371,6 +4409,19 @@ impl VizApp {
             "tui.color_theme" => config.tui.color_theme = new_value,
             "tui.timestamp_format" => config.tui.timestamp_format = new_value,
             "tui.show_token_counts" => config.tui.show_token_counts = new_value == "on",
+            "tui.message_name_threshold" => {
+                if let Ok(v) = new_value.parse::<u16>() {
+                    config.tui.message_name_threshold = v;
+                    self.message_name_threshold = v;
+                }
+            }
+            "tui.message_indent" => {
+                if let Ok(v) = new_value.parse::<u16>() {
+                    let clamped = v.min(8);
+                    config.tui.message_indent = clamped;
+                    self.message_indent = clamped;
+                }
+            }
             "guardrails.max_child_tasks_per_agent" => {
                 if let Ok(v) = new_value.parse::<u32>() {
                     config.guardrails.max_child_tasks_per_agent = v;

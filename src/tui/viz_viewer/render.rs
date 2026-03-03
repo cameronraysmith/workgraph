@@ -1432,6 +1432,7 @@ fn draw_log_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     }
 
     let total_lines = wrapped_lines.len();
+    app.log_pane.total_wrapped_lines = total_lines;
     let scroll = app
         .log_pane
         .scroll

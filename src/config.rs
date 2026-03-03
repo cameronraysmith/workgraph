@@ -202,6 +202,12 @@ pub struct TuiConfig {
     /// Show token counts in task details
     #[serde(default = "default_true")]
     pub show_token_counts: bool,
+    /// Name length threshold for inline vs above-line display (default: 8)
+    #[serde(default = "default_message_name_threshold")]
+    pub message_name_threshold: u16,
+    /// Indentation for message body when name is on its own line (0-8, default: 2)
+    #[serde(default = "default_message_indent")]
+    pub message_indent: u16,
 }
 
 fn default_tui_layout() -> String {
@@ -216,6 +222,12 @@ fn default_timestamp_format() -> String {
 fn default_true() -> bool {
     true
 }
+fn default_message_name_threshold() -> u16 {
+    8
+}
+fn default_message_indent() -> u16 {
+    2
+}
 
 impl Default for TuiConfig {
     fn default() -> Self {
@@ -225,6 +237,8 @@ impl Default for TuiConfig {
             color_theme: default_tui_theme(),
             timestamp_format: default_timestamp_format(),
             show_token_counts: true,
+            message_name_threshold: default_message_name_threshold(),
+            message_indent: default_message_indent(),
         }
     }
 }

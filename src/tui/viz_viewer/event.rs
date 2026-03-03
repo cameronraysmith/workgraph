@@ -1246,6 +1246,14 @@ fn handle_right_panel_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
             right_panel_scroll_down(app, 10);
         }
 
+        // Home/End: jump to top/bottom of content
+        KeyCode::Home => {
+            right_panel_scroll_to_top(app);
+        }
+        KeyCode::End => {
+            right_panel_scroll_to_bottom(app);
+        }
+
         // Enter: in chat tab, enter chat input mode; in messages tab, enter message input mode;
         // in config tab, start editing the selected setting.
         KeyCode::Enter => {
@@ -1385,6 +1393,64 @@ fn right_panel_scroll_down(app: &mut VizApp, amount: usize) {
         RightPanelTab::Files => {
             // File browser handles its own scrolling.
         }
+    }
+}
+
+fn right_panel_scroll_to_top(app: &mut VizApp) {
+    app.record_scroll_activity();
+    match app.right_panel_tab {
+        RightPanelTab::Detail => {
+            app.hud_scroll = 0;
+        }
+        RightPanelTab::Chat => {
+            // Chat scroll is from bottom (0 = fully scrolled down), so "top" = max.
+            app.chat.scroll = usize::MAX;
+        }
+        RightPanelTab::Log => {
+            app.log_scroll_to_top();
+        }
+        RightPanelTab::Messages => {
+            app.messages_panel.scroll = 0;
+        }
+        RightPanelTab::Agency => {
+            app.agent_monitor.scroll = 0;
+        }
+        RightPanelTab::Config => {
+            let visible = app.visible_config_entries();
+            if let Some(&(first, _)) = visible.first() {
+                app.config_panel.selected = first;
+            }
+        }
+        RightPanelTab::Files => {}
+    }
+}
+
+fn right_panel_scroll_to_bottom(app: &mut VizApp) {
+    app.record_scroll_activity();
+    match app.right_panel_tab {
+        RightPanelTab::Detail => {
+            app.hud_scroll_down(usize::MAX);
+        }
+        RightPanelTab::Chat => {
+            // Chat scroll is from bottom (0 = fully scrolled down), so "bottom" = 0.
+            app.chat.scroll = 0;
+        }
+        RightPanelTab::Log => {
+            app.log_scroll_to_bottom();
+        }
+        RightPanelTab::Messages => {
+            app.messages_panel.scroll = usize::MAX;
+        }
+        RightPanelTab::Agency => {
+            app.agent_monitor.scroll = usize::MAX;
+        }
+        RightPanelTab::Config => {
+            let visible = app.visible_config_entries();
+            if let Some(&(last, _)) = visible.last() {
+                app.config_panel.selected = last;
+            }
+        }
+        RightPanelTab::Files => {}
     }
 }
 
