@@ -382,7 +382,9 @@ impl TemplateVars {
                  ```\n\
                  Using plain `wg done` will cause the cycle to iterate again and re-open tasks.\n\
                  Only use plain `wg done` if you want the next iteration to proceed.",
-                task.loop_iteration + 1, config.max_iterations, task.id
+                task.loop_iteration + 1,
+                config.max_iterations,
+                task.id
             )
         } else if task.loop_iteration > 0 {
             format!(
@@ -392,7 +394,8 @@ impl TemplateVars {
                  ```\n\
                  wg done {} --converged\n\
                  ```",
-                task.loop_iteration + 1, task.id
+                task.loop_iteration + 1,
+                task.id
             )
         } else {
             String::new()

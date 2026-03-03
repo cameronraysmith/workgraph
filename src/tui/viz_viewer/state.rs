@@ -2944,18 +2944,6 @@ impl VizApp {
         self.log_pane.auto_tail = true;
     }
 
-    /// Toggle log pane as right panel tab: switch to Log tab in right panel.
-    pub fn toggle_log_pane(&mut self) {
-        if self.right_panel_tab == RightPanelTab::Log && self.right_panel_visible {
-            // Already showing log — toggle right panel off.
-            self.right_panel_visible = false;
-            self.focused_panel = FocusedPanel::Graph;
-        } else {
-            self.right_panel_visible = true;
-            self.right_panel_tab = RightPanelTab::Log;
-        }
-    }
-
     /// Toggle log pane JSON mode.
     pub fn toggle_log_json(&mut self) {
         self.log_pane.json_mode = !self.log_pane.json_mode;
@@ -2978,7 +2966,7 @@ impl VizApp {
 
     /// Load coordinator activity log from daemon.log (incremental).
     pub fn load_coord_log(&mut self) {
-        use std::io::{Read, Seek, SeekFrom};
+        use std::io::{Seek, SeekFrom};
         let log_path = self.workgraph_dir.join("service").join("daemon.log");
         let file = match std::fs::File::open(&log_path) {
             Ok(f) => f,
@@ -2999,13 +2987,12 @@ impl VizApp {
             return;
         }
         let mut reader = BufReader::new(file);
-        if self.coord_log.last_offset > 0 {
-            if reader
+        if self.coord_log.last_offset > 0
+            && reader
                 .seek(SeekFrom::Start(self.coord_log.last_offset))
                 .is_err()
-            {
-                return;
-            }
+        {
+            return;
         }
         let mut new_lines = Vec::new();
         let mut buf = String::new();

@@ -1490,47 +1490,47 @@ fn draw_coord_log_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     let wrap_width = area.width as usize;
     let mut wrapped_lines: Vec<Line> = Vec::new();
     for s in &app.coord_log.rendered_lines {
-        if let Some(bracket_start) = s.find('[') {
-            if let Some(bracket_end) = s[bracket_start..].find(']') {
-                let bracket_end = bracket_start + bracket_end;
-                let timestamp = &s[..bracket_start];
-                let level = &s[bracket_start..=bracket_end];
-                let message = &s[bracket_end + 1..];
-                let prefix_len = bracket_end + 1;
-                let level_color = match level {
-                    "[INFO]" => Color::Green,
-                    "[WARN]" => Color::Yellow,
-                    "[ERROR]" => Color::Red,
-                    _ => Color::DarkGray,
-                };
-                let text_width = wrap_width.saturating_sub(prefix_len);
-                if text_width == 0 || message.trim().is_empty() {
-                    wrapped_lines.push(Line::from(vec![
-                        Span::styled(timestamp.to_string(), Style::default().fg(Color::DarkGray)),
-                        Span::styled(level.to_string(), Style::default().fg(level_color)),
-                        Span::raw(message.to_string()),
-                    ]));
-                } else {
-                    let leading_space = &message[..message.len() - message.trim_start().len()];
-                    let wrapped = word_wrap(message.trim_start(), text_width);
-                    let indent = " ".repeat(prefix_len + leading_space.len());
-                    for (i, wl) in wrapped.iter().enumerate() {
-                        if i == 0 {
-                            wrapped_lines.push(Line::from(vec![
-                                Span::styled(
-                                    timestamp.to_string(),
-                                    Style::default().fg(Color::DarkGray),
-                                ),
-                                Span::styled(level.to_string(), Style::default().fg(level_color)),
-                                Span::raw(format!("{}{}", leading_space, wl)),
-                            ]));
-                        } else {
-                            wrapped_lines.push(Line::from(Span::raw(format!("{}{}", indent, wl))));
-                        }
+        if let Some(bracket_start) = s.find('[')
+            && let Some(bracket_end) = s[bracket_start..].find(']')
+        {
+            let bracket_end = bracket_start + bracket_end;
+            let timestamp = &s[..bracket_start];
+            let level = &s[bracket_start..=bracket_end];
+            let message = &s[bracket_end + 1..];
+            let prefix_len = bracket_end + 1;
+            let level_color = match level {
+                "[INFO]" => Color::Green,
+                "[WARN]" => Color::Yellow,
+                "[ERROR]" => Color::Red,
+                _ => Color::DarkGray,
+            };
+            let text_width = wrap_width.saturating_sub(prefix_len);
+            if text_width == 0 || message.trim().is_empty() {
+                wrapped_lines.push(Line::from(vec![
+                    Span::styled(timestamp.to_string(), Style::default().fg(Color::DarkGray)),
+                    Span::styled(level.to_string(), Style::default().fg(level_color)),
+                    Span::raw(message.to_string()),
+                ]));
+            } else {
+                let leading_space = &message[..message.len() - message.trim_start().len()];
+                let wrapped = word_wrap(message.trim_start(), text_width);
+                let indent = " ".repeat(prefix_len + leading_space.len());
+                for (i, wl) in wrapped.iter().enumerate() {
+                    if i == 0 {
+                        wrapped_lines.push(Line::from(vec![
+                            Span::styled(
+                                timestamp.to_string(),
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                            Span::styled(level.to_string(), Style::default().fg(level_color)),
+                            Span::raw(format!("{}{}", leading_space, wl)),
+                        ]));
+                    } else {
+                        wrapped_lines.push(Line::from(Span::raw(format!("{}{}", indent, wl))));
                     }
                 }
-                continue;
             }
+            continue;
         }
         if wrap_width > 0 && s.len() > wrap_width {
             let wrapped = word_wrap(s, wrap_width);
@@ -1911,9 +1911,12 @@ fn draw_message_input(frame: &mut Frame, app: &VizApp, area: Rect) {
         };
         frame.render_widget(para, text_area);
 
-        let cy = input_y + cursor_line.min(input_h.saturating_sub(1));
-        let cx = area.x + cursor_col.min(area.width.saturating_sub(1));
-        frame.set_cursor_position((cx, cy));
+        // Only show cursor when the input pane has focus (focus-aware input).
+        if app.focused_panel == FocusedPanel::RightPanel {
+            let cy = input_y + cursor_line.min(input_h.saturating_sub(1));
+            let cx = area.x + cursor_col.min(area.width.saturating_sub(1));
+            frame.set_cursor_position((cx, cy));
+        }
     } else {
         // Hint line when not in input mode.
         let hint = Line::from(Span::styled(

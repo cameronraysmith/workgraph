@@ -444,14 +444,13 @@ pub(crate) fn generate_ascii(
                 }
                 // Treat recently-created open tasks as hot so they sort to the
                 // top immediately instead of appearing after running components.
-                if t.status == Status::Open {
-                    if let Some(ref created) = t.created_at {
-                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(created) {
-                            let age = now_utc.signed_duration_since(dt);
-                            if age.num_seconds() < 5 {
-                                return true;
-                            }
-                        }
+                if t.status == Status::Open
+                    && let Some(ref created) = t.created_at
+                    && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(created)
+                {
+                    let age = now_utc.signed_duration_since(dt);
+                    if age.num_seconds() < 5 {
+                        return true;
                     }
                 }
                 false
