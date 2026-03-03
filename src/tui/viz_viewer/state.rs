@@ -323,10 +323,11 @@ impl HudSize {
     }
 }
 
-/// Layout mode for the three-state cycle (= key).
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Layout mode for the three-state cycle (i/= key).
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub enum LayoutMode {
     /// Split view: graph on left, right panel on right (default).
+    #[default]
     Split,
     /// Full-width panel: right panel takes entire screen width, graph hidden.
     FullPanel,
@@ -927,6 +928,8 @@ pub struct VizApp {
     pub last_tab_bar_area: Rect,
     /// The content area inside the right panel (below tab bar) from the last render frame.
     pub last_right_content_area: Rect,
+    /// The chat input area from the last render frame (for click-to-resume editing).
+    pub last_chat_input_area: Rect,
 
     /// Maps config entry index → screen Y position (set each frame by renderer).
     /// Used for mouse click → config entry selection.
@@ -1167,6 +1170,7 @@ impl VizApp {
             last_right_panel_area: Rect::default(),
             last_tab_bar_area: Rect::default(),
             last_right_content_area: Rect::default(),
+            last_chat_input_area: Rect::default(),
             config_entry_y_positions: Vec::new(),
             jump_target: None,
             task_order: Vec::new(),
@@ -1189,7 +1193,7 @@ impl VizApp {
             right_panel_visible: true,
             focused_panel: FocusedPanel::Graph,
             right_panel_tab: RightPanelTab::Detail,
-            right_panel_percent: 35,
+            right_panel_percent: config.tui.panel_ratio.clamp(10, 90),
             hud_size: HudSize::Normal,
             layout_mode: LayoutMode::Split,
             input_mode: InputMode::Normal,
@@ -1405,7 +1409,7 @@ impl VizApp {
                     }
                 } else {
                     // Selection changed (different task or first load) — center it.
-                    self.scroll_to_selected_task();
+                    self.center_on_selected_task();
                 }
             }
             Err(_) => {
@@ -1638,7 +1642,6 @@ impl VizApp {
     }
 
     /// Center the viewport on the selected task (unconditional — always recenters).
-    #[allow(dead_code)]
     pub fn center_on_selected_task(&mut self) {
         let task_id = match self.selected_task_idx.and_then(|i| self.task_order.get(i)) {
             Some(id) => id,
@@ -3271,6 +3274,7 @@ impl VizApp {
             last_right_panel_area: Rect::default(),
             last_tab_bar_area: Rect::default(),
             last_right_content_area: Rect::default(),
+            last_chat_input_area: Rect::default(),
             config_entry_y_positions: Vec::new(),
             jump_target: None,
             task_order,

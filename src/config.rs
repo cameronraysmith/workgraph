@@ -208,6 +208,9 @@ pub struct TuiConfig {
     /// Indentation for message body when name is on its own line (0-8, default: 2)
     #[serde(default = "default_message_indent")]
     pub message_indent: u16,
+    /// Inspector panel ratio: percentage of width given to the inspector in split mode (default: 67)
+    #[serde(default = "default_panel_ratio")]
+    pub panel_ratio: u16,
 }
 
 fn default_tui_layout() -> String {
@@ -228,6 +231,9 @@ fn default_message_name_threshold() -> u16 {
 fn default_message_indent() -> u16 {
     2
 }
+fn default_panel_ratio() -> u16 {
+    67
+}
 
 impl Default for TuiConfig {
     fn default() -> Self {
@@ -239,6 +245,7 @@ impl Default for TuiConfig {
             show_token_counts: true,
             message_name_threshold: default_message_name_threshold(),
             message_indent: default_message_indent(),
+            panel_ratio: default_panel_ratio(),
         }
     }
 }

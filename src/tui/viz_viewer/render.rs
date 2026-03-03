@@ -1091,9 +1091,12 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     }
 
     // Reserve space for input area.
-    // When in chat input mode, compute wrapped line count so the input grows vertically.
+    // When editing or when there's persisted text, compute wrapped line count so
+    // the input area shows the full buffer.
     let has_pending_att = !app.chat.pending_attachments.is_empty();
-    let input_height: u16 = if app.input_mode == InputMode::ChatInput {
+    let is_editing = app.input_mode == InputMode::ChatInput;
+    let has_input_text = !app.chat.input.is_empty();
+    let input_height: u16 = if is_editing || has_input_text {
         let prompt_prefix = 2; // "> " takes 2 columns
         let usable = (area.width as usize).saturating_sub(prompt_prefix).max(1);
         // Count visual lines: split by newlines, then wrap each logical line.
@@ -1278,11 +1281,40 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
 
 /// Draw the chat input line at the bottom of the chat panel.
 fn draw_chat_input(frame: &mut Frame, app: &mut VizApp, area: Rect) {
-    if app.input_mode == InputMode::ChatInput {
-        // Separator line.
+    let is_editing = app.input_mode == InputMode::ChatInput;
+    let has_text = !app.chat.input.is_empty();
+
+    // Store the input area for click-to-resume hit testing.
+    app.last_chat_input_area = area;
+
+    // Colors: magenta when editing, dark gray when not.
+    let border_color = if is_editing {
+        Color::Magenta
+    } else {
+        Color::DarkGray
+    };
+    let prompt_color = if is_editing {
+        Color::LightMagenta
+    } else {
+        Color::DarkGray
+    };
+    let text_color = if is_editing {
+        Color::Reset
+    } else {
+        Color::DarkGray
+    };
+
+    if is_editing || has_text {
+        // Separator line (magenta when editing, dark gray when frozen).
         let sep = Line::from(Span::styled(
             "─".repeat(area.width as usize),
-            Style::default().fg(Color::DarkGray),
+            Style::default()
+                .fg(border_color)
+                .add_modifier(if is_editing {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
         ));
         if area.height >= 2 {
             frame.render_widget(
@@ -1308,18 +1340,20 @@ fn draw_chat_input(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         let usable_width = (area.width.saturating_sub(prefix_len) as usize).max(1);
 
         // Build visual lines from the input text, handling both newlines and wrapping.
-        // Each logical line (delimited by '\n') is wrapped at usable_width.
         let (visual_lines, cursor_vline, cursor_col) =
             build_input_visual_lines(&app.chat.input, app.chat.cursor, usable_width);
 
-        // Auto-scroll to keep cursor visible within the input viewport.
-        let vh = input_h as usize;
-        if cursor_vline < app.chat.input_scroll {
-            app.chat.input_scroll = cursor_vline;
-        } else if cursor_vline >= app.chat.input_scroll + vh {
-            app.chat.input_scroll = cursor_vline + 1 - vh;
+        if is_editing {
+            // Auto-scroll to keep cursor visible within the input viewport.
+            let vh = input_h as usize;
+            if cursor_vline < app.chat.input_scroll {
+                app.chat.input_scroll = cursor_vline;
+            } else if cursor_vline >= app.chat.input_scroll + vh {
+                app.chat.input_scroll = cursor_vline + 1 - vh;
+            }
         }
 
+        let vh = input_h as usize;
         // Slice visible lines from the scroll offset.
         let end = (app.chat.input_scroll + vh).min(visual_lines.len());
         let visible = &visual_lines[app.chat.input_scroll..end];
@@ -1332,8 +1366,17 @@ fn draw_chat_input(frame: &mut Frame, app: &mut VizApp, area: Rect) {
                 let line_idx = app.chat.input_scroll + i;
                 let pfx = if line_idx == 0 { prompt_prefix } else { "  " };
                 Line::from(vec![
-                    Span::styled(pfx, Style::default().fg(Color::Yellow)),
-                    Span::raw(text.as_str()),
+                    Span::styled(
+                        pfx,
+                        Style::default()
+                            .fg(prompt_color)
+                            .add_modifier(if is_editing {
+                                Modifier::BOLD
+                            } else {
+                                Modifier::empty()
+                            }),
+                    ),
+                    Span::styled(text.as_str(), Style::default().fg(text_color)),
                 ])
             })
             .collect();
@@ -1368,11 +1411,14 @@ fn draw_chat_input(frame: &mut Frame, app: &mut VizApp, area: Rect) {
             );
         }
 
-        // Place the terminal cursor at the editing position.
-        let cursor_screen_line = cursor_vline.saturating_sub(app.chat.input_scroll) as u16;
-        let cy = input_y + cursor_screen_line.min(input_h.saturating_sub(1));
-        let cx = area.x + (prefix_len + cursor_col as u16).min(area.width.saturating_sub(1));
-        frame.set_cursor_position((cx, cy));
+        if is_editing {
+            // Place the terminal cursor at the editing position.
+            let cursor_screen_line = cursor_vline.saturating_sub(app.chat.input_scroll) as u16;
+            let cy = input_y + cursor_screen_line.min(input_h.saturating_sub(1));
+            let cx = area.x + (prefix_len + cursor_col as u16).min(area.width.saturating_sub(1));
+            frame.set_cursor_position((cx, cy));
+        }
+
         // Show pending attachments below the input.
         if !app.chat.pending_attachments.is_empty() {
             let att_text: String = app
@@ -1386,7 +1432,6 @@ fn draw_chat_input(frame: &mut Frame, app: &mut VizApp, area: Rect) {
                 format!(" {} {}", "📎", att_text),
                 Style::default().fg(Color::Green),
             ));
-            // Render above the cursor line, or at the bottom.
             let att_y = (input_y + input_h).min(area.y + area.height.saturating_sub(1));
             frame.render_widget(
                 Paragraph::new(att_line),
@@ -1399,12 +1444,12 @@ fn draw_chat_input(frame: &mut Frame, app: &mut VizApp, area: Rect) {
             );
         }
     } else {
-        // Hint line when not in input mode.
+        // No text and not editing: show hint line.
         let hint_text = if app.chat.pending_attachments.is_empty() {
-            " ↯↯↯/Enter: type  ↑↓: scroll".to_string()
+            " c/Enter: type  ↑↓: scroll".to_string()
         } else {
             let att_count = app.chat.pending_attachments.len();
-            format!(" ↯↯↯/Enter: type  ↑↓: scroll  📎 {} attached", att_count)
+            format!(" c/Enter: type  ↑↓: scroll  {} attached", att_count)
         };
         let hint = Line::from(Span::styled(
             hint_text,
@@ -2779,131 +2824,154 @@ fn draw_task_form(frame: &mut Frame, form: &TaskFormState) {
     frame.render_widget(paragraph, inner);
 }
 
-/// Draw the bottom action hints bar.
-fn draw_action_hints(frame: &mut Frame, app: &VizApp, area: Rect) {
-    let spans = match &app.input_mode {
-        InputMode::Search => {
-            vec![
-                Span::styled(" Tab", Style::default().fg(Color::Yellow)),
-                Span::styled(":next ", Style::default().fg(Color::DarkGray)),
-                Span::styled("S-Tab", Style::default().fg(Color::Yellow)),
-                Span::styled(":prev ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Enter", Style::default().fg(Color::Yellow)),
-                Span::styled(":go ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Esc", Style::default().fg(Color::Yellow)),
-                Span::styled(":cancel", Style::default().fg(Color::DarkGray)),
-            ]
-        }
-        InputMode::ChatInput | InputMode::MessageInput => {
-            vec![
-                Span::styled(" Enter", Style::default().fg(Color::Yellow)),
-                Span::styled(":send ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Esc", Style::default().fg(Color::Yellow)),
-                Span::styled(":navigate", Style::default().fg(Color::DarkGray)),
-            ]
-        }
-        InputMode::TaskForm => {
-            vec![
-                Span::styled(" Ctrl-Enter", Style::default().fg(Color::Yellow)),
-                Span::styled(":create ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Tab", Style::default().fg(Color::Yellow)),
-                Span::styled(":field ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Esc", Style::default().fg(Color::Yellow)),
-                Span::styled(":cancel", Style::default().fg(Color::DarkGray)),
-            ]
-        }
-        InputMode::Confirm(_) => {
-            vec![
-                Span::styled(" y", Style::default().fg(Color::Yellow)),
-                Span::styled(":yes ", Style::default().fg(Color::DarkGray)),
-                Span::styled("n", Style::default().fg(Color::Yellow)),
-                Span::styled(":no", Style::default().fg(Color::DarkGray)),
-            ]
-        }
-        InputMode::TextPrompt(_) => {
-            vec![
-                Span::styled(" Enter", Style::default().fg(Color::Yellow)),
-                Span::styled(":submit ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Esc", Style::default().fg(Color::Yellow)),
-                Span::styled(":cancel", Style::default().fg(Color::DarkGray)),
-            ]
-        }
-        InputMode::ConfigEdit => {
-            vec![
-                Span::styled(" Enter", Style::default().fg(Color::Yellow)),
-                Span::styled(":save ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Esc", Style::default().fg(Color::Yellow)),
-                Span::styled(":cancel", Style::default().fg(Color::DarkGray)),
-            ]
-        }
-        InputMode::Normal => match app.focused_panel {
-            FocusedPanel::Graph => {
-                let mut hints = vec![
-                    Span::styled(" a", Style::default().fg(Color::Yellow)),
-                    Span::styled(":add ", Style::default().fg(Color::DarkGray)),
-                    Span::styled("D", Style::default().fg(Color::Yellow)),
-                    Span::styled(":done ", Style::default().fg(Color::DarkGray)),
-                    Span::styled("f", Style::default().fg(Color::Yellow)),
-                    Span::styled(":fail ", Style::default().fg(Color::DarkGray)),
-                    Span::styled("x", Style::default().fg(Color::Yellow)),
-                    Span::styled(":retry ", Style::default().fg(Color::DarkGray)),
-                    Span::styled("/", Style::default().fg(Color::Yellow)),
-                    Span::styled(":search ", Style::default().fg(Color::DarkGray)),
-                    Span::styled("Tab", Style::default().fg(Color::Yellow)),
-                    Span::styled(":panel ", Style::default().fg(Color::DarkGray)),
-                ];
-                hints.push(Span::styled("=", Style::default().fg(Color::Yellow)));
-                hints.push(Span::styled(
-                    ":layout ",
-                    Style::default().fg(Color::DarkGray),
-                ));
-                if app.right_panel_visible {
-                    hints.push(Span::styled("\\", Style::default().fg(Color::Yellow)));
-                    hints.push(Span::styled(
-                        ":collapse",
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                } else {
-                    hints.push(Span::styled("\\", Style::default().fg(Color::Yellow)));
-                    hints.push(Span::styled(
-                        ":expand",
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                }
-                hints
-            }
-            FocusedPanel::RightPanel => {
-                let mut hints = vec![
-                    Span::styled(" 0-7", Style::default().fg(Color::Yellow)),
-                    Span::styled(":tab ", Style::default().fg(Color::DarkGray)),
-                    Span::styled("↑↓", Style::default().fg(Color::Yellow)),
-                    Span::styled(":scroll ", Style::default().fg(Color::DarkGray)),
-                    Span::styled("Tab", Style::default().fg(Color::Yellow)),
-                    Span::styled(":graph ", Style::default().fg(Color::DarkGray)),
-                ];
-                if app.right_panel_tab == RightPanelTab::Chat
-                    || app.right_panel_tab == RightPanelTab::Messages
-                {
-                    hints.push(Span::styled("Enter", Style::default().fg(Color::Yellow)));
-                    hints.push(Span::styled(":type", Style::default().fg(Color::DarkGray)));
-                }
-                hints.push(Span::styled(" =", Style::default().fg(Color::Yellow)));
-                hints.push(Span::styled(
-                    ":layout ",
-                    Style::default().fg(Color::DarkGray),
-                ));
-                hints.push(Span::styled("Esc", Style::default().fg(Color::Yellow)));
-                hints.push(Span::styled(":back", Style::default().fg(Color::DarkGray)));
-                hints
-            }
-        },
-    };
+/// Render a full-width bar with focus-aware background color.
+///
+/// In side-by-side split mode the bar is split at the panel boundary: the
+/// focused pane's portion gets `focused_bg` while the unfocused portion gets
+/// `unfocused_bg`.  In other layout modes the bar is rendered uniformly with
+/// `focused_bg`.
+fn render_focus_bar(
+    frame: &mut Frame,
+    app: &VizApp,
+    area: Rect,
+    line: Line<'_>,
+    focused_bg: Color,
+    unfocused_bg: Color,
+) {
+    let is_side_by_side =
+        app.last_right_panel_area.width > 0 && app.last_right_panel_area.x > area.x;
 
-    // Add notification if present
-    let mut final_spans = spans;
+    if is_side_by_side {
+        let graph_focused = app.focused_panel == FocusedPanel::Graph;
+        let graph_bg = if graph_focused {
+            focused_bg
+        } else {
+            unfocused_bg
+        };
+        let panel_bg = if graph_focused {
+            unfocused_bg
+        } else {
+            focused_bg
+        };
+
+        let panel_x = app.last_right_panel_area.x;
+        let graph_width = panel_x.saturating_sub(area.x);
+        let panel_width = area.width.saturating_sub(graph_width);
+
+        let graph_area = Rect::new(area.x, area.y, graph_width, area.height);
+        let panel_area = Rect::new(panel_x, area.y, panel_width, area.height);
+
+        // Fill background for each portion.
+        frame.render_widget(
+            Block::default().style(Style::default().bg(graph_bg)),
+            graph_area,
+        );
+        frame.render_widget(
+            Block::default().style(Style::default().bg(panel_bg)),
+            panel_area,
+        );
+
+        // Render text over the full area (no bg override preserves the fills).
+        frame.render_widget(Paragraph::new(line), area);
+    } else {
+        let bar = Paragraph::new(line).style(Style::default().bg(focused_bg));
+        frame.render_widget(bar, area);
+    }
+}
+
+/// Draw the bottom action hints bar with context-sensitive hotkey tooltips.
+///
+/// Format: ` context | MODE | key:hint  key:hint  key:hint`
+/// Mode badge colors: NAV=dim gray, EDIT=yellow, SEARCH=cyan
+/// Truncates hints with `…` if terminal is too narrow.
+fn draw_action_hints(frame: &mut Frame, app: &VizApp, area: Rect) {
+    let width = area.width as usize;
+
+    // Determine context label, mode badge, and key hints.
+    let (context_label, mode_badge, mode_color, hints) = action_hints_parts(app);
+
+    let separator = " | ";
+    let sep_style = Style::default().fg(Color::Rgb(80, 80, 80));
+    let key_style = Style::default().fg(Color::Yellow);
+    let desc_style = Style::default().fg(Color::Rgb(140, 140, 140));
+    let badge_style = Style::default().fg(mode_color).add_modifier(Modifier::BOLD);
+
+    // Calculate minimum width needed for context + mode (the priority parts).
+    let prefix_text = format!(" {}{}{}", context_label, separator, mode_badge);
+    let prefix_width = UnicodeWidthStr::width(prefix_text.as_str());
+
+    if width < 5 {
+        // Terminal too narrow for anything useful.
+        let bar = Paragraph::new(Line::from(vec![Span::styled(
+            " …",
+            Style::default().fg(Color::DarkGray),
+        )]))
+        .style(Style::default().bg(Color::Rgb(30, 30, 30)));
+        frame.render_widget(bar, area);
+        return;
+    }
+
+    let mut spans: Vec<Span> = Vec::with_capacity(16);
+
+    // Context label (pane/tab name)
+    spans.push(Span::styled(
+        format!(" {}", context_label),
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::styled(separator, sep_style));
+    // Mode badge
+    spans.push(Span::styled(mode_badge, badge_style));
+
+    // Add hints if we have room.
+    if !hints.is_empty() {
+        spans.push(Span::styled(separator, sep_style));
+
+        // Calculate remaining width for hints.
+        // prefix_width covers: leading space + context + sep + mode
+        let hints_budget = width.saturating_sub(prefix_width + separator.len());
+
+        let mut used = 0usize;
+        let mut hint_spans: Vec<Span> = Vec::new();
+        for (i, (key, desc)) in hints.iter().enumerate() {
+            let hint_text = format!("{}:{}", key, desc);
+            let hint_width = UnicodeWidthStr::width(hint_text.as_str());
+            let spacing = if i > 0 { 2 } else { 0 }; // double space between hints
+            let needed = spacing + hint_width;
+
+            if used + needed + 3 > hints_budget && i < hints.len() - 1 {
+                // Not enough room — add ellipsis and stop.
+                if spacing > 0 {
+                    hint_spans.push(Span::styled("  ", desc_style));
+                }
+                hint_spans.push(Span::styled(
+                    "…",
+                    Style::default().fg(Color::Rgb(80, 80, 80)),
+                ));
+                break;
+            }
+            if used + needed > hints_budget {
+                break;
+            }
+
+            if i > 0 {
+                hint_spans.push(Span::styled("  ", desc_style));
+            }
+            hint_spans.push(Span::styled(key.to_string(), key_style));
+            hint_spans.push(Span::styled(format!(":{}", desc), desc_style));
+            used += needed;
+        }
+        spans.extend(hint_spans);
+    }
+
+    // Append notification if present.
     if let Some((ref msg, _)) = app.notification {
-        final_spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
-        final_spans.push(Span::styled(
+        spans.push(Span::styled(
+            "  │ ",
+            Style::default().fg(Color::Rgb(80, 80, 80)),
+        ));
+        spans.push(Span::styled(
             msg.as_str(),
             Style::default()
                 .fg(Color::Green)
@@ -2911,8 +2979,157 @@ fn draw_action_hints(frame: &mut Frame, app: &VizApp, area: Rect) {
         ));
     }
 
-    let bar = Paragraph::new(Line::from(final_spans)).style(Style::default().bg(Color::DarkGray));
-    frame.render_widget(bar, area);
+    render_focus_bar(
+        frame,
+        app,
+        area,
+        Line::from(spans),
+        Color::Rgb(30, 30, 30),
+        Color::Rgb(15, 15, 15),
+    );
+}
+
+/// Returns (context_label, mode_badge, mode_color, hints) for the bottom action bar.
+/// `hints` is a list of (key, description) pairs ordered by importance.
+fn action_hints_parts(app: &VizApp) -> (&str, &str, Color, Vec<(&str, &str)>) {
+    match &app.input_mode {
+        InputMode::Search => (
+            "Search",
+            "SEARCH",
+            Color::Cyan,
+            vec![
+                ("Tab", "next"),
+                ("S-Tab", "prev"),
+                ("Enter", "go"),
+                ("Esc", "cancel"),
+            ],
+        ),
+        InputMode::ChatInput => {
+            let label = if app.right_panel_tab == RightPanelTab::Chat {
+                "0:Chat"
+            } else {
+                "Chat"
+            };
+            (
+                label,
+                "EDIT",
+                Color::Magenta,
+                vec![
+                    ("Enter", "send"),
+                    ("Esc", "exit"),
+                    ("Ctrl+A/E", "home/end"),
+                    ("Ctrl+K", "kill"),
+                ],
+            )
+        }
+        InputMode::MessageInput => (
+            "3:Msg",
+            "EDIT",
+            Color::Yellow,
+            vec![
+                ("Enter", "send"),
+                ("Esc", "exit"),
+                ("Ctrl+A/E", "home/end"),
+                ("Ctrl+K", "kill"),
+            ],
+        ),
+        InputMode::TaskForm => (
+            "New Task",
+            "EDIT",
+            Color::Yellow,
+            vec![
+                ("Ctrl-Enter", "create"),
+                ("Tab", "field"),
+                ("Esc", "cancel"),
+            ],
+        ),
+        InputMode::Confirm(_) => (
+            "Confirm",
+            "EDIT",
+            Color::Yellow,
+            vec![("y", "yes"), ("n", "no")],
+        ),
+        InputMode::TextPrompt(_) => (
+            "Prompt",
+            "EDIT",
+            Color::Yellow,
+            vec![("Enter", "submit"), ("Esc", "cancel")],
+        ),
+        InputMode::ConfigEdit => (
+            "5:Config",
+            "EDIT",
+            Color::Yellow,
+            vec![("Enter", "save"), ("Esc", "cancel")],
+        ),
+        InputMode::Normal => match app.focused_panel {
+            FocusedPanel::Graph => (
+                "Graph",
+                "NAV",
+                Color::Rgb(120, 120, 120),
+                vec![
+                    ("↑↓", "select"),
+                    ("Enter", "inspect"),
+                    ("Tab", "panel"),
+                    ("/", "search"),
+                    ("a", "add"),
+                    ("D", "done"),
+                    ("i", "layout"),
+                    ("?", "help"),
+                    ("Alt←→", "tabs"),
+                ],
+            ),
+            FocusedPanel::RightPanel => {
+                let tab = &app.right_panel_tab;
+                let tab_label: &str = match tab {
+                    RightPanelTab::Chat => "0:Chat",
+                    RightPanelTab::Detail => "1:Detail",
+                    RightPanelTab::Log => "2:Log",
+                    RightPanelTab::Messages => "3:Msg",
+                    RightPanelTab::Agency => "4:Agency",
+                    RightPanelTab::Config => "5:Config",
+                    RightPanelTab::Files => "6:Files",
+                    RightPanelTab::CoordLog => "7:Coord",
+                };
+                let mut hints: Vec<(&str, &str)> = Vec::new();
+                match tab {
+                    RightPanelTab::Chat => {
+                        hints.push(("Enter", "type"));
+                        hints.push(("↑↓", "scroll"));
+                    }
+                    RightPanelTab::Detail => {
+                        hints.push(("↑↓", "scroll"));
+                        hints.push(("PgUp/Dn", "page"));
+                        hints.push(("Enter", "toggle"));
+                    }
+                    RightPanelTab::Log | RightPanelTab::CoordLog | RightPanelTab::Agency => {
+                        hints.push(("↑↓", "scroll"));
+                        hints.push(("PgUp/Dn", "page"));
+                        hints.push(("Home/End", "jump"));
+                    }
+                    RightPanelTab::Messages => {
+                        hints.push(("Enter", "type"));
+                        hints.push(("↑↓", "scroll"));
+                    }
+                    RightPanelTab::Config => {
+                        hints.push(("↑↓", "select"));
+                        hints.push(("Enter", "edit"));
+                        hints.push(("Esc", "cancel"));
+                    }
+                    RightPanelTab::Files => {
+                        hints.push(("↑↓", "select"));
+                        hints.push(("Enter", "open"));
+                        hints.push(("Esc", "back"));
+                    }
+                }
+                // Common hints for all right-panel tabs.
+                hints.push(("Tab", "graph"));
+                hints.push(("i", "layout"));
+                hints.push(("?", "help"));
+                hints.push(("Alt←→", "tabs"));
+                (tab_label, "NAV", Color::Rgb(120, 120, 120), hints)
+            }
+        },
+    }
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &VizApp, area: Rect) {
@@ -2953,8 +3170,14 @@ fn draw_status_bar(frame: &mut Frame, app: &VizApp, area: Rect) {
             Style::default().fg(Color::Rgb(100, 100, 100)),
         ));
 
-        let bar = Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::DarkGray));
-        frame.render_widget(bar, area);
+        render_focus_bar(
+            frame,
+            app,
+            area,
+            Line::from(spans),
+            Color::DarkGray,
+            Color::Rgb(40, 40, 40),
+        );
         return;
     }
 
@@ -2983,8 +3206,14 @@ fn draw_status_bar(frame: &mut Frame, app: &VizApp, area: Rect) {
             Style::default().fg(Color::DarkGray),
         ));
 
-        let bar = Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::DarkGray));
-        frame.render_widget(bar, area);
+        render_focus_bar(
+            frame,
+            app,
+            area,
+            Line::from(spans),
+            Color::DarkGray,
+            Color::Rgb(40, 40, 40),
+        );
         return;
     }
 
@@ -3125,8 +3354,14 @@ fn draw_status_bar(frame: &mut Frame, app: &VizApp, area: Rect) {
         Style::default().fg(Color::DarkGray),
     ));
 
-    let bar = Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::DarkGray));
-    frame.render_widget(bar, area);
+    render_focus_bar(
+        frame,
+        app,
+        area,
+        Line::from(spans),
+        Color::DarkGray,
+        Color::Rgb(40, 40, 40),
+    );
 }
 
 fn draw_help_overlay(frame: &mut Frame) {
@@ -3181,7 +3416,7 @@ fn draw_help_overlay(frame: &mut Frame) {
         binding("Alt-↑/↓", "Switch focus: Graph ↔ Right Panel"),
         binding("Alt-←/→", "Cycle tabs (prev / next)"),
         binding("\\", "Toggle right panel visible"),
-        binding("=", "Cycle layout: split/panel/graph"),
+        binding("i/=", "Cycle layout: split/panel/graph"),
         binding("0-7", "Switch tab: Chat/.../Files/Coord"),
         binding("R", "Toggle raw JSON in Detail tab"),
         binding("Space", "Toggle section collapse in Detail"),

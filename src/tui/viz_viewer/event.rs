@@ -892,7 +892,7 @@ fn handle_graph_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
         }
 
         // Cycle layout mode: split → full panel → full graph
-        KeyCode::Char('=') => {
+        KeyCode::Char('=') | KeyCode::Char('i') => {
             app.cycle_layout_mode();
         }
 
@@ -1114,7 +1114,7 @@ fn handle_right_panel_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
                     app.kill_focused_agent();
                 }
                 KeyCode::Char('\\') => app.toggle_right_panel(),
-                KeyCode::Char('=') => app.cycle_layout_mode(),
+                KeyCode::Char('=') | KeyCode::Char('i') => app.cycle_layout_mode(),
                 KeyCode::Esc => {
                     app.focused_panel = FocusedPanel::Graph;
                 }
@@ -1150,7 +1150,7 @@ fn handle_right_panel_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
         }
 
         // Cycle layout mode: split → full panel → full graph
-        KeyCode::Char('=') => {
+        KeyCode::Char('=') | KeyCode::Char('i') => {
             app.cycle_layout_mode();
         }
 
@@ -1221,6 +1221,8 @@ fn handle_right_panel_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
             if app.right_panel_tab == RightPanelTab::Chat {
                 app.chat_input_dismissed = false;
                 app.input_mode = InputMode::ChatInput;
+                // Place cursor at end of existing text.
+                app.chat.cursor = app.chat.input.len();
             } else if app.right_panel_tab == RightPanelTab::Messages {
                 app.messages_panel.input.clear();
                 app.messages_panel.cursor = 0;
@@ -1506,6 +1508,17 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
                 if let Some(tab) = tab_at_column(col_in_tabs) {
                     app.right_panel_tab = tab;
                 }
+            } else if app.last_chat_input_area.height > 0
+                && app.last_chat_input_area.contains(pos)
+                && app.input_mode != InputMode::ChatInput
+                && (app.right_panel_tab == RightPanelTab::Chat)
+            {
+                // Click on chat input area: resume editing.
+                app.focused_panel = FocusedPanel::RightPanel;
+                app.chat_input_dismissed = false;
+                app.input_mode = InputMode::ChatInput;
+                // Place cursor at end of existing text.
+                app.chat.cursor = app.chat.input.len();
             } else if in_right_content {
                 // Click in right panel content: focus the right panel.
                 app.focused_panel = FocusedPanel::RightPanel;
