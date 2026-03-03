@@ -547,6 +547,9 @@ pub struct PendingAttachment {
 pub struct ChatMessage {
     pub role: ChatRole,
     pub text: String,
+    /// Full response text including tool calls (coordinator messages only).
+    /// Shown in expanded view instead of `text`.
+    pub full_text: Option<String>,
     /// Attachment filenames for display (just the filename portion).
     pub attachments: Vec<String>,
 }
@@ -1156,6 +1159,15 @@ pub struct VizApp {
     #[allow(dead_code)]
     pub last_panel_hscrollbar_area: Rect,
 
+    // ── Keyboard enhancement ──
+    /// Whether the kitty keyboard protocol was successfully enabled.
+    /// When true, Shift+Enter is distinguishable from Enter.
+    pub has_keyboard_enhancement: bool,
+
+    // ── Kill ring (Emacs-style) ──
+    /// Text killed by Ctrl+K / Ctrl+U / Ctrl+W, available for Ctrl+Y yank.
+    pub kill_ring: String,
+
     // ── Live refresh ──
     /// Last observed modification time of graph.jsonl.
     last_graph_mtime: Option<SystemTime>,
@@ -1297,6 +1309,8 @@ impl VizApp {
             panel_hscroll_activity: None,
             last_graph_hscrollbar_area: Rect::default(),
             last_panel_hscrollbar_area: Rect::default(),
+            has_keyboard_enhancement: false,
+            kill_ring: String::new(),
             last_graph_mtime: graph_mtime,
             last_refresh: Instant::now(),
             last_refresh_display: chrono::Local::now().format("%H:%M:%S").to_string(),
@@ -1473,8 +1487,12 @@ impl VizApp {
                         self.scroll.clamp();
                         self.scroll_to_selected_task();
                     }
+                } else if new_task_focused {
+                    // New task appeared — center with WCC awareness so the
+                    // user can see the whole cluster, biased toward the top.
+                    self.center_on_new_task_wcc_aware();
                 } else {
-                    // Selection changed (different task or first load) — center it.
+                    // Selection changed (different task) — center on it.
                     self.center_on_selected_task();
                 }
             }
@@ -1508,7 +1526,9 @@ impl VizApp {
             Some(indices) => indices.len(),
             None => self.lines.len(),
         };
-        self.scroll.content_height = height;
+        // Add 1 for an empty padding row at the bottom, giving visual breathing
+        // room so the last task isn't flush against the viewport edge.
+        self.scroll.content_height = height + 1;
         self.scroll.content_width = self.max_line_width;
         self.scroll.clamp();
     }
@@ -1722,6 +1742,90 @@ impl VizApp {
             self.scroll.offset_y = visible_pos.saturating_sub(half);
             self.scroll.clamp();
         }
+    }
+
+    /// Center the viewport on a newly focused task with WCC awareness.
+    ///
+    /// Instead of just centering on the task itself, this tries to show the
+    /// top of the weakly connected component (WCC) the task belongs to, so the
+    /// user can see the full cluster. If the WCC is too tall to fit in the
+    /// viewport, centers on the task but biases upward.
+    fn center_on_new_task_wcc_aware(&mut self) {
+        let task_id = match self.selected_task_idx.and_then(|i| self.task_order.get(i)) {
+            Some(id) => id.clone(),
+            None => return,
+        };
+        let task_orig_line = match self.node_line_map.get(&task_id) {
+            Some(&line) => line,
+            None => return,
+        };
+        let task_visible = match self.original_to_visible(task_orig_line) {
+            Some(pos) => pos,
+            None => return,
+        };
+
+        let vh = self.scroll.viewport_height;
+        if vh == 0 {
+            return;
+        }
+
+        // Find all tasks in the same WCC via BFS on undirected edges.
+        let wcc = self.find_wcc_tasks(&task_id);
+
+        // Find the top (minimum) and bottom (maximum) visible lines of the WCC.
+        let mut wcc_top = task_visible;
+        let mut wcc_bottom = task_visible;
+        for wcc_id in &wcc {
+            if let Some(&orig) = self.node_line_map.get(wcc_id.as_str())
+                && let Some(vis) = self.original_to_visible(orig)
+            {
+                wcc_top = wcc_top.min(vis);
+                wcc_bottom = wcc_bottom.max(vis);
+            }
+        }
+
+        let wcc_height = wcc_bottom - wcc_top + 1;
+
+        if wcc_height <= vh {
+            // Entire WCC fits in viewport. Position so the WCC is vertically
+            // centered, which also keeps the new task in view.
+            let padding = (vh - wcc_height) / 2;
+            self.scroll.offset_y = wcc_top.saturating_sub(padding);
+        } else {
+            // WCC is taller than viewport. Center on the new task but bias
+            // upward: place the task at 2/3 from the top so more of the
+            // WCC above it is visible.
+            let bias = vh * 2 / 3;
+            self.scroll.offset_y = task_visible.saturating_sub(bias);
+        }
+        self.scroll.clamp();
+    }
+
+    /// Find all task IDs in the same weakly connected component as `task_id`.
+    fn find_wcc_tasks(&self, task_id: &str) -> HashSet<String> {
+        let mut visited = HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        visited.insert(task_id.to_string());
+        queue.push_back(task_id.to_string());
+        while let Some(current) = queue.pop_front() {
+            // Follow forward edges (dependents).
+            if let Some(fwd) = self.forward_edges.get(&current) {
+                for neighbor in fwd {
+                    if visited.insert(neighbor.clone()) {
+                        queue.push_back(neighbor.clone());
+                    }
+                }
+            }
+            // Follow reverse edges (dependencies).
+            if let Some(rev) = self.reverse_edges.get(&current) {
+                for neighbor in rev {
+                    if visited.insert(neighbor.clone()) {
+                        queue.push_back(neighbor.clone());
+                    }
+                }
+            }
+        }
+        visited
     }
 
     /// Select the task at the given original line index, if any.
@@ -3476,6 +3580,8 @@ impl VizApp {
             panel_hscroll_activity: None,
             last_graph_hscrollbar_area: Rect::default(),
             last_panel_hscrollbar_area: Rect::default(),
+            has_keyboard_enhancement: false,
+            kill_ring: String::new(),
             last_graph_mtime: None,
             last_refresh: Instant::now(),
             last_refresh_display: String::new(),
@@ -3657,6 +3763,7 @@ impl VizApp {
                         self.chat.messages.push(ChatMessage {
                             role: ChatRole::System,
                             text: format!("Error: {}", error_line),
+                            full_text: None,
                             attachments: vec![],
                         });
                     }
@@ -3926,6 +4033,7 @@ impl VizApp {
             self.chat.messages.push(ChatMessage {
                 role,
                 text: msg.content.clone(),
+                full_text: msg.full_response.clone(),
                 attachments: att_names,
             });
         }
@@ -3968,6 +4076,7 @@ impl VizApp {
             self.chat.messages.push(ChatMessage {
                 role: ChatRole::Coordinator,
                 text: msg.content.clone(),
+                full_text: msg.full_response.clone(),
                 attachments: att_names,
             });
         }
@@ -4018,6 +4127,7 @@ impl VizApp {
         self.chat.messages.push(ChatMessage {
             role: ChatRole::User,
             text: text.clone(),
+            full_text: None,
             attachments: att_names,
         });
 

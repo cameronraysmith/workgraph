@@ -411,8 +411,16 @@ fn main() -> Result<()> {
             not_before.as_deref(),
         ),
         Commands::Done { id, converged } => commands::done::run(&workgraph_dir, &id, converged),
-        Commands::Fail { id, reason } => {
-            commands::fail::run(&workgraph_dir, &id, reason.as_deref())
+        Commands::Fail {
+            id,
+            reason,
+            eval_reject,
+        } => {
+            if eval_reject {
+                commands::fail::run_eval_reject(&workgraph_dir, &id, reason.as_deref())
+            } else {
+                commands::fail::run(&workgraph_dir, &id, reason.as_deref())
+            }
         }
         Commands::Abandon { id, reason } => {
             commands::abandon::run(&workgraph_dir, &id, reason.as_deref())
@@ -1227,13 +1235,26 @@ fn main() -> Result<()> {
                 task,
                 evaluator_model,
                 dry_run,
-            } => commands::evaluate::run(
-                &workgraph_dir,
-                &task,
-                evaluator_model.as_deref(),
-                dry_run,
-                cli.json,
-            ),
+                flip,
+            } => {
+                if flip {
+                    commands::evaluate::run_flip(
+                        &workgraph_dir,
+                        &task,
+                        evaluator_model.as_deref(),
+                        dry_run,
+                        cli.json,
+                    )
+                } else {
+                    commands::evaluate::run(
+                        &workgraph_dir,
+                        &task,
+                        evaluator_model.as_deref(),
+                        dry_run,
+                        cli.json,
+                    )
+                }
+            }
             EvaluateCommands::Record {
                 task,
                 score,
@@ -1335,6 +1356,11 @@ fn main() -> Result<()> {
             max_child_tasks,
             max_task_depth,
             viz_edge_color,
+            eval_gate_threshold,
+            eval_gate_all,
+            flip_enabled,
+            flip_inference_model,
+            flip_comparison_model,
         } => {
             // Derive scope from --global/--local flags
             let scope = if global {
@@ -1399,7 +1425,12 @@ fn main() -> Result<()> {
                     && triage_max_log_bytes.is_none()
                     && max_child_tasks.is_none()
                     && max_task_depth.is_none()
-                    && viz_edge_color.is_none())
+                    && viz_edge_color.is_none()
+                    && eval_gate_threshold.is_none()
+                    && eval_gate_all.is_none()
+                    && flip_enabled.is_none()
+                    && flip_inference_model.is_none()
+                    && flip_comparison_model.is_none())
             {
                 commands::config_cmd::show(&workgraph_dir, scope, cli.json)
             } else {
@@ -1433,6 +1464,11 @@ fn main() -> Result<()> {
                     max_child_tasks,
                     max_task_depth,
                     viz_edge_color.as_deref(),
+                    eval_gate_threshold,
+                    eval_gate_all,
+                    flip_enabled,
+                    flip_inference_model.as_deref(),
+                    flip_comparison_model.as_deref(),
                 )
             }
         }

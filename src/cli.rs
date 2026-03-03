@@ -242,6 +242,13 @@ pub enum Commands {
         /// Reason for failure
         #[arg(long)]
         reason: Option<String>,
+
+        /// Reject a done task via evaluation gate. Allows failing a task that
+        /// is already Done because the evaluator determined the work is
+        /// unacceptable. The task transitions to Failed and its dependents
+        /// become blocked.
+        #[arg(long)]
+        eval_reject: bool,
     },
 
     /// Mark a task as abandoned (will not be retried)
@@ -1010,6 +1017,28 @@ pub enum Commands {
         /// Viz edge color style: 'gray' (default), 'white', or 'mixed'
         #[arg(long, name = "viz-edge-color")]
         viz_edge_color: Option<String>,
+
+        /// Set the evaluation gate threshold (0.0–1.0). Evaluations below this
+        /// score will reject (fail) the original task. Only applies to tasks
+        /// tagged 'eval-gate' unless --eval-gate-all is set.
+        #[arg(long, name = "eval-gate-threshold")]
+        eval_gate_threshold: Option<f64>,
+
+        /// Apply eval gate to ALL evaluated tasks, not just those tagged 'eval-gate'
+        #[arg(long, name = "eval-gate-all")]
+        eval_gate_all: Option<bool>,
+
+        /// Enable or disable FLIP (roundtrip intent fidelity) evaluation
+        #[arg(long, name = "flip-enabled")]
+        flip_enabled: Option<bool>,
+
+        /// Model for FLIP inference phase (reconstructing prompt from output)
+        #[arg(long, name = "flip-inference-model")]
+        flip_inference_model: Option<String>,
+
+        /// Model for FLIP comparison phase (scoring similarity)
+        #[arg(long, name = "flip-comparison-model")]
+        flip_comparison_model: Option<String>,
     },
 
     /// Detect and clean up dead agents
@@ -1219,6 +1248,9 @@ pub enum EvaluateCommands {
         /// Show what would be evaluated without spawning the evaluator
         #[arg(long)]
         dry_run: bool,
+        /// Run FLIP (roundtrip intent fidelity) evaluation instead of direct evaluation
+        #[arg(long)]
+        flip: bool,
     },
 
     /// Record an evaluation from an external source

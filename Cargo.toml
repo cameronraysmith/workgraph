@@ -56,6 +56,7 @@ matrix-sdk = { version = "0.16", features = ["e2e-encryption", "sqlite"], option
 
 # Lightweight Matrix integration (just HTTP, no E2EE/sqlite)
 urlencoding = { version = "2.1", optional = true }
+pulldown-cmark = "0.13.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

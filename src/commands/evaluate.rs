@@ -4,9 +4,11 @@ use std::path::Path;
 use std::process::Command;
 
 use workgraph::agency::{
-    self, Evaluation, EvaluatorInput, eval_source, load_all_evaluations_or_warn, load_role,
-    load_tradeoff, record_evaluation, record_evaluation_with_inference, render_evaluator_prompt,
-    render_identity_prompt_rich, resolve_all_components, resolve_outcome,
+    self, Evaluation, EvaluatorInput, FlipComparisonInput, FlipInferenceInput, eval_source,
+    load_all_evaluations_or_warn, load_role, load_tradeoff, record_evaluation,
+    record_evaluation_with_inference, render_evaluator_prompt, render_flip_comparison_prompt,
+    render_flip_inference_prompt, render_identity_prompt_rich, resolve_all_components,
+    resolve_outcome,
 };
 use workgraph::config::Config;
 use workgraph::graph::{LogEntry, Status};
@@ -438,6 +440,12 @@ pub fn run(
         }
     }
 
+    // Step 8.5: Eval gate — reject the original task if score is below threshold
+    let rejected = check_eval_gate(dir, task_id, &task.tags, &evaluation, &config, json)?;
+    if rejected && !json {
+        println!("  REJECTED: task '{}' failed by evaluation gate", task_id);
+    }
+
     // Step 9: Record evaluator agent performance (if evaluator_agent is configured)
     // This tracks the evaluator's own performance: did it produce valid output,
     // was the score in range, etc. Enables performance history for the evaluator.
@@ -486,6 +494,358 @@ pub fn run(
     }
 
     Ok(())
+}
+
+/// Run FLIP (Fidelity via Latent Intent Probing) evaluation of a completed task.
+///
+/// Two-phase roundtrip intent fidelity evaluation:
+/// 1. Inference: An LLM sees only the task output and reconstructs what the prompt was
+/// 2. Comparison: Another LLM compares the inferred prompt to the actual prompt
+pub fn run_flip(
+    dir: &Path,
+    task_id: &str,
+    evaluator_model: Option<&str>,
+    dry_run: bool,
+    json: bool,
+) -> Result<()> {
+    let path = super::graph_path(dir);
+    if !path.exists() {
+        bail!("Workgraph not initialized. Run `wg init` first.");
+    }
+
+    let graph = load_graph(&path)?;
+    let task = graph.get_task_or_err(task_id)?;
+
+    // Verify task is done or failed
+    match task.status {
+        Status::Done | Status::Failed => {}
+        ref other => {
+            bail!(
+                "Task '{}' has status {:?} — must be done or failed to evaluate",
+                task_id,
+                other
+            );
+        }
+    }
+
+    // Check FLIP is enabled or task is tagged
+    let config = Config::load_or_default(dir);
+    let flip_enabled = config.agency.flip_enabled || task.tags.iter().any(|t| t == "flip-eval");
+    if !flip_enabled {
+        bail!(
+            "FLIP evaluation is not enabled. Enable with `wg config --flip-enabled true` \
+             or tag the task with 'flip-eval'."
+        );
+    }
+
+    // Load agent identity (same as regular evaluation)
+    let agency_dir = dir.join("agency");
+    let roles_dir = agency_dir.join("cache/roles");
+    let tradeoffs_dir = agency_dir.join("primitives/tradeoffs");
+    let agents_dir = agency_dir.join("cache/agents");
+
+    let (resolved_agent, role, resolved_tradeoff, agent_role_id, agent_tradeoff_id) =
+        if let Some(ref agent_hash) = task.agent {
+            match agency::find_agent_by_prefix(&agents_dir, agent_hash) {
+                Ok(agent) => {
+                    let role_path = roles_dir.join(format!("{}.yaml", agent.role_id));
+                    let tradeoff_path = tradeoffs_dir.join(format!("{}.yaml", agent.tradeoff_id));
+
+                    let role = if role_path.exists() {
+                        Some(load_role(&role_path).context("Failed to load role")?)
+                    } else {
+                        None
+                    };
+
+                    let resolved_tradeoff = if tradeoff_path.exists() {
+                        Some(load_tradeoff(&tradeoff_path).context("Failed to load tradeoff")?)
+                    } else {
+                        None
+                    };
+
+                    let role_id = agent.role_id.clone();
+                    let tradeoff_id = agent.tradeoff_id.clone();
+                    (Some(agent), role, resolved_tradeoff, role_id, tradeoff_id)
+                }
+                Err(_) => (
+                    None,
+                    None,
+                    None,
+                    "unknown".to_string(),
+                    "unknown".to_string(),
+                ),
+            }
+        } else {
+            (
+                None,
+                None,
+                None,
+                "unknown".to_string(),
+                "unknown".to_string(),
+            )
+        };
+
+    // Collect artifacts and compute diff
+    let artifacts = &task.artifacts;
+    let log_entries = &task.log;
+    let artifact_diff = compute_artifact_diff(artifacts, task.started_at.as_deref());
+
+    // Determine models for each phase
+    let inference_model = evaluator_model
+        .map(std::string::ToString::to_string)
+        .or(config.agency.flip_inference_model.clone())
+        .unwrap_or_else(|| "sonnet".to_string());
+
+    let comparison_model = config
+        .agency
+        .flip_comparison_model
+        .clone()
+        .unwrap_or_else(|| "haiku".to_string());
+
+    // --- Phase 1: Inference ---
+    let inference_input = FlipInferenceInput {
+        agent: resolved_agent.as_ref(),
+        role: role.as_ref(),
+        tradeoff: resolved_tradeoff.as_ref(),
+        artifacts,
+        log_entries,
+        started_at: task.started_at.as_deref(),
+        completed_at: task.completed_at.as_deref(),
+        artifact_diff: artifact_diff.as_deref(),
+    };
+
+    let inference_prompt = render_flip_inference_prompt(&inference_input);
+
+    if dry_run {
+        println!("=== Dry Run: wg evaluate {} --flip ===\n", task_id);
+        println!("Task: {} ({})", task.title, task_id);
+        println!("Status: {:?}", task.status);
+        println!("Inference model: {}", inference_model);
+        println!("Comparison model: {}", comparison_model);
+        println!("Artifacts: {}", artifacts.len());
+        println!("Log entries: {}", log_entries.len());
+        println!("\n--- Phase 1: Inference Prompt ---\n");
+        println!("{}", inference_prompt);
+        println!("\n--- Phase 2: Comparison prompt will be generated from Phase 1 output ---\n");
+        return Ok(());
+    }
+
+    // Phase 1: Run inference
+    println!(
+        "FLIP Phase 1: Inferring prompt from output (model: '{}')...",
+        inference_model
+    );
+
+    let inference_output = Command::new("claude")
+        .env_remove("CLAUDE_CODE_ENTRYPOINT")
+        .env_remove("CLAUDECODE")
+        .arg("--model")
+        .arg(&inference_model)
+        .arg("--print")
+        .arg("--dangerously-skip-permissions")
+        .arg(&inference_prompt)
+        .output()
+        .context("Failed to run claude CLI for FLIP inference")?;
+
+    if !inference_output.status.success() {
+        let stderr = String::from_utf8_lossy(&inference_output.stderr);
+        bail!(
+            "FLIP inference evaluator failed (exit code {:?}):\n{}",
+            inference_output.status.code(),
+            stderr
+        );
+    }
+
+    let raw_inference = String::from_utf8_lossy(&inference_output.stdout);
+    let inference_json = extract_json(&raw_inference)
+        .context("Failed to extract JSON from FLIP inference output")?;
+
+    let parsed_inference: FlipInferenceOutput = serde_json::from_str(&inference_json)
+        .with_context(|| format!("Failed to parse FLIP inference JSON:\n{}", inference_json))?;
+
+    println!(
+        "  Inferred prompt length: {} chars",
+        parsed_inference.inferred_prompt.len()
+    );
+
+    // --- Phase 2: Comparison ---
+    let comparison_input = FlipComparisonInput {
+        actual_title: &task.title,
+        actual_description: task.description.as_deref(),
+        inferred_prompt: &parsed_inference.inferred_prompt,
+    };
+
+    let comparison_prompt = render_flip_comparison_prompt(&comparison_input);
+
+    println!(
+        "FLIP Phase 2: Comparing prompts (model: '{}')...",
+        comparison_model
+    );
+
+    let comparison_output = Command::new("claude")
+        .env_remove("CLAUDE_CODE_ENTRYPOINT")
+        .env_remove("CLAUDECODE")
+        .arg("--model")
+        .arg(&comparison_model)
+        .arg("--print")
+        .arg("--dangerously-skip-permissions")
+        .arg(&comparison_prompt)
+        .output()
+        .context("Failed to run claude CLI for FLIP comparison")?;
+
+    if !comparison_output.status.success() {
+        let stderr = String::from_utf8_lossy(&comparison_output.stderr);
+        bail!(
+            "FLIP comparison evaluator failed (exit code {:?}):\n{}",
+            comparison_output.status.code(),
+            stderr
+        );
+    }
+
+    let raw_comparison = String::from_utf8_lossy(&comparison_output.stdout);
+    let comparison_json = extract_json(&raw_comparison)
+        .context("Failed to extract JSON from FLIP comparison output")?;
+
+    let parsed_comparison: FlipComparisonOutput = serde_json::from_str(&comparison_json)
+        .with_context(|| format!("Failed to parse FLIP comparison JSON:\n{}", comparison_json))?;
+
+    // Build the Evaluation record
+    let agent_id = resolved_agent
+        .as_ref()
+        .map(|a| a.id.clone())
+        .unwrap_or_default();
+
+    let task_model = extract_spawn_model(&task.log).or_else(|| task.model.clone());
+
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let eval_id = format!("flip-{}-{}", task_id, timestamp.replace(':', "-"));
+
+    // Store inferred prompt and comparison details in notes (JSON-encoded metadata)
+    let flip_metadata = serde_json::json!({
+        "inferred_prompt": parsed_inference.inferred_prompt,
+        "inference_model": inference_model,
+        "comparison_model": comparison_model,
+    });
+
+    let notes = format!(
+        "{}\n\nFLIP metadata: {}",
+        parsed_comparison.notes,
+        serde_json::to_string(&flip_metadata).unwrap_or_default()
+    );
+
+    let evaluation = Evaluation {
+        id: eval_id,
+        task_id: task_id.to_string(),
+        agent_id,
+        role_id: agent_role_id.clone(),
+        tradeoff_id: agent_tradeoff_id.clone(),
+        score: parsed_comparison.flip_score,
+        dimensions: parsed_comparison.dimensions,
+        notes,
+        evaluator: format!("flip:{}+{}", inference_model, comparison_model),
+        timestamp,
+        model: task_model.clone(),
+        source: eval_source::FLIP.to_string(),
+    };
+
+    // Save evaluation
+    if agent_role_id != "unknown" && agent_tradeoff_id != "unknown" {
+        let eval_path = record_evaluation_with_inference(&evaluation, &agency_dir, &config.agency)
+            .context("Failed to record FLIP evaluation")?;
+
+        if json {
+            let out = serde_json::json!({
+                "task_id": task_id,
+                "evaluation_id": evaluation.id,
+                "flip_score": evaluation.score,
+                "dimensions": evaluation.dimensions,
+                "inferred_prompt": parsed_inference.inferred_prompt,
+                "notes": parsed_comparison.notes,
+                "evaluator": evaluation.evaluator,
+                "model": evaluation.model,
+                "source": "flip",
+                "path": eval_path.display().to_string(),
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        } else {
+            println!("\n=== FLIP Evaluation Complete ===");
+            println!("Task:       {} ({})", task.title, task_id);
+            if let Some(ref m) = evaluation.model {
+                println!("Model:      {}", m);
+            }
+            println!("FLIP Score: {:.2}", evaluation.score);
+            if let Some(s) = evaluation.dimensions.get("semantic_match") {
+                println!("  semantic_match:        {:.2}", s);
+            }
+            if let Some(c) = evaluation.dimensions.get("requirement_coverage") {
+                println!("  requirement_coverage:  {:.2}", c);
+            }
+            if let Some(s) = evaluation.dimensions.get("specificity_match") {
+                println!("  specificity_match:     {:.2}", s);
+            }
+            if let Some(h) = evaluation.dimensions.get("hallucination_rate") {
+                println!("  hallucination_rate:    {:.2}", h);
+            }
+            println!("Evaluator:  {}", evaluation.evaluator);
+            println!("Saved to:   {}", eval_path.display());
+
+            // Show a snippet of the inferred prompt
+            let snippet = if parsed_inference.inferred_prompt.len() > 200 {
+                format!("{}...", &parsed_inference.inferred_prompt[..200])
+            } else {
+                parsed_inference.inferred_prompt.clone()
+            };
+            println!("\nInferred prompt (preview):\n  {}", snippet);
+        }
+    } else {
+        agency::init(&agency_dir)?;
+        let eval_path = agency::save_evaluation(&evaluation, &agency_dir.join("evaluations"))
+            .context("Failed to save FLIP evaluation")?;
+
+        if json {
+            let out = serde_json::json!({
+                "task_id": task_id,
+                "evaluation_id": evaluation.id,
+                "flip_score": evaluation.score,
+                "dimensions": evaluation.dimensions,
+                "inferred_prompt": parsed_inference.inferred_prompt,
+                "notes": parsed_comparison.notes,
+                "evaluator": evaluation.evaluator,
+                "model": evaluation.model,
+                "source": "flip",
+                "path": eval_path.display().to_string(),
+                "warning": "No identity assigned — performance records not updated",
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        } else {
+            println!("\n=== FLIP Evaluation Complete ===");
+            println!("Task:       {} ({})", task.title, task_id);
+            println!("FLIP Score: {:.2}", evaluation.score);
+            println!("Evaluator:  {}", evaluation.evaluator);
+            println!("Saved to:   {}", eval_path.display());
+            println!(
+                "Warning: no identity assigned — role/tradeoff performance records not updated"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Output shape for FLIP inference phase.
+#[derive(serde::Deserialize)]
+struct FlipInferenceOutput {
+    inferred_prompt: String,
+}
+
+/// Output shape for FLIP comparison phase.
+#[derive(serde::Deserialize)]
+struct FlipComparisonOutput {
+    flip_score: f64,
+    #[serde(default)]
+    dimensions: HashMap<String, f64>,
+    #[serde(default)]
+    notes: String,
 }
 
 /// Record an evaluation from an external source.
@@ -804,6 +1164,83 @@ fn extract_json(raw: &str) -> Option<String> {
     }
 
     None
+}
+
+/// Check the eval gate: if a threshold is configured and the task is gated,
+/// reject (fail) the original task when the evaluation score is below the
+/// threshold. Returns `true` if the task was rejected.
+///
+/// Eval gate applies when:
+/// 1. `config.agency.eval_gate_threshold` is set, AND
+/// 2. Either `config.agency.eval_gate_all` is true, OR the task has the
+///    "eval-gate" tag.
+///
+/// When rejecting, this function:
+/// - Fails the original task with a descriptive reason
+/// - Warns about any downstream tasks that are already in-progress
+fn check_eval_gate(
+    dir: &Path,
+    task_id: &str,
+    task_tags: &[String],
+    evaluation: &Evaluation,
+    config: &Config,
+    json: bool,
+) -> Result<bool> {
+    let threshold = match config.agency.eval_gate_threshold {
+        Some(t) => t,
+        None => return Ok(false), // No threshold configured
+    };
+
+    // Check if this task is gated
+    let is_gated = config.agency.eval_gate_all || task_tags.iter().any(|t| t == "eval-gate");
+    if !is_gated {
+        return Ok(false);
+    }
+
+    // Check if score is below threshold
+    if evaluation.score >= threshold {
+        return Ok(false); // Score is acceptable
+    }
+
+    // Score is below threshold — reject the task
+    let reason = format!(
+        "evaluation rejected: score {:.2} below threshold {:.2} ({})",
+        evaluation.score, threshold, evaluation.notes
+    );
+
+    // Warn about in-progress dependents before rejecting
+    let graph_path = super::graph_path(dir);
+    if graph_path.exists() {
+        let graph = workgraph::parser::load_graph(&graph_path)?;
+        let in_progress_dependents: Vec<_> = graph
+            .tasks()
+            .filter(|t| {
+                t.after.contains(&task_id.to_string())
+                    && t.status == workgraph::graph::Status::InProgress
+            })
+            .map(|t| t.id.clone())
+            .collect();
+
+        if !in_progress_dependents.is_empty() {
+            let warning = format!(
+                "Warning: {} dependent task(s) already in-progress when eval gate rejected '{}': [{}]. \
+                 These agents will NOT be killed but new dependents will be blocked.",
+                in_progress_dependents.len(),
+                task_id,
+                in_progress_dependents.join(", ")
+            );
+            if json {
+                eprintln!("{}", warning);
+            } else {
+                println!("{}", warning);
+            }
+        }
+    }
+
+    // Reject the original task
+    super::fail::run_eval_reject(dir, task_id, Some(&reason))?;
+
+    Ok(true)
 }
 
 #[cfg(test)]

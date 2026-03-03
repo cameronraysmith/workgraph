@@ -14,6 +14,8 @@ use super::state::{
 use workgraph::AgentStatus;
 use workgraph::graph::{TokenUsage, format_tokens};
 
+use crate::tui::markdown::markdown_to_lines;
+
 /// Minimum terminal width for side-by-side right panel layout.
 const SIDE_MIN_WIDTH: u16 = 100;
 
@@ -842,7 +844,11 @@ fn draw_scrollbar(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     };
     app.last_graph_scrollbar_area = sb_area;
 
-    let mut state = ScrollbarState::new(app.scroll.content_height).position(app.scroll.offset_y);
+    let max_scroll = app
+        .scroll
+        .content_height
+        .saturating_sub(app.scroll.viewport_height);
+    let mut state = ScrollbarState::new(max_scroll).position(app.scroll.offset_y);
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
     frame.render_stateful_widget(scrollbar, area, &mut state);
 }
@@ -1033,11 +1039,73 @@ fn draw_detail_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     }
     let _ = current_section; // suppress unused warning
 
-    // Word-wrap all content lines to fit the panel width.
+    // Convert visible lines to styled Lines with markdown for text-heavy sections.
     let wrap_width = area.width as usize;
-    let wrapped: Vec<(String, bool)> = wrap_detail_lines(&visible_lines, wrap_width);
+    let mut all_lines: Vec<Line> = Vec::new();
 
-    let total_lines = wrapped.len();
+    // Track whether we're in a text-heavy section (Description, Prompt, Output).
+    let is_md_header =
+        |h: &str| h.contains("Description") || h.contains("Prompt") || h.contains("Output");
+    let mut in_md_section = false;
+    let mut md_buffer: Vec<String> = Vec::new();
+
+    // Flush accumulated markdown content lines into styled, wrapped output.
+    let flush_md = |buf: &mut Vec<String>, out: &mut Vec<Line>, w: usize| {
+        if buf.is_empty() {
+            return;
+        }
+        let md_text = buf.join("\n");
+        buf.clear();
+        let indent_w: usize = 2;
+        let md_w = w.saturating_sub(indent_w);
+        if md_w == 0 {
+            out.push(Line::from(Span::raw(md_text)));
+            return;
+        }
+        let md_lines = markdown_to_lines(&md_text, md_w);
+        let wrapped = wrap_line_spans(&md_lines, md_w);
+        for line in wrapped {
+            let mut spans = vec![Span::raw("  ".to_string())];
+            spans.extend(line.spans.into_iter());
+            out.push(Line::from(spans));
+        }
+    };
+
+    for line in &visible_lines {
+        let is_header = line.starts_with("▸ ──") || line.starts_with("▾ ──");
+
+        if is_header {
+            flush_md(&mut md_buffer, &mut all_lines, wrap_width);
+            in_md_section = is_md_header(line);
+            all_lines.push(Line::from(Span::styled(
+                line.clone(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        } else if line.is_empty() {
+            flush_md(&mut md_buffer, &mut all_lines, wrap_width);
+            all_lines.push(Line::from(""));
+            in_md_section = false;
+        } else if in_md_section {
+            // Strip "  " indent; will re-add after markdown rendering.
+            let content = line.strip_prefix("  ").unwrap_or(line);
+            md_buffer.push(content.to_string());
+        } else {
+            // Non-markdown section: word-wrap as plain text.
+            if line.len() > wrap_width && wrap_width > 0 {
+                let wrapped = word_wrap(line, wrap_width);
+                for w in wrapped {
+                    all_lines.push(Line::from(Span::raw(w)));
+                }
+            } else {
+                all_lines.push(Line::from(Span::raw(line.clone())));
+            }
+        }
+    }
+    flush_md(&mut md_buffer, &mut all_lines, wrap_width);
+
+    let total_lines = all_lines.len();
     let viewport_h = area.height as usize;
 
     // Cache wrapped line count and viewport height for scroll calculations.
@@ -1053,21 +1121,7 @@ fn draw_detail_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     let start = app.hud_scroll;
     let end = (start + viewport_h).min(total_lines);
 
-    let lines: Vec<Line> = wrapped[start..end]
-        .iter()
-        .map(|(s, is_header)| {
-            if *is_header {
-                Line::from(Span::styled(
-                    s.clone(),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ))
-            } else {
-                Line::from(Span::raw(s.clone()))
-            }
-        })
-        .collect();
+    let lines: Vec<Line> = all_lines[start..end].to_vec();
 
     let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, area);
@@ -1240,34 +1294,58 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
             rendered_lines.push(Line::from(""));
             line_to_message.push(Some(msg_idx));
         } else {
-            // Expanded (or non-coordinator): render full content.
-            let mut first_line = true;
+            // Expanded (or non-coordinator): render full content with markdown.
+            // For expanded coordinator messages with full_text, use the full response.
+            let display_text = if is_coordinator && is_expanded {
+                msg.full_text.as_deref().unwrap_or(&msg.text)
+            } else {
+                &msg.text
+            };
 
-            for paragraph in msg.text.trim_end_matches('\n').split('\n') {
-                if paragraph.is_empty() {
-                    rendered_lines.push(Line::from(""));
-                    line_to_message.push(Some(msg_idx));
-                    continue;
-                }
-                let wrapped = word_wrap(paragraph, text_width);
-                for wl in wrapped {
-                    if first_line {
+            // Render markdown to styled lines, then word-wrap.
+            let md_lines = markdown_to_lines(display_text, text_width);
+            let wrapped = if md_lines.is_empty() {
+                vec![Line::from("")]
+            } else {
+                wrap_line_spans(&md_lines, text_width)
+            };
+
+            let mut first_line = true;
+            for line in &wrapped {
+                let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+
+                // For expanded coordinator messages, detect tool call box-drawing lines.
+                let is_tool_line = is_coordinator
+                    && is_expanded
+                    && (line_text.starts_with("┌─")
+                        || line_text.starts_with("└─")
+                        || line_text.starts_with("│ "));
+
+                if first_line {
+                    let mut spans = vec![Span::styled(prefix.clone(), role_style)];
+                    spans.extend(line.spans.iter().cloned());
+                    rendered_lines.push(Line::from(spans));
+                    first_line = false;
+                } else if is_coordinator && is_expanded {
+                    if is_tool_line {
+                        // Tool call lines: dim styling
                         rendered_lines.push(Line::from(vec![
-                            Span::styled(prefix.clone(), role_style),
-                            Span::raw(wl.to_string()),
-                        ]));
-                        first_line = false;
-                    } else if is_coordinator && is_expanded {
-                        // Expanded coordinator: show detail lines with │ gutter.
-                        rendered_lines.push(Line::from(vec![
-                            Span::styled("  │ ", Style::default().fg(Color::DarkGray)),
-                            Span::raw(wl.to_string()),
+                            Span::styled("  ", Style::default()),
+                            Span::styled(line_text, Style::default().fg(Color::DarkGray)),
                         ]));
                     } else {
-                        rendered_lines.push(Line::from(Span::raw(format!("{}{}", indent, wl))));
+                        // Regular text lines in expanded coordinator: │ gutter
+                        let mut spans =
+                            vec![Span::styled("  │ ", Style::default().fg(Color::DarkGray))];
+                        spans.extend(line.spans.iter().cloned());
+                        rendered_lines.push(Line::from(spans));
                     }
-                    line_to_message.push(Some(msg_idx));
+                } else {
+                    let mut spans = vec![Span::raw(indent.clone())];
+                    spans.extend(line.spans.iter().cloned());
+                    rendered_lines.push(Line::from(spans));
                 }
+                line_to_message.push(Some(msg_idx));
             }
             // Show attachment indicators.
             for att_name in &msg.attachments {
@@ -1351,7 +1429,13 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
 
     // Scrollbar if content overflows (auto-hides after 2 seconds of inactivity).
     if total_lines > viewport_h && app.panel_scrollbar_visible() {
-        draw_panel_scrollbar(frame, app, msg_area, total_lines, scroll_from_top);
+        draw_panel_scrollbar(
+            frame,
+            app,
+            msg_area,
+            total_lines.saturating_sub(viewport_h),
+            scroll_from_top,
+        );
     }
 
     // Input area.
@@ -1556,8 +1640,12 @@ fn count_visual_lines(input: &str, usable_width: usize) -> usize {
     count
 }
 
-/// Build the visual lines for the input box, handling newlines and wrapping.
+/// Build the visual lines for the input box, handling newlines and word wrapping.
 /// Returns (visual_lines, cursor_visual_line, cursor_column_in_visual_line).
+///
+/// Wraps at word boundaries when possible: if a line exceeds `usable_width`, it
+/// breaks at the last space before the limit. Falls back to hard character break
+/// if a single word is longer than the width.
 fn build_input_visual_lines(
     input: &str,
     cursor_byte: usize,
@@ -1587,7 +1675,30 @@ fn build_input_visual_lines(
         } else {
             let mut pos = 0;
             while pos < chars.len() {
-                let end = (pos + usable_width).min(chars.len());
+                let remaining = chars.len() - pos;
+                let end = if remaining <= usable_width {
+                    // Fits on one line — no wrapping needed.
+                    chars.len()
+                } else {
+                    // Try to break at a word boundary (last space within usable_width).
+                    let hard_end = pos + usable_width;
+                    let mut break_at = hard_end;
+                    // Search backward from hard_end for a space to break at.
+                    let mut found_space = false;
+                    for i in (pos..hard_end).rev() {
+                        if chars[i] == ' ' {
+                            break_at = i + 1; // break after the space
+                            found_space = true;
+                            break;
+                        }
+                    }
+                    if !found_space {
+                        // No space found — hard break at usable_width.
+                        break_at = hard_end;
+                    }
+                    break_at
+                };
+
                 let chunk: String = chars[pos..end].iter().collect();
                 let chunk_start = global_char_pos + pos;
                 let chunk_end = global_char_pos + end;
@@ -1671,7 +1782,7 @@ fn draw_log_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
             }
         } else {
             // No timestamp — plain word wrap.
-            if wrap_width > 0 && s.len() > wrap_width {
+            if wrap_width > 0 && s.width() > wrap_width {
                 let wrapped = word_wrap(s, wrap_width);
                 for wl in wrapped {
                     wrapped_lines.push(Line::from(wl));
@@ -1780,7 +1891,7 @@ fn draw_coord_log_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
             }
             continue;
         }
-        if wrap_width > 0 && s.len() > wrap_width {
+        if wrap_width > 0 && s.width() > wrap_width {
             let wrapped = word_wrap(s, wrap_width);
             for wl in wrapped {
                 wrapped_lines.push(Line::from(wl));
@@ -2074,12 +2185,17 @@ fn draw_messages_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
                 body_style,
             )));
         } else {
-            let wrapped = word_wrap(&clean_body, text_width);
-            for wl in &wrapped {
-                wrapped_lines.push(Line::from(Span::styled(
-                    format!("{}{}", body_indent, wl),
-                    body_style,
-                )));
+            // Render markdown to styled lines, then word-wrap.
+            let md_lines = markdown_to_lines(&clean_body, text_width);
+            let body_wrapped = if md_lines.is_empty() {
+                vec![Line::from("")]
+            } else {
+                wrap_line_spans(&md_lines, text_width)
+            };
+            for line in &body_wrapped {
+                let mut spans = vec![Span::raw(body_indent.clone())];
+                spans.extend(line.spans.iter().cloned());
+                wrapped_lines.push(Line::from(spans));
             }
         }
 
@@ -2106,7 +2222,13 @@ fn draw_messages_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     frame.render_widget(paragraph, msg_area);
 
     if total_lines > viewport_h && app.panel_scrollbar_visible() {
-        draw_panel_scrollbar(frame, app, msg_area, total_lines, scroll);
+        draw_panel_scrollbar(
+            frame,
+            app,
+            msg_area,
+            total_lines.saturating_sub(viewport_h),
+            scroll,
+        );
     }
 
     // Input area.
@@ -2209,71 +2331,43 @@ fn draw_message_input(frame: &mut Frame, app: &VizApp, area: Rect) {
     }
 }
 
-/// Wrap HUD detail lines for rendering, preserving section headers.
-/// Returns (line_text, is_header) tuples. Section headers (starting with "──" or "▸/▾ ──")
-/// are never wrapped. Other lines are word-wrapped to fit `max_width`, with
-/// continuation lines preserving any leading indent from the original line.
-fn wrap_detail_lines(lines: &[String], max_width: usize) -> Vec<(String, bool)> {
-    let is_section_header =
-        |l: &str| l.starts_with("──") || l.starts_with("▸ ──") || l.starts_with("▾ ──");
-    let mut out = Vec::new();
-    if max_width == 0 {
-        for l in lines {
-            let is_header = is_section_header(l);
-            out.push((l.clone(), is_header));
-        }
-        return out;
-    }
-    for line in lines {
-        let is_header = is_section_header(line);
-        if is_header || line.len() <= max_width || line.trim().is_empty() {
-            out.push((line.clone(), is_header));
-        } else {
-            // Detect leading whitespace to use as continuation indent.
-            let indent_len = line.len() - line.trim_start().len();
-            let indent: String = line.chars().take(indent_len).collect();
-            let content = &line[indent.len()..];
-            // Wrap content to fit within max_width minus indent.
-            let wrap_w = max_width.saturating_sub(indent.len());
-            let wrapped = word_wrap(content, wrap_w);
-            for w in &wrapped {
-                out.push((format!("{}{}", indent, w), false));
-            }
-        }
-    }
-    out
-}
-
-/// Simple word-wrap: break text into lines that fit within `max_width` characters.
+/// Simple word-wrap: break text into lines that fit within `max_width` display columns.
 /// Words longer than `max_width` are hard-broken across multiple lines.
-/// Uses char count (not byte length) so multi-byte UTF-8 characters are handled safely.
+/// Uses display width (UnicodeWidthStr) so wide characters are accounted for correctly.
 fn word_wrap(text: &str, max_width: usize) -> Vec<String> {
     if max_width == 0 {
         return vec![text.to_string()];
     }
 
-    /// Hard-break a word that exceeds `max_width` chars, pushing complete
+    /// Hard-break a word that exceeds `max_width` display columns, pushing complete
     /// chunks to `lines` and returning any leftover as a String.
     fn hard_break(word: &str, max_width: usize, lines: &mut Vec<String>) -> String {
-        let chars = word.chars();
         let mut buf = String::new();
-        for c in chars {
-            buf.push(c);
-            if buf.chars().count() == max_width {
+        let mut buf_width = 0usize;
+        for c in word.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if buf_width + cw > max_width && !buf.is_empty() {
                 lines.push(std::mem::take(&mut buf));
+                buf_width = 0;
+            }
+            buf.push(c);
+            buf_width += cw;
+            if buf_width == max_width {
+                lines.push(std::mem::take(&mut buf));
+                buf_width = 0;
             }
         }
-        buf // leftover (< max_width chars)
+        buf // leftover (< max_width columns)
     }
 
-    let char_len = |s: &str| s.chars().count();
+    let display_width = |s: &str| s.width();
 
     let mut lines = Vec::new();
     let mut current_line = String::new();
 
     for word in text.split_whitespace() {
-        let wlen = char_len(word);
-        let clen = char_len(&current_line);
+        let wlen = display_width(word);
+        let clen = display_width(&current_line);
 
         if current_line.is_empty() {
             if wlen <= max_width {
@@ -2318,8 +2412,8 @@ fn wrap_line_spans<'a>(lines: &[Line<'a>], max_width: usize) -> Vec<Line<'a>> {
     for line in lines {
         // Compute the total display width of this line.
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        let char_len = text.chars().count();
-        if char_len <= max_width || text.trim().is_empty() {
+        let text_display_width = text.width();
+        if text_display_width <= max_width || text.trim().is_empty() {
             out.push(line.clone());
             continue;
         }
@@ -2329,11 +2423,12 @@ fn wrap_line_spans<'a>(lines: &[Line<'a>], max_width: usize) -> Vec<Line<'a>> {
             let span = &line.spans[0];
             let style = span.style;
             let content = span.content.as_ref();
-            // Detect leading whitespace indent.
-            let indent_len = content.len() - content.trim_start().len();
-            let indent: String = content.chars().take(indent_len).collect();
-            let body = &content[indent.len()..];
-            let wrap_w = max_width.saturating_sub(indent_len);
+            // Detect leading whitespace indent (display width).
+            let trimmed = content.trim_start();
+            let indent: String = content[..content.len() - trimmed.len()].to_string();
+            let indent_display_w = indent.width();
+            let body = trimmed;
+            let wrap_w = max_width.saturating_sub(indent_display_w);
             let wrapped = word_wrap(body, wrap_w);
             for w in &wrapped {
                 out.push(Line::from(Span::styled(format!("{}{}", indent, w), style)));
@@ -3126,9 +3221,9 @@ fn action_hints_parts(app: &VizApp) -> (&str, &str, Color, Vec<(&str, &str)>) {
                 Color::Magenta,
                 vec![
                     ("Enter", "send"),
+                    ("S-Enter", "newline"),
+                    ("Ctrl+K/Y", "kill/yank"),
                     ("Esc", "exit"),
-                    ("Ctrl+A/E", "home/end"),
-                    ("Ctrl+K", "kill"),
                 ],
             )
         }
@@ -3138,9 +3233,9 @@ fn action_hints_parts(app: &VizApp) -> (&str, &str, Color, Vec<(&str, &str)>) {
             Color::Yellow,
             vec![
                 ("Enter", "send"),
+                ("S-Enter", "newline"),
+                ("Ctrl+K/Y", "kill/yank"),
                 ("Esc", "exit"),
-                ("Ctrl+A/E", "home/end"),
-                ("Ctrl+K", "kill"),
             ],
         ),
         InputMode::TaskForm => (
@@ -3312,7 +3407,7 @@ fn draw_status_bar(frame: &mut Frame, app: &VizApp, area: Rect) {
         // Scroll position
         spans.push(Span::styled("  ", Style::default()));
         spans.push(Span::styled(
-            format!("L{}/{}", app.scroll.offset_y + 1, app.scroll.content_height),
+            format!("L{}/{}", app.scroll.offset_y + 1, app.visible_line_count()),
             Style::default().fg(Color::DarkGray),
         ));
 
@@ -3361,11 +3456,7 @@ fn draw_status_bar(frame: &mut Frame, app: &VizApp, area: Rect) {
     // Scroll position
     spans.push(Span::styled("| ", Style::default().fg(Color::DarkGray)));
     spans.push(Span::styled(
-        format!(
-            "L{}/{} ",
-            app.scroll.offset_y + 1,
-            app.scroll.content_height
-        ),
+        format!("L{}/{} ", app.scroll.offset_y + 1, app.visible_line_count()),
         Style::default().fg(Color::White),
     ));
 

@@ -39,13 +39,18 @@ pub struct ChatMessage {
     pub timestamp: String,
     /// "user" or "coordinator"
     pub role: String,
-    /// Message content (free-form text, may contain markdown)
+    /// Message content (free-form text, may contain markdown).
+    /// For coordinator messages this is the summary (last text block).
     pub content: String,
     /// Correlates a user request with the coordinator's response.
     pub request_id: String,
     /// Optional file attachments.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<Attachment>,
+    /// Full response text including tool calls and their outputs (coordinator messages only).
+    /// When present, the UI can show this in an expanded view instead of just `content`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_response: Option<String>,
 }
 
 /// Directory for chat files.
@@ -83,6 +88,7 @@ fn append_message(
     content: &str,
     request_id: &str,
     attachments: Vec<Attachment>,
+    full_response: Option<String>,
 ) -> Result<u64> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -136,6 +142,7 @@ fn append_message(
         content: content.to_string(),
         request_id: request_id.to_string(),
         attachments,
+        full_response,
     };
 
     let mut json = serde_json::to_string(&msg).context("Failed to serialize chat message")?;
@@ -218,7 +225,7 @@ fn write_cursor_file(path: &Path, cursor: u64) -> Result<()> {
 /// Returns the assigned inbox message ID.
 pub fn append_inbox(workgraph_dir: &Path, content: &str, request_id: &str) -> Result<u64> {
     let path = inbox_path(workgraph_dir);
-    append_message(&path, "user", content, request_id, vec![])
+    append_message(&path, "user", content, request_id, vec![], None)
 }
 
 /// Append a user message with attachments to the inbox.
@@ -231,7 +238,7 @@ pub fn append_inbox_with_attachments(
     attachments: Vec<Attachment>,
 ) -> Result<u64> {
     let path = inbox_path(workgraph_dir);
-    append_message(&path, "user", content, request_id, attachments)
+    append_message(&path, "user", content, request_id, attachments, None)
 }
 
 /// Append a coordinator response to the outbox.
@@ -239,7 +246,28 @@ pub fn append_inbox_with_attachments(
 /// Returns the assigned outbox message ID.
 pub fn append_outbox(workgraph_dir: &Path, content: &str, request_id: &str) -> Result<u64> {
     let path = outbox_path(workgraph_dir);
-    append_message(&path, "coordinator", content, request_id, vec![])
+    append_message(&path, "coordinator", content, request_id, vec![], None)
+}
+
+/// Append a coordinator response with full response text to the outbox.
+///
+/// `content` is the summary (last text block), shown in collapsed view.
+/// `full_response` is the complete response including tool calls, shown in expanded view.
+pub fn append_outbox_full(
+    workgraph_dir: &Path,
+    content: &str,
+    full_response: Option<String>,
+    request_id: &str,
+) -> Result<u64> {
+    let path = outbox_path(workgraph_dir);
+    append_message(
+        &path,
+        "coordinator",
+        content,
+        request_id,
+        vec![],
+        full_response,
+    )
 }
 
 /// Read all inbox messages (user → coordinator).

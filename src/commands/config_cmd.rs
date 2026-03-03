@@ -81,6 +81,21 @@ pub fn show(dir: &Path, scope: Option<ConfigScope>, json: bool) -> Result<()> {
         if let Some(max_bytes) = config.agency.triage_max_log_bytes {
             println!("  triage_max_log_bytes = {}", max_bytes);
         }
+        if let Some(threshold) = config.agency.eval_gate_threshold {
+            println!("  eval_gate_threshold = {}", threshold);
+        }
+        if config.agency.eval_gate_all {
+            println!("  eval_gate_all = {}", config.agency.eval_gate_all);
+        }
+        if config.agency.flip_enabled {
+            println!("  flip_enabled = {}", config.agency.flip_enabled);
+        }
+        if let Some(ref model) = config.agency.flip_inference_model {
+            println!("  flip_inference_model = \"{}\"", model);
+        }
+        if let Some(ref model) = config.agency.flip_comparison_model {
+            println!("  flip_comparison_model = \"{}\"", model);
+        }
         println!();
         println!("[guardrails]");
         println!(
@@ -154,6 +169,11 @@ pub fn update(
     max_child_tasks: Option<u32>,
     max_task_depth: Option<u32>,
     viz_edge_color: Option<&str>,
+    eval_gate_threshold: Option<f64>,
+    eval_gate_all: Option<bool>,
+    flip_enabled: Option<bool>,
+    flip_inference_model: Option<&str>,
+    flip_comparison_model: Option<&str>,
 ) -> Result<()> {
     let mut config = match scope {
         ConfigScope::Global => Config::load_global()?.unwrap_or_default(),
@@ -306,6 +326,44 @@ pub fn update(
     if let Some(v) = max_task_depth {
         config.guardrails.max_task_depth = v;
         println!("Set guardrails.max_task_depth = {}", v);
+        changed = true;
+    }
+
+    // Eval gate settings
+    if let Some(threshold) = eval_gate_threshold {
+        if !(0.0..=1.0).contains(&threshold) {
+            anyhow::bail!(
+                "eval_gate_threshold must be in [0.0, 1.0] range, got {}",
+                threshold
+            );
+        }
+        config.agency.eval_gate_threshold = Some(threshold);
+        println!("Set agency.eval_gate_threshold = {}", threshold);
+        changed = true;
+    }
+
+    if let Some(v) = eval_gate_all {
+        config.agency.eval_gate_all = v;
+        println!("Set agency.eval_gate_all = {}", v);
+        changed = true;
+    }
+
+    // FLIP settings
+    if let Some(v) = flip_enabled {
+        config.agency.flip_enabled = v;
+        println!("Set agency.flip_enabled = {}", v);
+        changed = true;
+    }
+
+    if let Some(m) = flip_inference_model {
+        config.agency.flip_inference_model = Some(m.to_string());
+        println!("Set agency.flip_inference_model = \"{}\"", m);
+        changed = true;
+    }
+
+    if let Some(m) = flip_comparison_model {
+        config.agency.flip_comparison_model = Some(m.to_string());
+        println!("Set agency.flip_comparison_model = \"{}\"", m);
         changed = true;
     }
 
@@ -646,6 +704,11 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
+            None,
+            None,
         );
         assert!(result.is_ok());
 
@@ -670,6 +733,11 @@ mod tests {
             Some(60),
             None,
             Some("shell"),
+            None,
+            None,
+            None,
+            None,
+            None,
             None,
             None,
             None,
@@ -730,6 +798,11 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
+            None,
+            None,
         );
         assert!(result.is_ok());
 
@@ -763,6 +836,11 @@ mod tests {
             Some("creator-hash"),
             Some("haiku"),
             Some("Retire below 0.3 after 10 evals"),
+            None,
+            None,
+            None,
+            None,
+            None,
             None,
             None,
             None,

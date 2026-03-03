@@ -11,11 +11,21 @@ use super::graph_path;
 use workgraph::parser::load_graph;
 
 pub fn run(dir: &Path, id: &str, reason: Option<&str>) -> Result<()> {
+    run_inner(dir, id, reason, false)
+}
+
+/// Reject a done task via evaluation gate. This allows failing a task that is
+/// already Done — the evaluator determined the work is unacceptable.
+pub fn run_eval_reject(dir: &Path, id: &str, reason: Option<&str>) -> Result<()> {
+    run_inner(dir, id, reason, true)
+}
+
+fn run_inner(dir: &Path, id: &str, reason: Option<&str>, eval_reject: bool) -> Result<()> {
     let (mut graph, path) = super::load_workgraph_mut(dir)?;
 
     let task = graph.get_task_mut_or_err(id)?;
 
-    if task.status == Status::Done {
+    if task.status == Status::Done && !eval_reject {
         anyhow::bail!(
             "Task '{}' is already done and cannot be marked as failed",
             id
@@ -38,9 +48,16 @@ pub fn run(dir: &Path, id: &str, reason: Option<&str>) -> Result<()> {
     task.retry_count += 1;
     task.failure_reason = reason.map(String::from);
 
-    let log_message = match reason {
-        Some(r) => format!("Task marked as failed: {}", r),
-        None => "Task marked as failed".to_string(),
+    let log_message = if eval_reject {
+        match reason {
+            Some(r) => format!("Evaluation rejected task: {}", r),
+            None => "Evaluation rejected task".to_string(),
+        }
+    } else {
+        match reason {
+            Some(r) => format!("Task marked as failed: {}", r),
+            None => "Task marked as failed".to_string(),
+        }
     };
     task.log.push(LogEntry {
         timestamp: Utc::now().to_rfc3339(),
@@ -320,5 +337,56 @@ mod tests {
         let graph = load_graph(&path).unwrap();
         let task = graph.get_task("t1").unwrap();
         assert_eq!(task.status, Status::Failed);
+    }
+
+    #[test]
+    fn test_eval_reject_done_task() {
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+        setup_workgraph(dir_path, vec![make_task("t1", "Test task", Status::Done)]);
+
+        // Normal fail should error on done tasks
+        let result = run(dir_path, "t1", Some("reason"));
+        assert!(result.is_err());
+
+        // eval_reject should succeed
+        let result = run_eval_reject(
+            dir_path,
+            "t1",
+            Some("evaluation score 0.3 below threshold 0.5"),
+        );
+        assert!(result.is_ok());
+
+        let path = graph_path(dir_path);
+        let graph = load_graph(&path).unwrap();
+        let task = graph.get_task("t1").unwrap();
+        assert_eq!(task.status, Status::Failed);
+        assert_eq!(task.retry_count, 1);
+        assert!(
+            task.failure_reason
+                .as_deref()
+                .unwrap()
+                .contains("evaluation score")
+        );
+        // Check log message uses "Evaluation rejected" prefix
+        let last_log = task.log.last().unwrap();
+        assert!(last_log.message.contains("Evaluation rejected"));
+    }
+
+    #[test]
+    fn test_eval_reject_already_failed_is_noop() {
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+        let mut task = make_task("t1", "Test task", Status::Failed);
+        task.retry_count = 1;
+        setup_workgraph(dir_path, vec![task]);
+
+        let result = run_eval_reject(dir_path, "t1", Some("reason"));
+        assert!(result.is_ok());
+
+        let path = graph_path(dir_path);
+        let graph = load_graph(&path).unwrap();
+        let task = graph.get_task("t1").unwrap();
+        assert_eq!(task.retry_count, 1); // Unchanged
     }
 }

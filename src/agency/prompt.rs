@@ -564,6 +564,222 @@ pub fn render_evaluator_prompt(input: &EvaluatorInput) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// FLIP (Fidelity via Latent Intent Probing) evaluation prompts
+// ---------------------------------------------------------------------------
+
+/// Input for the FLIP inference phase — contains task output but NOT the task description.
+/// The inference evaluator must reconstruct what the task was from the output alone.
+pub struct FlipInferenceInput<'a> {
+    /// Agent that worked on the task (if assigned)
+    pub agent: Option<&'a Agent>,
+    /// Role used by the agent (if identity was assigned)
+    pub role: Option<&'a Role>,
+    /// Tradeoff config used by the agent (if identity was assigned)
+    pub tradeoff: Option<&'a TradeoffConfig>,
+    /// Produced artifacts (file paths / references)
+    pub artifacts: &'a [String],
+    /// Progress log entries (task description/title should be redacted from messages)
+    pub log_entries: &'a [crate::graph::LogEntry],
+    /// Time the task started (ISO 8601, if available)
+    pub started_at: Option<&'a str>,
+    /// Time the task completed (ISO 8601, if available)
+    pub completed_at: Option<&'a str>,
+    /// Git diff of artifact files at completion time
+    pub artifact_diff: Option<&'a str>,
+}
+
+/// Render the FLIP inference prompt: given only the task output, reconstruct
+/// what the original task description must have been.
+pub fn render_flip_inference_prompt(input: &FlipInferenceInput) -> String {
+    let mut out = String::new();
+
+    out.push_str("# Prompt Reconstruction Task (FLIP Inference)\n\n");
+    out.push_str(
+        "You are performing a roundtrip intent fidelity evaluation. An AI agent completed a task, \
+         and you can see the agent's output below. Your job is to **reconstruct** what the \
+         original task description must have been.\n\n\
+         You do NOT have access to the original task description. Based solely on the artifacts, \
+         code changes, and log entries below, infer:\n\
+         1. What was the goal of this task?\n\
+         2. What specific requirements or acceptance criteria were given?\n\
+         3. What constraints or context was provided?\n\n\
+         Write your reconstruction as a task description that could have produced this output.\n\n",
+    );
+
+    // -- Agent identity (describes HOW to work, not WHAT to do) --
+    if input.agent.is_some() || input.role.is_some() || input.tradeoff.is_some() {
+        out.push_str("## Agent Context\n\n");
+        out.push_str("(This describes the agent's working style, not the task itself.)\n\n");
+        if let Some(role) = input.role {
+            let _ = writeln!(out, "**Role:** {}", role.name);
+            let _ = writeln!(out, "{}\n", role.description);
+        }
+        if let Some(tradeoff) = input.tradeoff {
+            let _ = writeln!(out, "**Working style:** {}\n", tradeoff.description);
+        }
+    }
+
+    // -- Artifacts --
+    out.push_str("## Task Output — Artifacts\n\n");
+    if input.artifacts.is_empty() {
+        out.push_str("*No artifacts were recorded.*\n\n");
+    } else {
+        for artifact in input.artifacts {
+            let _ = writeln!(out, "- `{}`", artifact);
+        }
+        out.push('\n');
+    }
+
+    // -- Git diff (the primary signal) --
+    if let Some(diff) = input.artifact_diff {
+        out.push_str("## Task Output — Code Changes\n\n");
+        out.push_str("```diff\n");
+        out.push_str(diff);
+        if !diff.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str("```\n\n");
+    }
+
+    // -- Log entries (redacted: strip task ID references from messages) --
+    out.push_str("## Task Output — Log Entries\n\n");
+    if input.log_entries.is_empty() {
+        out.push_str("*No log entries.*\n\n");
+    } else {
+        for entry in input.log_entries {
+            let actor = entry.actor.as_deref().unwrap_or("system");
+            // Redact common task-identifying patterns from log messages
+            let msg = redact_task_hints(&entry.message);
+            let _ = writeln!(out, "- [{}] ({}): {}", entry.timestamp, actor, msg);
+        }
+        out.push('\n');
+    }
+
+    // -- Timing --
+    if input.started_at.is_some() || input.completed_at.is_some() {
+        out.push_str("## Timing\n\n");
+        if let Some(started) = input.started_at {
+            let _ = writeln!(out, "- Started: {}", started);
+        }
+        if let Some(completed) = input.completed_at {
+            let _ = writeln!(out, "- Completed: {}", completed);
+        }
+        out.push('\n');
+    }
+
+    // -- Output format --
+    out.push_str("## Required Output\n\n");
+    out.push_str(
+        "Respond with **only** a JSON object (no markdown fences, no commentary):\n\n\
+         ```\n\
+         {\n  \
+           \"inferred_prompt\": \"<your reconstruction of the original task description, \
+         including goal, requirements, and acceptance criteria>\"\n\
+         }\n\
+         ```\n",
+    );
+
+    out
+}
+
+/// Redact task-identifying hints from log messages to prevent information leakage
+/// during FLIP inference. Strips patterns like task IDs, "Task: ...", etc.
+fn redact_task_hints(msg: &str) -> String {
+    use std::sync::LazyLock;
+
+    // Redact task ID patterns (prefixed-kebab-case IDs like implement-foo-bar)
+    static TASK_ID_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(
+            r"\b(implement|research|fix|add|update|refactor|evaluate|test|verify|integration|assign)-[a-z0-9]([a-z0-9-]*[a-z0-9])?\b"
+        ).unwrap()
+    });
+
+    TASK_ID_RE.replace_all(msg, "[TASK-ID]").to_string()
+}
+
+/// Input for the FLIP comparison phase — receives both actual and inferred prompts.
+pub struct FlipComparisonInput<'a> {
+    /// The original task title
+    pub actual_title: &'a str,
+    /// The original task description
+    pub actual_description: Option<&'a str>,
+    /// The inferred prompt from phase 1
+    pub inferred_prompt: &'a str,
+}
+
+/// Render the FLIP comparison prompt: compare the actual and inferred prompts
+/// and produce similarity scores.
+pub fn render_flip_comparison_prompt(input: &FlipComparisonInput) -> String {
+    let mut out = String::new();
+
+    out.push_str("# Prompt Similarity Scoring (FLIP Comparison)\n\n");
+    out.push_str(
+        "You are performing a roundtrip intent fidelity evaluation. An agent completed a task, \
+         and a separate evaluator reconstructed what the task must have been by examining only \
+         the output. Your job is to compare the ACTUAL task description with the INFERRED \
+         reconstruction and score their similarity.\n\n",
+    );
+
+    // -- Actual prompt --
+    out.push_str("## ACTUAL Task Description (ground truth)\n\n");
+    let _ = writeln!(out, "**Title:** {}\n", input.actual_title);
+    if let Some(desc) = input.actual_description {
+        let _ = writeln!(out, "{}\n", desc);
+    }
+
+    // -- Inferred prompt --
+    out.push_str("## INFERRED Task Description (reconstructed from output)\n\n");
+    let _ = writeln!(out, "{}\n", input.inferred_prompt);
+
+    // -- Scoring instructions --
+    out.push_str("## Scoring Dimensions\n\n");
+    out.push_str(
+        "Score on these dimensions (each 0.0 to 1.0):\n\n\
+         1. **semantic_match** — Do they describe the same core task? Same goal, same domain?\n\
+            - 1.0: Clearly the same task\n\
+            - 0.5: Related but different emphasis\n\
+            - 0.0: Completely different tasks\n\n\
+         2. **requirement_coverage** — What fraction of the actual requirements appear in \
+         the inferred version? (recall)\n\
+            - 1.0: All requirements captured\n\
+            - 0.5: About half captured\n\
+            - 0.0: None captured\n\n\
+         3. **specificity_match** — Is the inferred version as specific as the original?\n\
+            - 1.0: Equally specific\n\
+            - 0.5: Inferred is vaguer or more generic\n\
+            - 0.0: Inferred is completely non-specific\n\n\
+         4. **hallucination_rate** — What fraction of inferred requirements are NOT in the \
+         original? (false positive rate, inverted: 0.0 = no hallucination = good)\n\
+            - 0.0: No hallucinated requirements (best)\n\
+            - 0.5: Half the inferred requirements are fabricated\n\
+            - 1.0: All inferred requirements are fabricated\n\n\
+         Compute a **flip_score** as:\n\
+         `flip_score = 0.4 * semantic_match + 0.3 * requirement_coverage + \
+         0.2 * specificity_match + 0.1 * (1.0 - hallucination_rate)`\n\n",
+    );
+
+    // -- Output format --
+    out.push_str("## Required Output\n\n");
+    out.push_str(
+        "Respond with **only** a JSON object (no markdown fences, no commentary):\n\n\
+         ```\n\
+         {\n  \
+           \"flip_score\": <0.0-1.0>,\n  \
+           \"dimensions\": {\n    \
+             \"semantic_match\": <0.0-1.0>,\n    \
+             \"requirement_coverage\": <0.0-1.0>,\n    \
+             \"specificity_match\": <0.0-1.0>,\n    \
+             \"hallucination_rate\": <0.0-1.0>\n  \
+           },\n  \
+           \"notes\": \"<brief explanation of key similarities and differences>\"\n\
+         }\n\
+         ```\n",
+    );
+
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Run mode context for assigner prompts
 // ---------------------------------------------------------------------------
 

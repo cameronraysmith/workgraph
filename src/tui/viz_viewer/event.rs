@@ -481,6 +481,15 @@ fn handle_chat_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
             app.chat_input_dismissed = true;
             app.inspector_sub_focus = InspectorSubFocus::ChatHistory;
         }
+        // Shift+Enter or Alt+Enter: insert newline.
+        // Shift+Enter works when kitty keyboard protocol is active;
+        // Alt+Enter works universally as a fallback.
+        KeyCode::Enter
+            if modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::ALT) =>
+        {
+            app.chat.input.insert(app.chat.cursor, '\n');
+            app.chat.cursor += 1;
+        }
         KeyCode::Enter => {
             // Enter sends the message (newlines from paste are preserved in the content).
             // Stay in ChatInput mode so the user can immediately type another message.
@@ -505,10 +514,9 @@ fn handle_chat_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
                 app.chat.input.drain(app.chat.cursor..next);
             }
         }
-        // Ctrl+A: attach file
+        // Ctrl+A: move to beginning of current line (Emacs)
         KeyCode::Char('a') if modifiers.contains(KeyModifiers::CONTROL) => {
-            app.text_prompt.input.clear();
-            app.input_mode = InputMode::TextPrompt(TextPromptAction::AttachFile);
+            app.chat.cursor = line_start(&app.chat.input, app.chat.cursor);
         }
         // Ctrl+E: move to end of current line
         KeyCode::Char('e') if modifiers.contains(KeyModifiers::CONTROL) => {
@@ -522,27 +530,39 @@ fn handle_chat_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Char('f') if modifiers.contains(KeyModifiers::CONTROL) => {
             app.chat.cursor = next_char_boundary(&app.chat.input, app.chat.cursor);
         }
-        // Ctrl+K: kill to end of current line
+        // Ctrl+K: kill to end of current line (saved to kill ring for Ctrl+Y)
         KeyCode::Char('k') if modifiers.contains(KeyModifiers::CONTROL) => {
             let end = line_end(&app.chat.input, app.chat.cursor);
             if end == app.chat.cursor && app.chat.cursor < app.chat.input.len() {
-                // At end of line: delete the newline character to join lines.
+                // At end of line: kill the newline character to join lines.
+                app.kill_ring = app.chat.input[app.chat.cursor..app.chat.cursor + 1].to_string();
                 app.chat.input.drain(app.chat.cursor..app.chat.cursor + 1);
             } else {
+                app.kill_ring = app.chat.input[app.chat.cursor..end].to_string();
                 app.chat.input.drain(app.chat.cursor..end);
             }
         }
-        // Ctrl+U: kill to beginning of current line
+        // Ctrl+U: kill to beginning of current line (saved to kill ring for Ctrl+Y)
         KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
             let start = line_start(&app.chat.input, app.chat.cursor);
+            app.kill_ring = app.chat.input[start..app.chat.cursor].to_string();
             app.chat.input.drain(start..app.chat.cursor);
             app.chat.cursor = start;
         }
-        // Ctrl+W: delete word backward
+        // Ctrl+W: delete word backward (saved to kill ring for Ctrl+Y)
         KeyCode::Char('w') if modifiers.contains(KeyModifiers::CONTROL) => {
             let start = word_boundary_back(&app.chat.input, app.chat.cursor);
+            app.kill_ring = app.chat.input[start..app.chat.cursor].to_string();
             app.chat.input.drain(start..app.chat.cursor);
             app.chat.cursor = start;
+        }
+        // Ctrl+Y: yank (paste from kill ring)
+        KeyCode::Char('y') if modifiers.contains(KeyModifiers::CONTROL) => {
+            if !app.kill_ring.is_empty() {
+                let text = app.kill_ring.clone();
+                app.chat.input.insert_str(app.chat.cursor, &text);
+                app.chat.cursor += text.len();
+            }
         }
         // Ctrl+D: delete char forward (or no-op at end)
         KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
@@ -670,6 +690,15 @@ fn handle_message_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers
         KeyCode::Esc => {
             app.input_mode = InputMode::Normal;
         }
+        // Shift+Enter or Alt+Enter: insert newline.
+        KeyCode::Enter
+            if modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::ALT) =>
+        {
+            app.messages_panel
+                .input
+                .insert(app.messages_panel.cursor, '\n');
+            app.messages_panel.cursor += 1;
+        }
         KeyCode::Enter => {
             let text = app.messages_panel.input.clone();
             app.messages_panel.input.clear();
@@ -729,22 +758,35 @@ fn handle_message_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers
             app.messages_panel.cursor =
                 next_char_boundary(&app.messages_panel.input, app.messages_panel.cursor);
         }
-        // Ctrl+K: kill to end of line
+        // Ctrl+K: kill to end of line (saved to kill ring for Ctrl+Y)
         KeyCode::Char('k') if modifiers.contains(KeyModifiers::CONTROL) => {
+            app.kill_ring = app.messages_panel.input[app.messages_panel.cursor..].to_string();
             app.messages_panel.input.truncate(app.messages_panel.cursor);
         }
-        // Ctrl+U: kill to beginning of line
+        // Ctrl+U: kill to beginning of line (saved to kill ring for Ctrl+Y)
         KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
+            app.kill_ring = app.messages_panel.input[..app.messages_panel.cursor].to_string();
             app.messages_panel.input.drain(..app.messages_panel.cursor);
             app.messages_panel.cursor = 0;
         }
-        // Ctrl+W: delete word backward
+        // Ctrl+W: delete word backward (saved to kill ring for Ctrl+Y)
         KeyCode::Char('w') if modifiers.contains(KeyModifiers::CONTROL) => {
             let start = word_boundary_back(&app.messages_panel.input, app.messages_panel.cursor);
+            app.kill_ring = app.messages_panel.input[start..app.messages_panel.cursor].to_string();
             app.messages_panel
                 .input
                 .drain(start..app.messages_panel.cursor);
             app.messages_panel.cursor = start;
+        }
+        // Ctrl+Y: yank (paste from kill ring)
+        KeyCode::Char('y') if modifiers.contains(KeyModifiers::CONTROL) => {
+            if !app.kill_ring.is_empty() {
+                let text = app.kill_ring.clone();
+                app.messages_panel
+                    .input
+                    .insert_str(app.messages_panel.cursor, &text);
+                app.messages_panel.cursor += text.len();
+            }
         }
         // Ctrl+D: delete char forward (or no-op at end)
         KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1671,10 +1713,13 @@ fn vscrollbar_jump_graph(app: &mut VizApp, row: u16) {
     }
     let row_in_track = row.saturating_sub(sb.y) as usize;
     let track_height = sb.height as usize;
-    let new_offset = if track_height <= 1 {
+    // Inverse of ratatui's thumb positioning: thumb_start = pos * track / max_viewport_pos,
+    // where max_viewport_pos = content_length - 1 + viewport_length = max_offset - 1 + track.
+    let new_offset = if track_height == 0 {
         0
     } else {
-        (row_in_track * max_offset) / track_height.saturating_sub(1)
+        let max_vp = max_offset.saturating_sub(1) + track_height;
+        (row_in_track * max_vp) / track_height
     };
     app.scroll.offset_y = new_offset.min(max_offset);
 }
@@ -1688,6 +1733,18 @@ fn vscrollbar_jump_panel(app: &mut VizApp, row: u16) {
     let row_in_track = row.saturating_sub(sb.y) as usize;
     let track_height = sb.height as usize;
 
+    // Helper: inverse of ratatui's thumb positioning formula.
+    // thumb_start = pos * track / (content_length - 1 + viewport_length).
+    // Since content_length = max_scroll and viewport_length = track_height:
+    //   max_viewport_pos = max_scroll - 1 + track_height.
+    let jump = |max_scroll: usize| -> usize {
+        if track_height == 0 {
+            return 0;
+        }
+        let max_vp = max_scroll.saturating_sub(1) + track_height;
+        ((row_in_track * max_vp) / track_height).min(max_scroll)
+    };
+
     match app.right_panel_tab {
         RightPanelTab::Detail => {
             let max_scroll = app
@@ -1696,12 +1753,7 @@ fn vscrollbar_jump_panel(app: &mut VizApp, row: u16) {
             if max_scroll == 0 {
                 return;
             }
-            let pos = if track_height <= 1 {
-                0
-            } else {
-                (row_in_track * max_scroll) / track_height.saturating_sub(1)
-            };
-            app.hud_scroll = pos.min(max_scroll);
+            app.hud_scroll = jump(max_scroll);
         }
         RightPanelTab::Chat => {
             // Chat scroll is inverted: 0 = bottom, higher = further from bottom.
@@ -1711,11 +1763,7 @@ fn vscrollbar_jump_panel(app: &mut VizApp, row: u16) {
             if max_scroll == 0 {
                 return;
             }
-            let scroll_from_top = if track_height <= 1 {
-                0
-            } else {
-                (row_in_track * max_scroll) / track_height.saturating_sub(1)
-            };
+            let scroll_from_top = jump(max_scroll);
             // Convert scroll_from_top to chat's inverted scroll.
             app.chat.scroll = max_scroll.saturating_sub(scroll_from_top);
         }
@@ -1726,12 +1774,7 @@ fn vscrollbar_jump_panel(app: &mut VizApp, row: u16) {
             if max_scroll == 0 {
                 return;
             }
-            let pos = if track_height <= 1 {
-                0
-            } else {
-                (row_in_track * max_scroll) / track_height.saturating_sub(1)
-            };
-            app.log_pane.scroll = pos.min(max_scroll);
+            app.log_pane.scroll = jump(max_scroll);
         }
         RightPanelTab::Messages => {
             let total = app.messages_panel.total_wrapped_lines;
@@ -1740,12 +1783,7 @@ fn vscrollbar_jump_panel(app: &mut VizApp, row: u16) {
             if max_scroll == 0 {
                 return;
             }
-            let pos = if track_height <= 1 {
-                0
-            } else {
-                (row_in_track * max_scroll) / track_height.saturating_sub(1)
-            };
-            app.messages_panel.scroll = pos.min(max_scroll);
+            app.messages_panel.scroll = jump(max_scroll);
         }
         RightPanelTab::Agency => {
             let total = app.agent_monitor.total_rendered_lines;
@@ -1754,12 +1792,7 @@ fn vscrollbar_jump_panel(app: &mut VizApp, row: u16) {
             if max_scroll == 0 {
                 return;
             }
-            let pos = if track_height <= 1 {
-                0
-            } else {
-                (row_in_track * max_scroll) / track_height.saturating_sub(1)
-            };
-            app.agent_monitor.scroll = pos.min(max_scroll);
+            app.agent_monitor.scroll = jump(max_scroll);
         }
         RightPanelTab::CoordLog => {
             let total = app.coord_log.total_wrapped_lines;
@@ -1768,12 +1801,7 @@ fn vscrollbar_jump_panel(app: &mut VizApp, row: u16) {
             if max_scroll == 0 {
                 return;
             }
-            let pos = if track_height <= 1 {
-                0
-            } else {
-                (row_in_track * max_scroll) / track_height.saturating_sub(1)
-            };
-            app.coord_log.scroll = pos.min(max_scroll);
+            app.coord_log.scroll = jump(max_scroll);
         }
         _ => {}
     }
@@ -2030,6 +2058,13 @@ fn handle_files_key(app: &mut VizApp, code: KeyCode) {
         return;
     }
 
+    // Pre-extract attach path before the match to avoid borrow conflict with app.attach_file().
+    let attach_path = if code == KeyCode::Char('a') && fb.focus == FileBrowserFocus::Tree {
+        fb.selected_path().filter(|p| p.is_file())
+    } else {
+        None
+    };
+
     match fb.focus {
         FileBrowserFocus::Tree => match code {
             // '/' enters search mode
@@ -2073,6 +2108,8 @@ fn handle_files_key(app: &mut VizApp, code: KeyCode) {
             KeyCode::Char(' ') => {
                 fb.tree_state.toggle_selected();
             }
+            // 'a': attach the selected file (handled after match)
+            KeyCode::Char('a') => {}
             // Jump to first/last
             KeyCode::Home => {
                 fb.tree_state.select_first();
@@ -2130,6 +2167,11 @@ fn handle_files_key(app: &mut VizApp, code: KeyCode) {
             }
             _ => {}
         },
+    }
+
+    // Attach file after the match block (fb borrow is dropped).
+    if let Some(path) = attach_path {
+        app.attach_file(&path.to_string_lossy());
     }
 }
 
@@ -2326,9 +2368,9 @@ mod scrollbar_tests {
             height: 20,
         };
         // Click at row 10 out of 20 (50% of track).
-        // new_offset = (10 * 80) / (20 - 1) = 800 / 19 = 42
+        // max_vp = 80 - 1 + 20 = 99, new_offset = (10 * 99) / 20 = 49
         vscrollbar_jump_graph(&mut app, 10);
-        assert_eq!(app.scroll.offset_y, 42);
+        assert_eq!(app.scroll.offset_y, 49);
     }
 
     #[test]
@@ -2378,9 +2420,9 @@ mod scrollbar_tests {
         assert_eq!(app.scroll.offset_y, 0);
 
         // Click at absolute row 15 → row_in_track = 15 - 5 = 10.
-        // new_offset = (10 * 80) / 19 = 42
+        // max_vp = 80 - 1 + 20 = 99, new_offset = (10 * 99) / 20 = 49
         vscrollbar_jump_graph(&mut app, 15);
-        assert_eq!(app.scroll.offset_y, 42);
+        assert_eq!(app.scroll.offset_y, 49);
     }
 
     #[test]
@@ -2428,9 +2470,9 @@ mod scrollbar_tests {
             height: 20,
         };
         // Click at 50%: row_in_track=10, max_scroll=80.
-        // pos = (10 * 80) / 19 = 42
+        // max_vp = 80 - 1 + 20 = 99, pos = (10 * 99) / 20 = 49
         vscrollbar_jump_panel(&mut app, 10);
-        assert_eq!(app.hud_scroll, 42);
+        assert_eq!(app.hud_scroll, 49);
     }
 
     #[test]
@@ -2543,14 +2585,14 @@ mod scrollbar_tests {
         assert_eq!(app.scroll.offset_y, 0);
 
         // Drag to midpoint.
+        // max_vp = 80 - 1 + 20 = 99, offset = (10 * 99) / 20 = 49
         handle_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), 10, 79);
-        let expected = (10 * 80) / 19; // 42
-        assert_eq!(app.scroll.offset_y, expected);
+        assert_eq!(app.scroll.offset_y, 49);
 
         // Drag to near bottom.
+        // offset = (18 * 99) / 20 = 89, clamped to max_offset 80
         handle_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), 18, 79);
-        let expected = (18 * 80) / 19; // 75
-        assert_eq!(app.scroll.offset_y, expected);
+        assert_eq!(app.scroll.offset_y, 80);
     }
 
     #[test]

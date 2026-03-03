@@ -446,6 +446,8 @@ pub mod eval_source {
     pub const LLM: &str = "llm";
     /// Human evaluation.
     pub const MANUAL: &str = "manual";
+    /// FLIP (roundtrip intent fidelity) evaluation.
+    pub const FLIP: &str = "flip";
     /// Human reviewing evaluator output (meta-evaluation).
     pub const META_HUMAN_REVIEW: &str = "meta:human-review";
 

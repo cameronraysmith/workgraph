@@ -556,17 +556,27 @@ fn agent_thread_main(
                 }
 
                 // Wait for the response from the stdout reader
-                let response_text =
+                let collected =
                     collect_response(&response_rx, logger, std::time::Duration::from_secs(300));
 
-                match response_text {
-                    Some(text) if !text.is_empty() => {
+                match collected {
+                    Some(resp) if !resp.summary.is_empty() => {
                         logger.info(&format!(
-                            "Coordinator agent: got response ({} chars) for request_id={}",
-                            text.len(),
+                            "Coordinator agent: got response ({} chars{}) for request_id={}",
+                            resp.summary.len(),
+                            if resp.full_text.is_some() {
+                                ", with tool calls"
+                            } else {
+                                ""
+                            },
                             req.request_id
                         ));
-                        if let Err(e) = chat::append_outbox(dir, &text, &req.request_id) {
+                        if let Err(e) = chat::append_outbox_full(
+                            dir,
+                            &resp.summary,
+                            resp.full_text,
+                            &req.request_id,
+                        ) {
                             logger.error(&format!(
                                 "Coordinator agent: failed to write outbox: {}",
                                 e
@@ -638,7 +648,7 @@ fn inject_crash_recovery_context(
         Some(text) => {
             logger.info(&format!(
                 "Coordinator agent: crash recovery acknowledged ({} chars)",
-                text.len()
+                text.summary.len()
             ));
         }
         None => {
@@ -709,10 +719,30 @@ fn build_crash_recovery_summary(dir: &Path) -> Result<String> {
 enum ResponseEvent {
     /// A text fragment from an assistant message.
     Text(String),
+    /// A tool call from an assistant message.
+    ToolUse { name: String, input: String },
+    /// A tool result from Claude CLI's internal tool execution.
+    ToolResult(String),
     /// The assistant turn is complete (end_turn).
     TurnComplete,
     /// The stdout stream ended (process exited or pipe closed).
     StreamEnd,
+}
+
+/// Ordered parts of a coordinator response, for building the full response text.
+enum ResponsePart {
+    Text(String),
+    ToolUse { name: String, input: String },
+    ToolResult(String),
+}
+
+/// Collected coordinator response with summary and full text.
+struct CollectedResponse {
+    /// Summary text (last text block) for the collapsed view.
+    summary: String,
+    /// Full response text including tool calls, for the expanded view.
+    /// None if the response had no tool calls (full == summary).
+    full_text: Option<String>,
 }
 
 /// Read stdout from the Claude CLI process line by line, parse stream-json
@@ -751,15 +781,32 @@ fn stdout_reader(
 
         match msg_type {
             "assistant" => {
-                // Extract text content from assistant message
+                // Extract text and tool_use content from assistant message
                 if let Some(message) = val.get("message") {
-                    // Extract text blocks from content array
+                    // Extract content blocks (text + tool_use)
                     if let Some(content) = message.get("content").and_then(|c| c.as_array()) {
                         for block in content {
-                            if block.get("type").and_then(|t| t.as_str()) == Some("text")
-                                && let Some(text) = block.get("text").and_then(|t| t.as_str())
-                            {
-                                let _ = tx.send(ResponseEvent::Text(text.to_string()));
+                            let block_type =
+                                block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                            match block_type {
+                                "text" => {
+                                    if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                        let _ = tx.send(ResponseEvent::Text(text.to_string()));
+                                    }
+                                }
+                                "tool_use" => {
+                                    let name = block
+                                        .get("name")
+                                        .and_then(|n| n.as_str())
+                                        .unwrap_or("unknown")
+                                        .to_string();
+                                    let input = block
+                                        .get("input")
+                                        .map(|v| serde_json::to_string(v).unwrap_or_default())
+                                        .unwrap_or_default();
+                                    let _ = tx.send(ResponseEvent::ToolUse { name, input });
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -783,12 +830,51 @@ fn stdout_reader(
                     let _ = tx.send(ResponseEvent::TurnComplete);
                 }
             }
+            "tool_use" => {
+                // Top-level tool_use event (separate from assistant content blocks)
+                let name = val
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let input = val
+                    .get("input")
+                    .map(|v| serde_json::to_string(v).unwrap_or_default())
+                    .unwrap_or_default();
+                let _ = tx.send(ResponseEvent::ToolUse { name, input });
+            }
+            "tool_result" => {
+                // Tool result: extract content text
+                let content_text = if let Some(content) = val.get("content") {
+                    if let Some(s) = content.as_str() {
+                        s.to_string()
+                    } else if let Some(arr) = content.as_array() {
+                        arr.iter()
+                            .filter_map(|b| {
+                                if b.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                    b.get("text").and_then(|t| t.as_str()).map(String::from)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    } else {
+                        String::new()
+                    }
+                } else if let Some(output) = val.get("output").and_then(|o| o.as_str()) {
+                    output.to_string()
+                } else {
+                    String::new()
+                };
+                if !content_text.is_empty() {
+                    let _ = tx.send(ResponseEvent::ToolResult(content_text));
+                }
+            }
             "result" => {
                 // Final result message — turn is complete
                 let _ = tx.send(ResponseEvent::TurnComplete);
             }
-            // Ignore tool_use, tool_result, system, content_block_* etc.
-            // The Claude CLI handles tool execution internally.
             _ => {}
         }
     }
@@ -797,17 +883,19 @@ fn stdout_reader(
     let _ = tx.send(ResponseEvent::StreamEnd);
 }
 
-/// Collect the full response text from the stdout reader.
+/// Collect the full response from the stdout reader.
 ///
-/// Buffers text fragments until a TurnComplete signal arrives.
-/// Returns None on timeout or StreamEnd.
+/// Buffers text, tool_use, and tool_result fragments until a TurnComplete signal arrives.
+/// Returns a `CollectedResponse` with both the summary (last text block) and the full
+/// response including tool calls (for expanded display). Returns None on timeout or StreamEnd.
 fn collect_response(
     rx: &mpsc::Receiver<ResponseEvent>,
     logger: &DaemonLogger,
     timeout: std::time::Duration,
-) -> Option<String> {
+) -> Option<CollectedResponse> {
     let deadline = std::time::Instant::now() + timeout;
-    let mut text_parts: Vec<String> = Vec::new();
+    let mut parts: Vec<ResponsePart> = Vec::new();
+    let mut has_tool_calls = false;
 
     loop {
         let remaining = deadline
@@ -815,49 +903,159 @@ fn collect_response(
             .unwrap_or(std::time::Duration::ZERO);
         if remaining.is_zero() {
             logger.warn("Coordinator agent: response collection timed out");
-            // Return whatever we have so far
-            if text_parts.is_empty() {
-                return None;
-            }
-            return Some(text_parts.join(""));
+            return build_collected_response(&parts, has_tool_calls);
         }
 
         match rx.recv_timeout(remaining) {
             Ok(ResponseEvent::Text(text)) => {
-                text_parts.push(text);
+                parts.push(ResponsePart::Text(text));
+            }
+            Ok(ResponseEvent::ToolUse { name, input }) => {
+                has_tool_calls = true;
+                parts.push(ResponsePart::ToolUse { name, input });
+            }
+            Ok(ResponseEvent::ToolResult(content)) => {
+                has_tool_calls = true;
+                parts.push(ResponsePart::ToolResult(content));
             }
             Ok(ResponseEvent::TurnComplete) => {
-                // The assistant finished its turn — return the buffered text.
-                // Use only the LAST text block as the response (design doc §5.3:
-                // "Buffer and send only the final text block").
-                if text_parts.is_empty() {
+                // The assistant finished its turn.
+                let has_text = parts.iter().any(|p| matches!(p, ResponsePart::Text(_)));
+                if !has_text {
                     // Turn complete but no text — this happens when the assistant
                     // only made tool calls. Continue waiting for the next turn.
                     continue;
                 }
-                // Return the last text part as the response
-                return Some(text_parts.last().cloned().unwrap_or_default());
+                return build_collected_response(&parts, has_tool_calls);
             }
             Ok(ResponseEvent::StreamEnd) => {
                 logger.warn("Coordinator agent: stdout stream ended during response collection");
-                if text_parts.is_empty() {
-                    return None;
-                }
-                return Some(text_parts.last().cloned().unwrap_or_default());
+                return build_collected_response(&parts, has_tool_calls);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                if text_parts.is_empty() {
-                    return None;
-                }
-                return Some(text_parts.last().cloned().unwrap_or_default());
+                return build_collected_response(&parts, has_tool_calls);
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                if text_parts.is_empty() {
-                    return None;
-                }
-                return Some(text_parts.last().cloned().unwrap_or_default());
+                return build_collected_response(&parts, has_tool_calls);
             }
         }
+    }
+}
+
+/// Build a `CollectedResponse` from accumulated response parts.
+///
+/// The summary is the last text block (for collapsed display).
+/// The full_text is the complete response with tool calls formatted inline.
+fn build_collected_response(
+    parts: &[ResponsePart],
+    has_tool_calls: bool,
+) -> Option<CollectedResponse> {
+    // Find the last text part for the summary
+    let summary = parts
+        .iter()
+        .rev()
+        .find_map(|p| {
+            if let ResponsePart::Text(t) = p {
+                Some(t.clone())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    if summary.is_empty() && !has_tool_calls {
+        return None;
+    }
+
+    // If there were no tool calls, full_text is unnecessary (same as summary)
+    let full_text = if has_tool_calls {
+        Some(format_full_response(parts))
+    } else {
+        None
+    };
+
+    Some(CollectedResponse { summary, full_text })
+}
+
+/// Format the full response text from ordered response parts.
+///
+/// Text blocks are rendered as-is. Tool calls show the tool name and a
+/// compact representation of the input. Tool results show truncated output.
+fn format_full_response(parts: &[ResponsePart]) -> String {
+    let mut out = String::new();
+
+    for part in parts {
+        match part {
+            ResponsePart::Text(text) => {
+                out.push_str(text);
+                if !text.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            ResponsePart::ToolUse { name, input } => {
+                // Format tool call with a visual delimiter
+                out.push_str(&format!("\n┌─ {} ", name));
+                out.push_str(&"─".repeat(40usize.saturating_sub(name.len() + 4)));
+                out.push('\n');
+
+                // For Bash tool, extract the command for readability
+                if name == "Bash" || name == "bash" {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(input) {
+                        if let Some(cmd) = val.get("command").and_then(|c| c.as_str()) {
+                            out.push_str(&format!("│ $ {}\n", cmd));
+                        } else {
+                            format_tool_input(&mut out, input);
+                        }
+                    } else {
+                        format_tool_input(&mut out, input);
+                    }
+                } else {
+                    format_tool_input(&mut out, input);
+                }
+            }
+            ResponsePart::ToolResult(content) => {
+                // Show tool output, truncated if long
+                let lines: Vec<&str> = content.lines().collect();
+                let max_lines = 15;
+                if lines.len() > max_lines {
+                    for line in &lines[..max_lines] {
+                        out.push_str(&format!("│ {}\n", line));
+                    }
+                    out.push_str(&format!("│ ... ({} more lines)\n", lines.len() - max_lines));
+                } else {
+                    for line in &lines {
+                        out.push_str(&format!("│ {}\n", line));
+                    }
+                }
+                out.push_str("└─\n");
+            }
+        }
+    }
+
+    // If the last part was a tool_use with no result, close the box
+    if let Some(last) = parts.last()
+        && matches!(last, ResponsePart::ToolUse { .. })
+    {
+        out.push_str("└─\n");
+    }
+
+    out
+}
+
+/// Format tool input as indented lines.
+fn format_tool_input(out: &mut String, input: &str) {
+    // Try to pretty-print JSON input
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(input)
+        && let Ok(pretty) = serde_json::to_string_pretty(&val)
+    {
+        for line in pretty.lines() {
+            out.push_str(&format!("│ {}\n", line));
+        }
+        return;
+    }
+    // Fallback: raw input
+    for line in input.lines() {
+        out.push_str(&format!("│ {}\n", line));
     }
 }
 

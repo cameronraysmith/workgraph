@@ -177,7 +177,8 @@ impl MdRenderer {
                         format!("{indent}{bullet} ")
                     }
                 };
-                self.current_spans.push(Span::styled(marker, Style::default()));
+                self.current_spans
+                    .push(Span::styled(marker, Style::default()));
             }
             Event::Start(Tag::Emphasis) => {
                 self.push_style(|s| s.add_modifier(Modifier::ITALIC));
@@ -218,18 +219,24 @@ impl MdRenderer {
                     self.flush_line();
                 }
             }
-            Event::End(TagEnd::Emphasis) => { self.pop_style(); }
-            Event::End(TagEnd::Strong) => { self.pop_style(); }
-            Event::End(TagEnd::Strikethrough) => { self.pop_style(); }
+            Event::End(TagEnd::Emphasis) => {
+                self.pop_style();
+            }
+            Event::End(TagEnd::Strong) => {
+                self.pop_style();
+            }
+            Event::End(TagEnd::Strikethrough) => {
+                self.pop_style();
+            }
             Event::End(TagEnd::Link) => {
                 self.pop_style();
-                if let Some(url) = self.link_url.take() {
-                    if !url.is_empty() {
-                        self.current_spans.push(Span::styled(
-                            format!(" ({url})"),
-                            Style::default().fg(COLOR_LINK_URL),
-                        ));
-                    }
+                if let Some(url) = self.link_url.take()
+                    && !url.is_empty()
+                {
+                    self.current_spans.push(Span::styled(
+                        format!(" ({url})"),
+                        Style::default().fg(COLOR_LINK_URL),
+                    ));
                 }
             }
             Event::Text(text) => {
@@ -237,27 +244,39 @@ impl MdRenderer {
                     self.code_buffer.push_str(&text);
                 } else {
                     let style = self.current_style();
-                    self.current_spans.push(Span::styled(text.to_string(), style));
+                    self.current_spans
+                        .push(Span::styled(text.to_string(), style));
                 }
             }
             Event::Code(code) => {
-                let style = Style::default().fg(COLOR_INLINE_CODE_FG).bg(COLOR_INLINE_CODE_BG);
-                self.current_spans.push(Span::styled(format!(" {code} "), style));
+                let style = Style::default()
+                    .fg(COLOR_INLINE_CODE_FG)
+                    .bg(COLOR_INLINE_CODE_BG);
+                self.current_spans
+                    .push(Span::styled(format!(" {code} "), style));
             }
             Event::SoftBreak => {
                 if self.in_code_block {
                     self.code_buffer.push('\n');
                 } else {
                     let style = self.current_style();
-                    self.current_spans.push(Span::styled(" ".to_string(), style));
+                    self.current_spans
+                        .push(Span::styled(" ".to_string(), style));
                 }
             }
-            Event::HardBreak => { self.flush_line(); }
+            Event::HardBreak => {
+                self.flush_line();
+            }
             Event::Rule => {
-                if !self.lines.is_empty() { self.blank_line(); }
+                if !self.lines.is_empty() {
+                    self.blank_line();
+                }
                 let rule_width = self.width.min(120);
                 let rule = "━".repeat(rule_width);
-                self.lines.push(Line::from(Span::styled(rule, Style::default().fg(COLOR_RULE))));
+                self.lines.push(Line::from(Span::styled(
+                    rule,
+                    Style::default().fg(COLOR_RULE),
+                )));
             }
             _ => {}
         }
@@ -268,7 +287,9 @@ impl MdRenderer {
         let theme = &assets.theme_set.themes["base16-ocean.dark"];
         let bar_span = Span::styled("│ ", Style::default().fg(COLOR_CODE_BLOCK_BAR));
         let bg_style = Style::default().bg(COLOR_CODE_BLOCK_BG);
-        let syntax = self.code_lang.as_deref()
+        let syntax = self
+            .code_lang
+            .as_deref()
             .and_then(|lang| assets.syntax_set.find_syntax_by_token(lang))
             .unwrap_or_else(|| assets.syntax_set.find_syntax_plain_text());
         let mut highlighter = HighlightLines::new(syntax, theme);
@@ -278,7 +299,9 @@ impl MdRenderer {
                 Ok(ranges) => {
                     for (style, text) in ranges {
                         let trimmed = text.trim_end_matches('\n');
-                        if trimmed.is_empty() && text.contains('\n') { continue; }
+                        if trimmed.is_empty() && text.contains('\n') {
+                            continue;
+                        }
                         match syntect_tui::into_span((style, trimmed)) {
                             Ok(span) => {
                                 let mut s = span.style;
@@ -301,7 +324,9 @@ impl MdRenderer {
     }
 
     fn finish(mut self) -> Vec<Line<'static>> {
-        if !self.current_spans.is_empty() { self.flush_line(); }
+        if !self.current_spans.is_empty() {
+            self.flush_line();
+        }
         self.lines
     }
 }
@@ -326,7 +351,9 @@ mod tests {
     }
 
     fn has_modifier(line: &Line, modifier: Modifier) -> bool {
-        line.spans.iter().any(|s| s.style.add_modifier.contains(modifier))
+        line.spans
+            .iter()
+            .any(|s| s.style.add_modifier.contains(modifier))
     }
 
     fn has_fg_color(line: &Line, color: Color) -> bool {
@@ -350,8 +377,12 @@ mod tests {
     #[test]
     fn test_heading_levels() {
         for (md, color) in [
-            ("# H1", COLOR_H1), ("## H2", COLOR_H2), ("### H3", COLOR_H3),
-            ("#### H4", COLOR_H4), ("##### H5", COLOR_H5), ("###### H6", COLOR_H6),
+            ("# H1", COLOR_H1),
+            ("## H2", COLOR_H2),
+            ("### H3", COLOR_H3),
+            ("#### H4", COLOR_H4),
+            ("##### H5", COLOR_H5),
+            ("###### H6", COLOR_H6),
         ] {
             let lines = markdown_to_lines(md, 80);
             assert!(!lines.is_empty());

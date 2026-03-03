@@ -468,6 +468,34 @@ pub struct AgencyConfig {
     /// Default: 10
     #[serde(default = "default_auto_assign_grace_seconds")]
     pub auto_assign_grace_seconds: u64,
+
+    /// Global evaluation gate threshold. When set, evaluations that score
+    /// below this threshold will reject (fail) the original task, blocking
+    /// its dependents. Only applies to tasks tagged with "eval-gate" unless
+    /// `eval_gate_all` is true. Range: 0.0–1.0. Default: None (disabled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_gate_threshold: Option<f64>,
+
+    /// When true, apply the eval gate threshold to ALL evaluated tasks,
+    /// not just those tagged with "eval-gate". Default: false.
+    #[serde(default)]
+    pub eval_gate_all: bool,
+
+    /// Enable FLIP (Fidelity via Latent Intent Probing) evaluation.
+    /// When enabled, completed tasks can be evaluated using roundtrip
+    /// intent fidelity: infer the prompt from output, then compare to actual.
+    #[serde(default)]
+    pub flip_enabled: bool,
+
+    /// Model to use for FLIP inference phase (reconstructing the prompt from output).
+    /// Default: "sonnet" (needs creative reconstruction ability).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip_inference_model: Option<String>,
+
+    /// Model to use for FLIP comparison phase (scoring similarity).
+    /// Default: "haiku" (comparison is simpler).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip_comparison_model: Option<String>,
 }
 
 impl Default for AgencyConfig {
@@ -499,6 +527,11 @@ impl Default for AgencyConfig {
             bizarre_ideation_interval: default_bizarre_ideation_interval(),
             performance_threshold: default_performance_threshold(),
             auto_assign_grace_seconds: default_auto_assign_grace_seconds(),
+            eval_gate_threshold: None,
+            eval_gate_all: false,
+            flip_enabled: false,
+            flip_inference_model: None,
+            flip_comparison_model: None,
         }
     }
 }
