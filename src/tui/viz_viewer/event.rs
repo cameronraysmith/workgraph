@@ -58,14 +58,9 @@ fn run_event_loop_inner(terminal: &mut DefaultTerminal, app: &mut VizApp) -> Res
     // Termux → Mosh → Tmux → TUI chain that can stall for seconds.
     let (tx, rx) = mpsc::sync_channel::<Event>(512);
     std::thread::spawn(move || {
-        loop {
-            match event::read() {
-                Ok(ev) => {
-                    if tx.send(ev).is_err() {
-                        break; // receiver dropped — main loop exited
-                    }
-                }
-                Err(_) => break,
+        while let Ok(ev) = event::read() {
+            if tx.send(ev).is_err() {
+                break; // receiver dropped — main loop exited
             }
         }
     });

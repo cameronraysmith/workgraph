@@ -179,8 +179,8 @@ pub enum RightPanelTab {
     Messages, // 3
     Agency,   // 4
     Config,   // 5
-    Files,     // 6
-    CoordLog,  // 7
+    Files,    // 6
+    CoordLog, // 7
 }
 
 impl RightPanelTab {
@@ -1027,10 +1027,6 @@ pub struct VizApp {
     // ── Scrollbar drag state ──
     /// Which scrollbar (if any) is currently being dragged.
     pub scrollbar_drag: Option<ScrollbarDragTarget>,
-    /// The area of the graph scrollbar from the last render frame.
-    pub last_graph_scrollbar_area: Rect,
-    /// The area of the right-panel scrollbar from the last render frame.
-    pub last_panel_scrollbar_area: Rect,
 
     // ── Live refresh ──
     /// Last observed modification time of graph.jsonl.
@@ -1162,8 +1158,6 @@ impl VizApp {
             graph_scroll_activity: None,
             panel_scroll_activity: None,
             scrollbar_drag: None,
-            last_graph_scrollbar_area: Rect::default(),
-            last_panel_scrollbar_area: Rect::default(),
             last_graph_mtime: graph_mtime,
             last_refresh: Instant::now(),
             last_refresh_display: chrono::Local::now().format("%H:%M:%S").to_string(),
@@ -2968,7 +2962,6 @@ impl VizApp {
         self.invalidate_log_pane();
     }
 
-
     // ── Coordinator log (panel 7) ──
 
     /// Toggle coordinator log view: switch to CoordLog tab in right panel.
@@ -3007,7 +3000,10 @@ impl VizApp {
         }
         let mut reader = BufReader::new(file);
         if self.coord_log.last_offset > 0 {
-            if reader.seek(SeekFrom::Start(self.coord_log.last_offset)).is_err() {
+            if reader
+                .seek(SeekFrom::Start(self.coord_log.last_offset))
+                .is_err()
+            {
                 return;
             }
         }
@@ -3035,7 +3031,10 @@ impl VizApp {
 
     /// Scroll coordinator log down.
     pub fn coord_log_scroll_down(&mut self, amount: usize) {
-        let max_scroll = self.coord_log.total_wrapped_lines.saturating_sub(self.coord_log.viewport_height);
+        let max_scroll = self
+            .coord_log
+            .total_wrapped_lines
+            .saturating_sub(self.coord_log.viewport_height);
         self.coord_log.scroll = (self.coord_log.scroll + amount).min(max_scroll);
         if self.coord_log.scroll >= max_scroll {
             self.coord_log.auto_tail = true;
@@ -3050,7 +3049,10 @@ impl VizApp {
 
     /// Scroll coordinator log to bottom.
     pub fn coord_log_scroll_to_bottom(&mut self) {
-        let max_scroll = self.coord_log.total_wrapped_lines.saturating_sub(self.coord_log.viewport_height);
+        let max_scroll = self
+            .coord_log
+            .total_wrapped_lines
+            .saturating_sub(self.coord_log.viewport_height);
         self.coord_log.scroll = max_scroll;
         self.coord_log.auto_tail = true;
     }
@@ -3210,8 +3212,6 @@ impl VizApp {
             graph_scroll_activity: None,
             panel_scroll_activity: None,
             scrollbar_drag: None,
-            last_graph_scrollbar_area: Rect::default(),
-            last_panel_scrollbar_area: Rect::default(),
             last_graph_mtime: None,
             last_refresh: Instant::now(),
             last_refresh_display: String::new(),

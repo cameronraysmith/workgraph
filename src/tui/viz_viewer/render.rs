@@ -94,7 +94,9 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
             app.scroll.viewport_width = main_area.width as usize;
 
             draw_viz_content(frame, app, main_area);
-            if app.scroll.content_height > app.scroll.viewport_height && app.graph_scrollbar_visible() {
+            if app.scroll.content_height > app.scroll.viewport_height
+                && app.graph_scrollbar_visible()
+            {
                 draw_scrollbar(frame, app, main_area);
             }
         }
@@ -158,7 +160,8 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
                 app.scroll.viewport_width = main_area.width as usize;
 
                 draw_viz_content(frame, app, main_area);
-                if app.scroll.content_height > app.scroll.viewport_height && app.graph_scrollbar_visible()
+                if app.scroll.content_height > app.scroll.viewport_height
+                    && app.graph_scrollbar_visible()
                 {
                     draw_scrollbar(frame, app, main_area);
                 }
@@ -1462,18 +1465,28 @@ fn draw_coord_log_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         let msg = Paragraph::new(vec![
             Line::from(Span::styled(
                 "Coordinator Log",
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
-            Line::from(Span::styled("No coordinator activity yet.", Style::default().fg(Color::DarkGray))),
-            Line::from(Span::styled("(Start the service with `wg service start`)", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "No coordinator activity yet.",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "(Start the service with `wg service start`)",
+                Style::default().fg(Color::DarkGray),
+            )),
         ]);
         frame.render_widget(msg, area);
         return;
     }
     let viewport_h = area.height as usize;
     app.coord_log.viewport_height = viewport_h;
-    if viewport_h == 0 { return; }
+    if viewport_h == 0 {
+        return;
+    }
     let wrap_width = area.width as usize;
     let mut wrapped_lines: Vec<Line> = Vec::new();
     for s in &app.coord_log.rendered_lines {
@@ -1504,7 +1517,10 @@ fn draw_coord_log_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
                     for (i, wl) in wrapped.iter().enumerate() {
                         if i == 0 {
                             wrapped_lines.push(Line::from(vec![
-                                Span::styled(timestamp.to_string(), Style::default().fg(Color::DarkGray)),
+                                Span::styled(
+                                    timestamp.to_string(),
+                                    Style::default().fg(Color::DarkGray),
+                                ),
                                 Span::styled(level.to_string(), Style::default().fg(level_color)),
                                 Span::raw(format!("{}{}", leading_space, wl)),
                             ]));
@@ -1518,20 +1534,26 @@ fn draw_coord_log_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         }
         if wrap_width > 0 && s.len() > wrap_width {
             let wrapped = word_wrap(s, wrap_width);
-            for wl in wrapped { wrapped_lines.push(Line::from(wl)); }
+            for wl in wrapped {
+                wrapped_lines.push(Line::from(wl));
+            }
         } else {
             wrapped_lines.push(Line::from(Span::raw(s.as_str())));
         }
     }
     let total_lines = wrapped_lines.len();
     app.coord_log.total_wrapped_lines = total_lines;
-    let scroll = app.coord_log.scroll.min(total_lines.saturating_sub(viewport_h));
+    let scroll = app
+        .coord_log
+        .scroll
+        .min(total_lines.saturating_sub(viewport_h));
     let end = (scroll + viewport_h).min(total_lines);
     let visible_lines: Vec<Line> = wrapped_lines[scroll..end].to_vec();
     let paragraph = Paragraph::new(visible_lines);
     frame.render_widget(paragraph, area);
     if total_lines > viewport_h && app.panel_scrollbar_visible() {
-        let mut scrollbar_state = ScrollbarState::new(total_lines.saturating_sub(viewport_h)).position(scroll);
+        let mut scrollbar_state =
+            ScrollbarState::new(total_lines.saturating_sub(viewport_h)).position(scroll);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
         frame.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
     }
@@ -1688,23 +1710,18 @@ fn draw_messages_tab(frame: &mut Frame, app: &VizApp, area: Rect) {
 
             // Decide inline vs above-line based on display_label length.
             let name_threshold = app.message_name_threshold as usize;
-            let name_display_len =
-                display_label.len() + if is_urgent { 4 } else { 0 };
+            let name_display_len = display_label.len() + if is_urgent { 4 } else { 0 };
 
             if name_display_len > name_threshold {
                 // Long name: put on its own line, body with fixed indent.
-                let mut name_spans: Vec<Span> =
-                    vec![Span::styled(display_label, sender_style)];
+                let mut name_spans: Vec<Span> = vec![Span::styled(display_label, sender_style)];
                 if is_urgent {
                     name_spans.push(Span::styled(
                         " [!]",
-                        Style::default()
-                            .fg(Color::Red)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                     ));
                 }
-                name_spans
-                    .push(Span::styled(":", Style::default().fg(Color::DarkGray)));
+                name_spans.push(Span::styled(":", Style::default().fg(Color::DarkGray)));
                 name_spans.push(Span::styled(
                     format!("  {}", timestamp),
                     Style::default().fg(Color::DarkGray),
@@ -1716,33 +1733,23 @@ fn draw_messages_tab(frame: &mut Frame, app: &VizApp, area: Rect) {
                 let text_width = wrap_width.saturating_sub(fixed_indent);
 
                 if text_width == 0 || clean_body.is_empty() {
-                    wrapped_lines.push(Line::from(Span::raw(format!(
-                        "{}{}",
-                        indent, clean_body
-                    ))));
+                    wrapped_lines.push(Line::from(Span::raw(format!("{}{}", indent, clean_body))));
                 } else {
                     let wrapped = word_wrap(&clean_body, text_width);
                     for wl in &wrapped {
-                        wrapped_lines.push(Line::from(Span::raw(format!(
-                            "{}{}",
-                            indent, wl
-                        ))));
+                        wrapped_lines.push(Line::from(Span::raw(format!("{}{}", indent, wl))));
                     }
                 }
             } else {
                 // Short name: inline "name: body" with matching indentation.
-                let mut prefix_spans: Vec<Span> =
-                    vec![Span::styled(display_label, sender_style)];
+                let mut prefix_spans: Vec<Span> = vec![Span::styled(display_label, sender_style)];
                 if is_urgent {
                     prefix_spans.push(Span::styled(
                         " [!]",
-                        Style::default()
-                            .fg(Color::Red)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                     ));
                 }
-                prefix_spans
-                    .push(Span::styled(": ", Style::default().fg(Color::DarkGray)));
+                prefix_spans.push(Span::styled(": ", Style::default().fg(Color::DarkGray)));
 
                 let prefix_display_len: usize =
                     prefix_spans.iter().map(|sp| sp.content.len()).sum();
@@ -1771,10 +1778,7 @@ fn draw_messages_tab(frame: &mut Frame, app: &VizApp, area: Rect) {
                             }
                             wrapped_lines.push(Line::from(line_spans));
                         } else {
-                            wrapped_lines.push(Line::from(Span::raw(format!(
-                                "{}{}",
-                                indent, wl
-                            ))));
+                            wrapped_lines.push(Line::from(Span::raw(format!("{}{}", indent, wl))));
                         }
                     }
                     if wrapped.len() > 1 {
