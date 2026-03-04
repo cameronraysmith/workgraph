@@ -99,6 +99,8 @@ pub(crate) fn spawn_agent_inner(
     let task_exec = task.exec.clone();
     // Get task model preference
     let task_model = task.model.clone();
+    // Get session_id for resume (from previous wg wait)
+    let resume_session_id = task.session_id.clone();
     // Resolve exec_mode: task.exec_mode > role.default_exec_mode > "full"
     let resolved_exec_mode = resolve_task_exec_mode(task, dir);
     // Load executor config using the registry
@@ -163,6 +165,7 @@ pub(crate) fn spawn_agent_inner(
         &effective_model,
         &vars,
         &task_exec,
+        resume_session_id.as_deref(),
     )?;
 
     // Resolve effective timeout: CLI param > executor config > coordinator config.
@@ -376,8 +379,36 @@ fn build_inner_command(
     effective_model: &Option<String>,
     vars: &TemplateVars,
     task_exec: &Option<String>,
+    resume_session_id: Option<&str>,
 ) -> Result<String> {
     let inner_command = match settings.executor_type.as_str() {
+        "claude" if resume_session_id.is_some() && exec_mode != "bare" => {
+            // Resume mode: use --resume <session_id> with checkpoint as follow-up message
+            let session_id = resume_session_id.unwrap();
+            let mut cmd_parts = vec![shell_escape(&settings.command)];
+            cmd_parts.push("--resume".to_string());
+            cmd_parts.push(shell_escape(session_id));
+            cmd_parts.push("--print".to_string());
+            cmd_parts.push("--verbose".to_string());
+            cmd_parts.push("--output-format".to_string());
+            cmd_parts.push("stream-json".to_string());
+            cmd_parts.push("--dangerously-skip-permissions".to_string());
+            cmd_parts.push("--disallowedTools".to_string());
+            cmd_parts.push(shell_escape("Agent"));
+            cmd_parts.push("--disable-slash-commands".to_string());
+            if let Some(m) = effective_model {
+                cmd_parts.push("--model".to_string());
+                cmd_parts.push(shell_escape(m));
+            }
+            let claude_cmd = cmd_parts.join(" ");
+
+            // Write the resume context (checkpoint) as the follow-up message
+            let resume_msg = vars.task_context.clone();
+            let resume_file = output_dir.join("resume_message.txt");
+            fs::write(&resume_file, &resume_msg)
+                .with_context(|| format!("Failed to write resume message: {:?}", resume_file))?;
+            prompt_file_command(&resume_file.to_string_lossy(), &claude_cmd)
+        }
         "claude" if exec_mode == "bare" => {
             // Bare mode: lightweight execution with --system-prompt and no tools.
             // Used for pure-reasoning tasks (synthesis, triage, summarization).

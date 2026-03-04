@@ -54,6 +54,11 @@ pub(crate) fn build_task_context(
         }
     }
 
+    // Inject resume context from checkpoint (set by coordinator when waking a Waiting task)
+    if let Some(ref checkpoint) = task.checkpoint {
+        context_parts.push(checkpoint.clone());
+    }
+
     if context_parts.is_empty() {
         "No context from dependencies".to_string()
     } else {

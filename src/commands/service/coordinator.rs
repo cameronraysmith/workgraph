@@ -1685,7 +1685,7 @@ fn generate_checkpoint_summary(
     let timeout_secs = config.agency.triage_timeout.unwrap_or(30);
 
     // Read last 20KB of output for summary context
-    let log_content = triage::read_truncated_log_pub(output_file, 20_000);
+    let log_content = triage::read_truncated_log(output_file, 20_000);
 
     let prompt = format!(
         r#"Summarize the progress of an agent working on task '{task_id}'.

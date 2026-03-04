@@ -313,7 +313,7 @@ struct TriageVerdict {
 }
 
 /// Read the last `max_bytes` of a file, prepending a truncation notice if needed.
-fn read_truncated_log(path: &str, max_bytes: usize) -> String {
+pub(super) fn read_truncated_log(path: &str, max_bytes: usize) -> String {
     let file = match fs::File::open(path) {
         Ok(f) => f,
         Err(_) => return "(output log not found or unreadable)".to_string(),
