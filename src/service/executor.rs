@@ -45,15 +45,28 @@ You MUST use these commands to track your work:
    ```
 
 3. **Validate your work** before marking done:
+   - **Check task-specific criteria first:** Run `wg show {{task_id}}` and look for a **Verification Required** section or a **## Validation** section in the description. Those criteria are your primary acceptance test — address every item.
    - **Code tasks:** Run `cargo build` and `cargo test` (or the project's equivalent). Fix any failures.
    - **Research/docs tasks:** Re-read the task description and verify your output addresses every requirement. Check that referenced files and links exist.
    - **All tasks:** Log your validation results:
      ```bash
+     wg log {{task_id}} \"Validated: task-specific criteria met\"
      wg log {{task_id}} \"Validated: cargo build + cargo test pass\"
-     wg log {{task_id}} \"Validated: re-read description, all requirements addressed\"
      ```
 
-4. **Check messages AGAIN and reply** (BEFORE marking done — this is a completion gate):
+4. **Commit and push** if you modified files:
+   - Run `cargo build` and `cargo test` BEFORE committing — never commit broken code
+   - Stage and commit with a descriptive message referencing the task ID:
+     ```bash
+     git add -A && git commit -m \"feat: <description> ({{task_id}})\"
+     git push
+     ```
+   - Log the commit hash:
+     ```bash
+     wg log {{task_id}} \"Committed: $(git rev-parse --short HEAD) — pushed to remote\"
+     ```
+
+5. **Check messages AGAIN and reply** (BEFORE marking done — this is a completion gate):
    ```bash
    wg msg read {{task_id}} --agent $WG_AGENT_ID
    ```
@@ -63,13 +76,13 @@ You MUST use these commands to track your work:
    ```
    If you skip replies, the task is incomplete. Do NOT mark done with unreplied messages.
 
-5. **Complete the task** when done:
+6. **Complete the task** when done:
    ```bash
    wg done {{task_id}}
    wg done {{task_id}} --converged  # Use this if task has loop edges and work is complete
    ```
 
-6. **Mark as failed** if you cannot complete:
+7. **Mark as failed** if you cannot complete:
    ```bash
    wg fail {{task_id}} --reason \"Specific reason why\"
    ```
@@ -77,6 +90,7 @@ You MUST use these commands to track your work:
 ## Important
 - Run `wg log` commands BEFORE doing work to track progress
 - Validate BEFORE running `wg done`
+- Commit and push your changes BEFORE running `wg done`
 - Run `wg done` BEFORE you finish responding
 - If the task description is unclear, do your best interpretation\n";
 
@@ -177,6 +191,21 @@ The coordinator will dispatch them automatically.
 `wg add 'Step 1' --after {{task_id}} && wg add 'Step 2' --after step-1`
 - **Bug/issue found**: \
 `wg add 'Fix: ...' --after {{task_id}} -d 'Found while working on {{task_id}}'`
+
+### Include validation criteria in subtasks
+Every code subtask description MUST include a `## Validation` section with concrete acceptance criteria. \
+Use `--verify` to attach machine-checkable criteria:
+```bash
+wg add 'Implement auth endpoint' --after {{task_id}} \
+  --verify 'cargo test test_auth_ passes; endpoint returns 401 for bad tokens' \
+  -d '## Description
+Add POST /auth/token endpoint.
+
+## Validation
+- [ ] Failing test written first: test_auth_rejects_expired_token
+- [ ] Implementation makes the test pass
+- [ ] cargo test passes with no regressions'
+```
 
 ### Guardrails
 - You can create up to **{{max_child_tasks}}** subtasks per session (configurable via `wg config`)
@@ -1862,6 +1891,8 @@ args = ["--custom-flag"]
         assert!(REQUIRED_WORKFLOW_SECTION.contains("wg fail {{task_id}}"));
         assert!(REQUIRED_WORKFLOW_SECTION.contains("wg artifact {{task_id}}"));
         assert!(REQUIRED_WORKFLOW_SECTION.contains("--converged"));
+        assert!(REQUIRED_WORKFLOW_SECTION.contains("git commit"));
+        assert!(REQUIRED_WORKFLOW_SECTION.contains("git push"));
 
         assert!(GRAPH_PATTERNS_SECTION.contains("Golden rule"));
         assert!(GRAPH_PATTERNS_SECTION.contains("pipeline"));
