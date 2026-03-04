@@ -319,7 +319,8 @@ pub(crate) fn build_graph_summary(
     let summary = parts.join("\n\n");
     // Hard cap at 4000 chars
     if summary.len() > 4000 {
-        let mut truncated = summary[..3950].to_string();
+        let end = summary.floor_char_boundary(3950);
+        let mut truncated = summary[..end].to_string();
         truncated.push_str("\n\n... (graph summary truncated)");
         truncated
     } else {

@@ -603,6 +603,18 @@ pub struct AgentMonitorEntry {
     pub completed_at: Option<String>,
 }
 
+/// Live JSONL stream state for a single agent.
+pub struct AgentStreamInfo {
+    /// File position (byte offset) — resume reading from here.
+    pub file_offset: u64,
+    /// Total JSONL message count seen so far.
+    pub message_count: usize,
+    /// Latest content snippet (assistant text or tool use summary).
+    pub latest_snippet: Option<String>,
+    /// Whether the latest event was a tool use (vs text).
+    pub latest_is_tool: bool,
+}
+
 /// A single phase in the agency lifecycle (assignment, execution, or evaluation).
 pub struct LifecyclePhase {
     /// Task ID for this phase (e.g., "assign-foo", "foo", "evaluate-foo")
@@ -1099,6 +1111,8 @@ pub struct VizApp {
 
     // ── Agent monitor state ──
     pub agent_monitor: AgentMonitorState,
+    /// Per-agent JSONL stream state for live activity feed.
+    pub agent_streams: HashMap<String, AgentStreamInfo>,
 
     // ── Agency lifecycle for selected task ──
     pub agency_lifecycle: Option<AgencyLifecycle>,
@@ -1301,6 +1315,7 @@ impl VizApp {
             },
             chat: ChatState::default(),
             agent_monitor: AgentMonitorState::default(),
+            agent_streams: HashMap::new(),
             agency_lifecycle: None,
             log_pane: LogPaneState::default(),
             coord_log: CoordLogState::default(),
@@ -1726,7 +1741,9 @@ impl VizApp {
         self.invalidate_messages_panel();
     }
 
-    /// Scroll the viewport so the selected task is visible.
+    /// Scroll the viewport so the selected task stays within the middle 60% of
+    /// the viewport (a "comfort zone"). If the task is in the top or bottom 20%,
+    /// recenter it to the middle — similar to vim's `scrolloff`.
     fn scroll_to_selected_task(&mut self) {
         let task_id = match self.selected_task_idx.and_then(|i| self.task_order.get(i)) {
             Some(id) => id,
@@ -1736,13 +1753,16 @@ impl VizApp {
             Some(&line) => line,
             None => return,
         };
-        if let Some(visible_pos) = self.original_to_visible(orig_line)
-            && (visible_pos < self.scroll.offset_y
-                || visible_pos >= self.scroll.offset_y + self.scroll.viewport_height)
-        {
-            let half = self.scroll.viewport_height / 2;
-            self.scroll.offset_y = visible_pos.saturating_sub(half);
-            self.scroll.clamp();
+        if let Some(visible_pos) = self.original_to_visible(orig_line) {
+            let vh = self.scroll.viewport_height;
+            let margin = vh / 5; // 20% margin top and bottom
+            let comfort_top = self.scroll.offset_y + margin;
+            let comfort_bottom = self.scroll.offset_y + vh.saturating_sub(margin);
+            if visible_pos < comfort_top || visible_pos >= comfort_bottom {
+                let half = vh / 2;
+                self.scroll.offset_y = visible_pos.saturating_sub(half);
+                self.scroll.clamp();
+            }
         }
     }
 
@@ -2357,6 +2377,7 @@ impl VizApp {
             }
             self.load_stats();
             self.load_agent_monitor();
+            self.update_agent_streams();
             // Preserve HUD scroll position when the selected task hasn't changed.
             let prev_hud_task = self.hud_detail.as_ref().map(|d| d.task_id.clone());
             let prev_hud_scroll = self.hud_scroll;
@@ -3575,6 +3596,7 @@ impl VizApp {
             },
             chat: ChatState::default(),
             agent_monitor: AgentMonitorState::default(),
+            agent_streams: HashMap::new(),
             agency_lifecycle: None,
             log_pane: LogPaneState::default(),
             coord_log: CoordLogState::default(),
@@ -3862,6 +3884,162 @@ impl VizApp {
             }
             Err(_) => {
                 self.agent_monitor.agents.clear();
+            }
+        }
+    }
+
+    /// Update live JSONL stream state for all active (Working) agents.
+    /// Reads new lines from each agent's output.log since the last known offset.
+    pub fn update_agent_streams(&mut self) {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let agents_dir = self.workgraph_dir.join("agents");
+        // Collect active agent IDs.
+        let active_ids: Vec<String> = self
+            .agent_monitor
+            .agents
+            .iter()
+            .filter(|a| matches!(a.status, AgentStatus::Working))
+            .map(|a| a.agent_id.clone())
+            .collect();
+
+        // Remove stale entries for agents no longer active.
+        self.agent_streams.retain(|id, _| active_ids.contains(id));
+
+        for agent_id in &active_ids {
+            let log_path = agents_dir.join(agent_id).join("output.log");
+            if !log_path.exists() {
+                continue;
+            }
+
+            let info = self
+                .agent_streams
+                .entry(agent_id.clone())
+                .or_insert_with(|| AgentStreamInfo {
+                    file_offset: 0,
+                    message_count: 0,
+                    latest_snippet: None,
+                    latest_is_tool: false,
+                });
+
+            // Open file and seek to last known position.
+            let mut file = match std::fs::File::open(&log_path) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+
+            let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+            if file_len <= info.file_offset {
+                continue; // No new data.
+            }
+
+            if let Err(_) = file.seek(SeekFrom::Start(info.file_offset)) {
+                continue;
+            }
+
+            let mut new_data = String::new();
+            if let Err(_) = file.read_to_string(&mut new_data) {
+                continue;
+            }
+
+            info.file_offset = file_len;
+
+            // Parse each new JSONL line.
+            for line in new_data.lines() {
+                let line = line.trim();
+                if line.is_empty() || !line.starts_with('{') {
+                    continue;
+                }
+                let val: serde_json::Value = match serde_json::from_str(line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+
+                let msg_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+                match msg_type {
+                    "assistant" => {
+                        info.message_count += 1;
+                        // Extract content from message.content array.
+                        if let Some(content) = val
+                            .get("message")
+                            .and_then(|m| m.get("content"))
+                            .and_then(|c| c.as_array())
+                        {
+                            // Process content blocks — last text or tool_use wins.
+                            for block in content {
+                                let block_type =
+                                    block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                                match block_type {
+                                    "text" => {
+                                        if let Some(text) =
+                                            block.get("text").and_then(|v| v.as_str())
+                                        {
+                                            let trimmed = text.trim();
+                                            if !trimmed.is_empty() {
+                                                // Take the last non-empty line as snippet.
+                                                let snippet =
+                                                    trimmed.lines().last().unwrap_or(trimmed);
+                                                let snippet = if snippet.len() > 120 {
+                                                    format!("{}…", &snippet[..120])
+                                                } else {
+                                                    snippet.to_string()
+                                                };
+                                                info.latest_snippet = Some(snippet);
+                                                info.latest_is_tool = false;
+                                            }
+                                        }
+                                    }
+                                    "tool_use" => {
+                                        let name = block
+                                            .get("name")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("?");
+                                        // For Bash/Edit/Write, show a brief input summary.
+                                        let detail = match name {
+                                            "Bash" => block
+                                                .get("input")
+                                                .and_then(|i| i.get("command"))
+                                                .and_then(|v| v.as_str())
+                                                .map(|c| {
+                                                    let c = c.trim();
+                                                    if c.len() > 80 {
+                                                        format!("{name}: {}…", &c[..80])
+                                                    } else {
+                                                        format!("{name}: {c}")
+                                                    }
+                                                }),
+                                            "Read" | "Write" | "Edit" => block
+                                                .get("input")
+                                                .and_then(|i| i.get("file_path"))
+                                                .and_then(|v| v.as_str())
+                                                .map(|p| format!("{name}: {p}")),
+                                            "Grep" => block
+                                                .get("input")
+                                                .and_then(|i| i.get("pattern"))
+                                                .and_then(|v| v.as_str())
+                                                .map(|p| format!("{name}: {p}")),
+                                            "Glob" => block
+                                                .get("input")
+                                                .and_then(|i| i.get("pattern"))
+                                                .and_then(|v| v.as_str())
+                                                .map(|p| format!("{name}: {p}")),
+                                            _ => None,
+                                        };
+                                        info.latest_snippet =
+                                            Some(detail.unwrap_or_else(|| name.to_string()));
+                                        info.latest_is_tool = true;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    "user" | "result" => {
+                        info.message_count += 1;
+                    }
+                    _ => {}
+                }
             }
         }
     }

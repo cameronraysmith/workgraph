@@ -125,7 +125,10 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
                     let left_width = main_area.width.saturating_sub(right_width);
                     let split = Layout::default()
                         .direction(Direction::Horizontal)
-                        .constraints([Constraint::Length(left_width), Constraint::Length(right_width)])
+                        .constraints([
+                            Constraint::Length(left_width),
+                            Constraint::Length(right_width),
+                        ])
                         .split(main_area);
 
                     let viz_area = split[0];
@@ -153,13 +156,16 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
                 } else {
                     // Narrow: viz on top, right panel on bottom.
                     // Use right_panel_percent so = cycling works in vertical mode too.
-                    let panel_height =
-                        (main_area.height as u32 * app.right_panel_percent as u32 / 100)
-                            .max(5) as u16;
+                    let panel_height = (main_area.height as u32 * app.right_panel_percent as u32
+                        / 100)
+                        .max(5) as u16;
                     let top_height = main_area.height.saturating_sub(panel_height);
                     let split = Layout::default()
                         .direction(Direction::Vertical)
-                        .constraints([Constraint::Length(top_height), Constraint::Length(panel_height)])
+                        .constraints([
+                            Constraint::Length(top_height),
+                            Constraint::Length(panel_height),
+                        ])
                         .split(main_area);
 
                     let viz_area = split[0];
@@ -1302,7 +1308,10 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
             } else if is_tool_line {
                 // Tool call box-drawing lines: dim styling, indented to match prefix
                 let mut spans = vec![Span::raw(indent.clone())];
-                spans.push(Span::styled(line_text, Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(
+                    line_text,
+                    Style::default().fg(Color::DarkGray),
+                ));
                 rendered_lines.push(Line::from(spans));
             } else {
                 // Continuation lines: indent to align with text after prefix
@@ -1331,7 +1340,7 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     // Streaming indicator when awaiting response.
     if app.chat.awaiting_response {
         rendered_lines.push(Line::from(Span::styled(
-            "↯↯↯: ...",
+            "↯ ...",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::SLOW_BLINK),
@@ -2460,7 +2469,11 @@ fn wrap_line_spans<'a>(lines: &[Line<'a>], max_width: usize) -> Vec<Line<'a>> {
                     cur_width += tw;
                 } else {
                     // Space would overflow — break here, trim trailing space.
-                    while cur_line.last().map(|&(c, _)| c.is_whitespace()).unwrap_or(false) {
+                    while cur_line
+                        .last()
+                        .map(|&(c, _)| c.is_whitespace())
+                        .unwrap_or(false)
+                    {
                         cur_line.pop();
                     }
                     if !cur_line.is_empty() {
@@ -2491,7 +2504,11 @@ fn wrap_line_spans<'a>(lines: &[Line<'a>], max_width: usize) -> Vec<Line<'a>> {
                 } else {
                     // Wrap: start new line with this word.
                     // Trim trailing whitespace from current line.
-                    while cur_line.last().map(|&(c, _)| c.is_whitespace()).unwrap_or(false) {
+                    while cur_line
+                        .last()
+                        .map(|&(c, _)| c.is_whitespace())
+                        .unwrap_or(false)
+                    {
                         cur_line.pop();
                     }
                     if !cur_line.is_empty() {
@@ -2520,7 +2537,11 @@ fn wrap_line_spans<'a>(lines: &[Line<'a>], max_width: usize) -> Vec<Line<'a>> {
             }
         }
         // Flush last line, trimming trailing whitespace.
-        while cur_line.last().map(|&(c, _)| c.is_whitespace()).unwrap_or(false) {
+        while cur_line
+            .last()
+            .map(|&(c, _)| c.is_whitespace())
+            .unwrap_or(false)
+        {
             cur_line.pop();
         }
         if !cur_line.is_empty() {
@@ -2766,24 +2787,29 @@ fn draw_agents_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
                 }
                 _ => Span::styled("○ ", Style::default().fg(Color::DarkGray)),
             };
-            lines.push(Line::from(vec![
+            // Build agent header with optional stream message count.
+            let stream_info = app.agent_streams.get(&agent.agent_id);
+            let mut header_spans = vec![
                 status_indicator,
                 Span::styled(
                     &agent.agent_id,
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-            ]));
+            ];
             if let Some(ref tid) = agent.task_id {
-                let task_display = if let Some(ref title) = agent.task_title {
-                    format!("  Task: {} ({})", tid, title)
-                } else {
-                    format!("  Task: {}", tid)
-                };
-                lines.push(Line::from(Span::styled(
-                    task_display,
-                    Style::default().fg(Color::White),
-                )));
+                let task_label = agent.task_title.as_deref().unwrap_or(tid.as_str());
+                header_spans.push(Span::styled(
+                    format!(" [{}]", task_label),
+                    Style::default().fg(Color::DarkGray),
+                ));
             }
+            if let Some(si) = stream_info {
+                header_spans.push(Span::styled(
+                    format!(" \u{1f4e8} {} msgs", si.message_count),
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
+            lines.push(Line::from(header_spans));
             // Show timing info
             {
                 let is_alive = matches!(agent.status, AgentStatus::Working);
@@ -2834,6 +2860,24 @@ fn draw_agents_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
                     lines.push(Line::from(Span::styled(
                         timing,
                         Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+            // Show live stream snippet for working agents.
+            if let Some(si) = stream_info {
+                if let Some(ref snippet) = si.latest_snippet {
+                    let icon = if si.latest_is_tool {
+                        "\u{1f527} "
+                    } else {
+                        "\u{1f4ad} "
+                    };
+                    lines.push(Line::from(Span::styled(
+                        format!("  {}{}", icon, snippet),
+                        Style::default().fg(if si.latest_is_tool {
+                            Color::Cyan
+                        } else {
+                            Color::White
+                        }),
                     )));
                 }
             }
@@ -6811,7 +6855,10 @@ mod tests {
             .collect();
         let result_text = all_text(&result);
         let result_words: Vec<&str> = result_text.split_whitespace().collect();
-        assert_eq!(original_words, result_words, "Content was lost during wrapping");
+        assert_eq!(
+            original_words, result_words,
+            "Content was lost during wrapping"
+        );
     }
 
     #[test]
@@ -6896,7 +6943,10 @@ mod tests {
             .collect();
         let result_text = all_text(&result);
         let result_words: Vec<&str> = result_text.split_whitespace().collect();
-        assert_eq!(original_words, result_words, "Content was lost during wrapping");
+        assert_eq!(
+            original_words, result_words,
+            "Content was lost during wrapping"
+        );
     }
 
     #[test]
@@ -6920,7 +6970,10 @@ mod tests {
             .chars()
             .filter(|c| !c.is_whitespace())
             .collect();
-        assert_eq!(original_chars, result_chars, "Non-whitespace content was lost");
+        assert_eq!(
+            original_chars, result_chars,
+            "Non-whitespace content was lost"
+        );
 
         for (i, l) in result.iter().enumerate() {
             let w = line_display_width(l);
