@@ -96,7 +96,7 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
             app.scroll.viewport_height = main_area.height as usize;
             app.scroll.viewport_width = main_area.width as usize;
         }
-        LayoutMode::ThirdInspector | LayoutMode::TwoThirdsInspector => {
+        LayoutMode::ThirdInspector | LayoutMode::HalfInspector | LayoutMode::TwoThirdsInspector => {
             if app.right_panel_visible {
                 if area.width >= SIDE_MIN_WIDTH {
                     let right_width =
@@ -139,10 +139,14 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
         }
     }
 
-    // Phase 2: Deferred centering — viewport_height is now set, apply before drawing.
+    // Phase 2: Deferred centering/scrolling — viewport_height is now set, apply before drawing.
     if app.needs_center_on_selected {
         app.needs_center_on_selected = false;
+        app.needs_scroll_into_view = false; // center supersedes scroll-into-view
         app.center_on_selected_task();
+    } else if app.needs_scroll_into_view {
+        app.needs_scroll_into_view = false;
+        app.scroll_to_selected_task();
     }
 
     // Phase 3: Draw content using the (possibly updated) scroll offset.
@@ -167,7 +171,7 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
                 app.scroll.has_horizontal_overflow() && app.graph_hscrollbar_visible(),
             );
         }
-        LayoutMode::ThirdInspector | LayoutMode::TwoThirdsInspector => {
+        LayoutMode::ThirdInspector | LayoutMode::HalfInspector | LayoutMode::TwoThirdsInspector => {
             if app.right_panel_visible {
                 if area.width >= SIDE_MIN_WIDTH {
                     let right_width =
@@ -269,7 +273,15 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
 
     // Text prompt overlay
     if let InputMode::TextPrompt(ref action) = app.input_mode {
-        draw_text_prompt(frame, action, &app.text_prompt.input);
+        app.last_text_prompt_area = draw_text_prompt(
+            frame,
+            action,
+            &app.text_prompt.input,
+            app.text_prompt.cursor,
+            &mut app.text_prompt.scroll,
+        );
+    } else {
+        app.last_text_prompt_area = Rect::default();
     }
 
     // Task creation form overlay
@@ -1280,8 +1292,13 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     // Map each rendered line to its source message index (for click-to-toggle).
     let mut line_to_message: Vec<Option<usize>> = Vec::new();
 
+    // Subtle warm-tinted dark background for user messages (like iMessage blue/gray,
+    // but extremely subtle). Echoes the yellow ">" prefix and loop arrows.
+    let user_msg_bg = Color::Rgb(30, 28, 20);
+
     for (msg_idx, msg) in app.chat.messages.iter().enumerate() {
         let is_coordinator = msg.role == super::state::ChatRole::Coordinator;
+        let is_user = msg.role == super::state::ChatRole::User;
 
         let (prefix, role_style) = match msg.role {
             super::state::ChatRole::User => (
@@ -1314,54 +1331,118 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
             &msg.text
         };
 
-        // Render markdown to styled lines, then word-wrap.
+        // Render markdown to styled lines, then word-wrap with tool-box awareness.
         let md_lines = markdown_to_lines(display_text, text_width);
-        let wrapped = if md_lines.is_empty() {
+
+        // Build wrapped lines. For coordinator tool-box lines, use special
+        // wrapping that maintains the │ prefix on continuation lines and
+        // preserves content coloring.
+        let border_style = Style::default().fg(Color::DarkGray);
+        let tool_name_style = Style::default()
+            .fg(Color::Indexed(75))
+            .add_modifier(Modifier::BOLD);
+        let tool_content_style = Style::default().fg(Color::Indexed(252));
+
+        let wrapped: Vec<Line> = if md_lines.is_empty() {
             vec![Line::from("")]
-        } else {
+        } else if !is_coordinator {
             wrap_line_spans(&md_lines, text_width)
+        } else {
+            let mut out: Vec<Line> = Vec::new();
+            for line in &md_lines {
+                let lt: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                if lt.starts_with("┌─") {
+                    // Tool header: border in DarkGray, tool name highlighted.
+                    // Format: ┌─ ToolName ────
+                    // "┌─ " = 7 bytes (┌=3 + ─=3 + space=1).
+                    let after_prefix = lt.get(7..).unwrap_or("");
+                    let name_end = after_prefix.find(|c: char| c == '─' || c == ' ')
+                        .unwrap_or(after_prefix.len());
+                    let tool_name = after_prefix[..name_end].trim();
+                    let rest_start = 7 + name_end; // byte offset into lt
+                    let rest = lt.get(rest_start..).unwrap_or("");
+                    out.push(Line::from(vec![
+                        Span::styled("┌─ ", border_style),
+                        Span::styled(tool_name.to_string(), tool_name_style),
+                        Span::styled(format!(" {}", rest.trim_start()), border_style),
+                    ]));
+                } else if lt.starts_with("└─") {
+                    // Tool footer: all DarkGray.
+                    out.push(Line::from(Span::styled(lt, border_style)));
+                } else if lt.starts_with("│ ") {
+                    // Tool content line: │ in DarkGray, content in readable color.
+                    // "│ " is 4 bytes (│=3 + space=1), 2 display columns.
+                    let content = lt.get(4..).unwrap_or("");
+                    let pipe_display_w: usize = 2; // "│ " = 2 columns
+                    let cont_display_w: usize = 4; // "│   " = 4 columns
+                    let wrap_w = text_width.saturating_sub(cont_display_w);
+                    if wrap_w == 0 || content.width() <= text_width.saturating_sub(pipe_display_w) {
+                        // Fits on one line.
+                        out.push(Line::from(vec![
+                            Span::styled("│ ", border_style),
+                            Span::styled(content.to_string(), tool_content_style),
+                        ]));
+                    } else {
+                        // Wrap content, first line with "│ ", continuations with "│   ".
+                        let wrapped_content = word_wrap(content, wrap_w);
+                        for (i, w) in wrapped_content.iter().enumerate() {
+                            if i == 0 {
+                                out.push(Line::from(vec![
+                                    Span::styled("│ ", border_style),
+                                    Span::styled(w.to_string(), tool_content_style),
+                                ]));
+                            } else {
+                                out.push(Line::from(vec![
+                                    Span::styled("│   ", border_style),
+                                    Span::styled(w.to_string(), tool_content_style),
+                                ]));
+                            }
+                        }
+                    }
+                } else {
+                    // Normal line — standard wrapping.
+                    out.extend(wrap_line_spans(&[line.clone()], text_width));
+                }
+            }
+            out
         };
 
         let mut first_line = true;
         for line in &wrapped {
-            let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-
-            // For coordinator messages, detect tool call box-drawing lines.
-            let is_tool_line = is_coordinator
-                && (line_text.starts_with("┌─")
-                    || line_text.starts_with("└─")
-                    || line_text.starts_with("│ "));
-
             if first_line {
                 let mut spans = vec![Span::styled(prefix.clone(), role_style)];
                 spans.extend(line.spans.iter().cloned());
-                rendered_lines.push(Line::from(spans));
+                let mut built = Line::from(spans);
+                if is_user {
+                    built = apply_line_bg(built, user_msg_bg);
+                }
+                rendered_lines.push(built);
                 first_line = false;
-            } else if is_tool_line {
-                // Tool call box-drawing lines: dim styling, indented to match prefix
-                let mut spans = vec![Span::raw(indent.clone())];
-                spans.push(Span::styled(
-                    line_text,
-                    Style::default().fg(Color::DarkGray),
-                ));
-                rendered_lines.push(Line::from(spans));
             } else {
-                // Continuation lines: indent to align with text after prefix
+                // Continuation/tool lines: indent to align with text after prefix
                 let mut spans = vec![Span::raw(indent.clone())];
                 spans.extend(line.spans.iter().cloned());
-                rendered_lines.push(Line::from(spans));
+                let mut built = Line::from(spans);
+                if is_user {
+                    built = apply_line_bg(built, user_msg_bg);
+                }
+                rendered_lines.push(built);
             }
             line_to_message.push(Some(msg_idx));
         }
         // Show attachment indicators.
         for att_name in &msg.attachments {
             let att_text = format!("{}[Attached: {}]", indent, att_name);
-            rendered_lines.push(Line::from(Span::styled(
+            let mut att_line = Line::from(Span::styled(
                 att_text,
                 Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::ITALIC),
-            )));
+            ));
+            if is_user {
+                att_line = apply_line_bg(att_line, user_msg_bg);
+            }
+            rendered_lines.push(att_line);
             line_to_message.push(Some(msg_idx));
         }
         // Blank line between messages.
@@ -1625,6 +1706,19 @@ fn draw_chat_input(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         ));
         frame.render_widget(Paragraph::new(hint), area);
     }
+}
+
+/// Apply a background color to every span in a line.
+fn apply_line_bg(line: Line<'_>, bg: Color) -> Line<'_> {
+    Line::from(
+        line.spans
+            .into_iter()
+            .map(|s| {
+                let new_style = s.style.bg(bg);
+                s.style(new_style)
+            })
+            .collect::<Vec<_>>(),
+    )
 }
 
 /// Count the number of visual lines for the given input text at a given width.
@@ -1936,15 +2030,15 @@ fn draw_messages_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     }
 
     // Reserve space for input area (like Chat tab).
-    let input_height: u16 = if app.input_mode == InputMode::MessageInput {
-        let prompt_prefix = 2; // "> "
+    let is_msg_editing = app.input_mode == InputMode::MessageInput;
+    let has_msg_text = !app.messages_panel.input.is_empty();
+    let input_height: u16 = if is_msg_editing || has_msg_text {
+        let prompt_prefix = 2; // "> " takes 2 columns
         let usable = (area.width as usize).saturating_sub(prompt_prefix).max(1);
-        let input_chars = app.messages_panel.input.chars().count();
-        let wrapped_lines = if input_chars == 0 {
-            1
-        } else {
-            input_chars.div_ceil(usable) as u16
-        };
+        // Count visual lines: split by newlines, then wrap each logical line.
+        let visual_lines = count_visual_lines(&app.messages_panel.input, usable);
+        let wrapped_lines = (visual_lines as u16).max(1);
+        // Cap so input never eats more than half the area.
         let max_input = (area.height / 2).max(2);
         let lines = wrapped_lines.min(max_input);
         lines + 1 // +1 for separator line
@@ -2252,12 +2346,39 @@ fn draw_messages_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
 }
 
 /// Draw the message input line at the bottom of the messages panel.
-fn draw_message_input(frame: &mut Frame, app: &VizApp, area: Rect) {
-    if app.input_mode == InputMode::MessageInput {
-        // Separator line.
+/// Uses the same rendering logic as `draw_chat_input` for consistent UX.
+fn draw_message_input(frame: &mut Frame, app: &mut VizApp, area: Rect) {
+    let is_editing = app.input_mode == InputMode::MessageInput;
+    let has_text = !app.messages_panel.input.is_empty();
+
+    // Colors: magenta when editing, dark gray when not (matches chat input).
+    let border_color = if is_editing {
+        Color::Magenta
+    } else {
+        Color::DarkGray
+    };
+    let prompt_color = if is_editing {
+        Color::LightMagenta
+    } else {
+        Color::DarkGray
+    };
+    let text_color = if is_editing {
+        Color::Reset
+    } else {
+        Color::DarkGray
+    };
+
+    if is_editing || has_text {
+        // Separator line (magenta when editing, dark gray when frozen).
         let sep = Line::from(Span::styled(
             "─".repeat(area.width as usize),
-            Style::default().fg(Color::DarkGray),
+            Style::default()
+                .fg(border_color)
+                .add_modifier(if is_editing {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
         ));
         if area.height >= 2 {
             frame.render_widget(
@@ -2282,42 +2403,47 @@ fn draw_message_input(frame: &mut Frame, app: &VizApp, area: Rect) {
         let prefix_len: u16 = 2;
         let usable_width = (area.width.saturating_sub(prefix_len) as usize).max(1);
 
-        let chars: Vec<char> = app.messages_panel.input.chars().collect();
-        let cursor_char_pos = app.messages_panel.input[..app.messages_panel.cursor]
-            .chars()
-            .count();
+        // Build visual lines from the input text, handling both newlines and wrapping.
+        let (visual_lines, cursor_vline, cursor_col) = build_input_visual_lines(
+            &app.messages_panel.input,
+            app.messages_panel.cursor,
+            usable_width,
+        );
 
-        let mut lines: Vec<String> = Vec::new();
-        let mut cursor_line: u16 = 0;
-        let mut cursor_col: u16 = prefix_len;
-        let mut pos = 0usize;
-
-        if chars.is_empty() {
-            lines.push(String::new());
-        } else {
-            while pos < chars.len() {
-                let end = (pos + usable_width).min(chars.len());
-                let chunk: String = chars[pos..end].iter().collect();
-                if cursor_char_pos >= pos && cursor_char_pos < end {
-                    cursor_line = lines.len() as u16;
-                    cursor_col = prefix_len + (cursor_char_pos - pos) as u16;
-                } else if cursor_char_pos == end && end == chars.len() {
-                    cursor_line = lines.len() as u16;
-                    cursor_col = prefix_len + (end - pos) as u16;
-                }
-                lines.push(chunk);
-                pos = end;
+        if is_editing {
+            // Auto-scroll to keep cursor visible within the input viewport.
+            let vh = input_h as usize;
+            if cursor_vline < app.messages_panel.input_scroll {
+                app.messages_panel.input_scroll = cursor_vline;
+            } else if cursor_vline >= app.messages_panel.input_scroll + vh {
+                app.messages_panel.input_scroll = cursor_vline + 1 - vh;
             }
         }
 
-        let styled_lines: Vec<Line> = lines
+        let vh = input_h as usize;
+        // Slice visible lines from the scroll offset.
+        let end = (app.messages_panel.input_scroll + vh).min(visual_lines.len());
+        let visible = &visual_lines[app.messages_panel.input_scroll..end];
+
+        // Render each visible line. First overall line gets "> " prefix, rest get "  ".
+        let styled_lines: Vec<Line> = visible
             .iter()
             .enumerate()
             .map(|(i, text)| {
-                let prefix = if i == 0 { prompt_prefix } else { "  " };
+                let line_idx = app.messages_panel.input_scroll + i;
+                let pfx = if line_idx == 0 { prompt_prefix } else { "  " };
                 Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(Color::Green)),
-                    Span::raw(text.as_str()),
+                    Span::styled(
+                        pfx,
+                        Style::default()
+                            .fg(prompt_color)
+                            .add_modifier(if is_editing {
+                                Modifier::BOLD
+                            } else {
+                                Modifier::empty()
+                            }),
+                    ),
+                    Span::styled(text.as_str(), Style::default().fg(text_color)),
                 ])
             })
             .collect();
@@ -2331,14 +2457,37 @@ fn draw_message_input(frame: &mut Frame, app: &VizApp, area: Rect) {
         };
         frame.render_widget(para, text_area);
 
-        // Only show cursor when the input pane has focus (focus-aware input).
-        if app.focused_panel == FocusedPanel::RightPanel {
-            let cy = input_y + cursor_line.min(input_h.saturating_sub(1));
-            let cx = area.x + cursor_col.min(area.width.saturating_sub(1));
+        // Show scroll indicator when content is scrolled.
+        if visual_lines.len() > vh {
+            let indicator = if app.messages_panel.input_scroll > 0 && end < visual_lines.len() {
+                "↕" // both directions
+            } else if app.messages_panel.input_scroll > 0 {
+                "↑" // can scroll up
+            } else {
+                "↓" // can scroll down
+            };
+            let ind_span = Span::styled(indicator, Style::default().fg(Color::DarkGray));
+            frame.render_widget(
+                Paragraph::new(Line::from(ind_span)),
+                Rect {
+                    x: area.x + area.width.saturating_sub(1),
+                    y: input_y,
+                    width: 1,
+                    height: 1,
+                },
+            );
+        }
+
+        if is_editing {
+            // Place the terminal cursor at the editing position.
+            let cursor_screen_line =
+                cursor_vline.saturating_sub(app.messages_panel.input_scroll) as u16;
+            let cy = input_y + cursor_screen_line.min(input_h.saturating_sub(1));
+            let cx = area.x + (prefix_len + cursor_col as u16).min(area.width.saturating_sub(1));
             frame.set_cursor_position((cx, cy));
         }
     } else {
-        // Hint line when not in input mode.
+        // No text and not editing: show hint line.
         let hint = Line::from(Span::styled(
             " Enter: compose  ↑↓: scroll",
             Style::default().fg(Color::DarkGray),
@@ -2679,20 +2828,23 @@ fn draw_agents_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
 
                     // Token usage
                     if let Some(ref usage) = phase.token_usage {
-                        let total = usage.total_input() + usage.output_tokens;
-                        let mut tok_parts = vec![
-                            format!("→{}", format_tokens(usage.total_input())),
-                            format!("←{}", format_tokens(usage.output_tokens)),
-                        ];
+                        let cache_total =
+                            usage.cache_read_input_tokens + usage.cache_creation_input_tokens;
+                        let mut tok_parts = vec![format!(
+                            "→{}",
+                            format_tokens(usage.input_tokens)
+                        )];
+                        if cache_total > 0 {
+                            tok_parts
+                                .push(format!("+{} cached", format_tokens(cache_total)));
+                        }
+                        tok_parts
+                            .push(format!("←{}", format_tokens(usage.output_tokens)));
                         if usage.cost_usd > 0.0 {
                             tok_parts.push(format!("${:.4}", usage.cost_usd));
                         }
                         lines.push(Line::from(Span::styled(
-                            format!(
-                                "  Tokens: {} ({})",
-                                format_tokens(total),
-                                tok_parts.join(" ")
-                            ),
+                            format!("  Tokens: {}", tok_parts.join(" ")),
                             Style::default().fg(Color::DarkGray),
                         )));
                     }
@@ -2761,15 +2913,41 @@ fn draw_agents_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
             .filter_map(|p| p.token_usage.as_ref())
             .map(|u| u.cost_usd)
             .sum();
-        let total_tokens: u64 = phases
+        let total_new_input: u64 = phases
             .iter()
             .filter_map(|p| p.as_ref())
             .filter_map(|p| p.token_usage.as_ref())
-            .map(|u| u.total_input() + u.output_tokens)
+            .map(|u| u.input_tokens)
             .sum();
+        let total_output: u64 = phases
+            .iter()
+            .filter_map(|p| p.as_ref())
+            .filter_map(|p| p.token_usage.as_ref())
+            .map(|u| u.output_tokens)
+            .sum();
+        let total_cached: u64 = phases
+            .iter()
+            .filter_map(|p| p.as_ref())
+            .filter_map(|p| p.token_usage.as_ref())
+            .map(|u| u.cache_read_input_tokens + u.cache_creation_input_tokens)
+            .sum();
+        let total_tokens = total_new_input + total_output + total_cached;
         if total_tokens > 0 {
             lines.push(Line::from(""));
-            let mut summary = format!("  Total: {}", format_tokens(total_tokens));
+            let mut summary = if total_cached > 0 {
+                format!(
+                    "  Total: →{} +{} cached ←{}",
+                    format_tokens(total_new_input),
+                    format_tokens(total_cached),
+                    format_tokens(total_output)
+                )
+            } else {
+                format!(
+                    "  Total: →{} ←{}",
+                    format_tokens(total_new_input),
+                    format_tokens(total_output)
+                )
+            };
             if total_cost > 0.0 {
                 summary.push_str(&format!(" (${:.4})", total_cost));
             }
@@ -3008,7 +3186,16 @@ fn draw_confirm_dialog(frame: &mut Frame, action: &ConfirmAction) {
 }
 
 /// Draw a text prompt overlay (fail reason, message, edit description).
-fn draw_text_prompt(frame: &mut Frame, action: &TextPromptAction, input: &str) {
+/// Returns the overlay area for mouse hit-testing.
+fn draw_text_prompt(
+    frame: &mut Frame,
+    action: &TextPromptAction,
+    input: &str,
+    cursor: usize,
+    scroll: &mut usize,
+) -> Rect {
+    let is_multiline = matches!(action, TextPromptAction::EditDescription(_));
+
     let title = match action {
         TextPromptAction::MarkFailed(id) => format!("Fail '{}' — enter reason:", id),
         TextPromptAction::SendMessage(id) => format!("Message to '{}':", id),
@@ -3017,43 +3204,162 @@ fn draw_text_prompt(frame: &mut Frame, action: &TextPromptAction, input: &str) {
     };
 
     let size = frame.area();
-    let width = 50.min(size.width.saturating_sub(4));
-    let height = 6;
-    let x = (size.width.saturating_sub(width)) / 2;
-    let y = (size.height.saturating_sub(height)) / 2;
-    let area = Rect::new(x, y, width, height);
 
-    frame.render_widget(Clear, area);
+    if is_multiline {
+        // Multiline editor: larger overlay for description editing.
+        let width = (size.width * 3 / 4).max(50).min(size.width.saturating_sub(4));
+        let height = (size.height / 2).max(10).min(size.height.saturating_sub(4));
+        let x = (size.width.saturating_sub(width)) / 2;
+        let y = (size.height.saturating_sub(height)) / 2;
+        let area = Rect::new(x, y, width, height);
 
-    let block = Block::default()
-        .title(format!(" {} ", title))
-        .borders(Borders::ALL)
-        .border_style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        );
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+        frame.render_widget(Clear, area);
 
-    let lines = vec![
-        Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Yellow)),
-            Span::raw(input),
-            Span::styled(
-                "_",
+        let block = Block::default()
+            .title(format!(" {} ", title))
+            .borders(Borders::ALL)
+            .border_style(
                 Style::default()
                     .fg(Color::Yellow)
-                    .add_modifier(Modifier::SLOW_BLINK),
-            ),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Enter: submit  Esc: cancel",
+                    .add_modifier(Modifier::BOLD),
+            );
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        // Reserve 1 line at bottom for hints.
+        let edit_height = inner.height.saturating_sub(1);
+
+        // Find cursor line for scroll adjustment.
+        let cursor_line = input[..cursor.min(input.len())].matches('\n').count();
+        if cursor_line < *scroll {
+            *scroll = cursor_line;
+        }
+        if cursor_line >= *scroll + edit_height as usize {
+            *scroll = cursor_line + 1 - edit_height as usize;
+        }
+
+        // Build visible lines with cursor.
+        let all_lines: Vec<&str> = input.split('\n').collect();
+        let visible_end = (*scroll + edit_height as usize).min(all_lines.len());
+        let visible_lines = &all_lines[*scroll..visible_end];
+        let cursor_line_in_view = cursor_line.saturating_sub(*scroll);
+
+        // Column offset within the cursor line.
+        let cur_line_start = if cursor_line == 0 {
+            0
+        } else {
+            input
+                .match_indices('\n')
+                .nth(cursor_line - 1)
+                .map(|(i, _)| i + 1)
+                .unwrap_or(0)
+        };
+        let cursor_col = input[cur_line_start..cursor.min(input.len())].chars().count();
+
+        let text_style = Style::default().fg(Color::White);
+        let cursor_style = Style::default().fg(Color::Black).bg(Color::Yellow);
+
+        let mut display_lines: Vec<Line> = Vec::new();
+        for (row_idx, line_text) in visible_lines.iter().enumerate() {
+            if row_idx == cursor_line_in_view {
+                let chars: Vec<char> = line_text.chars().collect();
+                let col = cursor_col.min(chars.len());
+                let before: String = chars[..col].iter().collect();
+                let cursor_char = if col < chars.len() {
+                    chars[col].to_string()
+                } else {
+                    " ".to_string()
+                };
+                let after: String = if col < chars.len() {
+                    chars[col + 1..].iter().collect()
+                } else {
+                    String::new()
+                };
+                display_lines.push(Line::from(vec![
+                    Span::styled(before, text_style),
+                    Span::styled(cursor_char, cursor_style),
+                    Span::styled(after, text_style),
+                ]));
+            } else {
+                display_lines
+                    .push(Line::from(Span::styled(line_text.to_string(), text_style)));
+            }
+        }
+
+        // Show cursor on empty content.
+        if display_lines.is_empty() {
+            display_lines.push(Line::from(Span::styled(" ", cursor_style)));
+        }
+
+        let edit_area = Rect::new(inner.x, inner.y, inner.width, edit_height);
+        frame.render_widget(Paragraph::new(display_lines), edit_area);
+
+        // Hint line.
+        let hint_area = Rect::new(inner.x, inner.y + edit_height, inner.width, 1);
+        let hint = Line::from(Span::styled(
+            "Ctrl+Enter: submit  Esc: cancel",
             Style::default().fg(Color::DarkGray),
-        )),
-    ];
-    frame.render_widget(Paragraph::new(lines), inner);
+        ));
+        frame.render_widget(Paragraph::new(vec![hint]), hint_area);
+
+        area
+    } else {
+        // Single-line prompt (fail reason, message, attach file).
+        let width = 50.min(size.width.saturating_sub(4));
+        let height = 6;
+        let x = (size.width.saturating_sub(width)) / 2;
+        let y = (size.height.saturating_sub(height)) / 2;
+        let area = Rect::new(x, y, width, height);
+
+        frame.render_widget(Clear, area);
+
+        let block = Block::default()
+            .title(format!(" {} ", title))
+            .borders(Borders::ALL)
+            .border_style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            );
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        // Show input with cursor.
+        let chars: Vec<char> = input.chars().collect();
+        let cursor_char_idx = input[..cursor.min(input.len())].chars().count();
+        let col = cursor_char_idx.min(chars.len());
+        let before: String = chars[..col].iter().collect();
+        let cursor_char = if col < chars.len() {
+            chars[col].to_string()
+        } else {
+            " ".to_string()
+        };
+        let after: String = if col < chars.len() {
+            chars[col + 1..].iter().collect()
+        } else {
+            String::new()
+        };
+
+        let lines = vec![
+            Line::from(vec![
+                Span::styled("> ", Style::default().fg(Color::Yellow)),
+                Span::raw(before),
+                Span::styled(
+                    cursor_char,
+                    Style::default().fg(Color::Black).bg(Color::Yellow),
+                ),
+                Span::raw(after),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Enter: submit  Esc: cancel",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+        frame.render_widget(Paragraph::new(lines), inner);
+
+        area
+    }
 }
 
 /// Draw the task creation form overlay.
@@ -3419,12 +3725,14 @@ fn action_hints_parts(app: &VizApp) -> (&str, &str, Color, Vec<(&str, &str)>) {
             Color::Yellow,
             vec![("y", "yes"), ("n", "no")],
         ),
-        InputMode::TextPrompt(_) => (
-            "Prompt",
-            "EDIT",
-            Color::Yellow,
-            vec![("Enter", "submit"), ("Esc", "cancel")],
-        ),
+        InputMode::TextPrompt(action) => {
+            let keys = if matches!(action, TextPromptAction::EditDescription(_)) {
+                vec![("Ctrl-Enter", "submit"), ("Enter", "newline"), ("Esc", "cancel")]
+            } else {
+                vec![("Enter", "submit"), ("Esc", "cancel")]
+            };
+            ("Prompt", "EDIT", Color::Yellow, keys)
+        }
         InputMode::ConfigEdit => (
             "5:Config",
             "EDIT",
@@ -3443,7 +3751,7 @@ fn action_hints_parts(app: &VizApp) -> (&str, &str, Color, Vec<(&str, &str)>) {
                     ("/", "search"),
                     ("a", "add"),
                     ("D", "done"),
-                    ("i", "layout"),
+                    ("i/I", "inspector size"),
                     ("?", "help"),
                     ("Alt←→", "tabs"),
                 ],
@@ -3493,7 +3801,7 @@ fn action_hints_parts(app: &VizApp) -> (&str, &str, Color, Vec<(&str, &str)>) {
                 }
                 // Common hints for all right-panel tabs.
                 hints.push(("Tab", "graph"));
-                hints.push(("i", "layout"));
+                hints.push(("i/I", "inspector"));
                 hints.push(("?", "help"));
                 hints.push(("Alt←→", "tabs"));
                 (tab_label, "NAV", Color::Rgb(120, 120, 120), hints)
@@ -3701,6 +4009,9 @@ fn draw_status_bar(frame: &mut Frame, app: &VizApp, area: Rect) {
             LayoutMode::ThirdInspector => {
                 format!("1/3 PANEL ({}%) ", app.right_panel_percent)
             }
+            LayoutMode::HalfInspector => {
+                format!("1/2 PANEL ({}%) ", app.right_panel_percent)
+            }
             LayoutMode::TwoThirdsInspector => {
                 format!("2/3 PANEL ({}%) ", app.right_panel_percent)
             }
@@ -3779,7 +4090,9 @@ fn draw_help_overlay(frame: &mut Frame) {
         binding("Alt-↑/↓", "Switch focus: Graph ↔ Right Panel"),
         binding("Alt-←/→", "Cycle tabs (prev / next)"),
         binding("\\", "Toggle right panel visible"),
-        binding("i/=", "Cycle layout: split/panel/graph"),
+        binding("i", "Cycle inspector size (1/3→1/2→2/3→full→off)"),
+        binding("I", "Cycle inspector size (reverse)"),
+        binding("=", "Cycle layout: split/panel/graph"),
         binding("0-7", "Switch tab: Chat/.../Files/Coord"),
         binding("R", "Toggle raw JSON in Detail tab"),
         binding("Space", "Toggle section collapse in Detail"),
@@ -3826,17 +4139,17 @@ fn draw_help_overlay(frame: &mut Frame) {
     frame.render_widget(paragraph, inner);
 }
 
-/// Render token breakdown spans: "→in ←out [◎cache] (label) [$cost]"
+/// Render token breakdown spans: "→new_in ←out [+cached] (label) [$cost]"
 fn render_token_breakdown<'a>(spans: &mut Vec<Span<'a>>, usage: &TokenUsage, label: &str) {
-    let input = format_tokens(usage.total_input());
+    let new_input = format_tokens(usage.input_tokens);
     let output = format_tokens(usage.output_tokens);
 
     let cache_total = usage.cache_read_input_tokens + usage.cache_creation_input_tokens;
     let token_str = if cache_total > 0 {
         let cache = format_tokens(cache_total);
-        format!("→{} ←{} ◎{}", input, output, cache)
+        format!("→{} +{} cached ←{}", new_input, cache, output)
     } else {
-        format!("→{} ←{}", input, output)
+        format!("→{} ←{}", new_input, output)
     };
 
     spans.push(Span::styled(token_str, Style::default().fg(Color::Cyan)));
