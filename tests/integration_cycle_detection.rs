@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tempfile::TempDir;
 use workgraph::graph::{
-    CycleConfig, LoopGuard, Node, Status, Task, WorkGraph, evaluate_all_cycle_iterations,
-    evaluate_cycle_iteration,
+    CycleConfig, LoopGuard, Node, Status, Task, WorkGraph, evaluate_all_cycle_failure_restarts,
+    evaluate_all_cycle_iterations, evaluate_cycle_iteration, evaluate_cycle_on_failure,
 };
 use workgraph::parser::{load_graph, save_graph};
 use workgraph::query::{ready_tasks, ready_tasks_cycle_aware};
@@ -4905,4 +4905,283 @@ fn test_no_converge_without_converged_tag_iterates_normally() {
     );
     assert_eq!(graph.get_task("a").unwrap().loop_iteration, 1);
     assert_eq!(graph.get_task("b").unwrap().loop_iteration, 1);
+}
+
+// ===========================================================================
+// Cycle failure restart tests
+// ===========================================================================
+
+#[test]
+fn test_failure_restart_reactivates_cycle() {
+    // A -> B -> A cycle, B has cycle_config with restart_on_failure=true (default)
+    let mut a = make_task("a", "A");
+    a.after = vec!["b".to_string()];
+    a.status = Status::Done;
+    let mut b = make_task("b", "B");
+    b.after = vec!["a".to_string()];
+    b.status = Status::Failed;
+    b.failure_reason = Some("compilation error".to_string());
+    b.cycle_config = Some(CycleConfig {
+        max_iterations: 5,
+        guard: None,
+        delay: None,
+        no_converge: false,
+        restart_on_failure: true,
+        max_failure_restarts: None,
+    });
+
+    let mut graph = build_graph(vec![a, b]);
+    let ca = graph.compute_cycle_analysis();
+    let reactivated = evaluate_cycle_on_failure(&mut graph, "b", &ca);
+
+    assert!(
+        !reactivated.is_empty(),
+        "Cycle should be reactivated on failure"
+    );
+    assert_eq!(graph.get_task("a").unwrap().status, Status::Open);
+    assert_eq!(graph.get_task("b").unwrap().status, Status::Open);
+    // loop_iteration should NOT be incremented (failure retry, not new iteration)
+    assert_eq!(graph.get_task("a").unwrap().loop_iteration, 0);
+    assert_eq!(graph.get_task("b").unwrap().loop_iteration, 0);
+    // cycle_failure_restarts should be incremented on config owner
+    assert_eq!(graph.get_task("b").unwrap().cycle_failure_restarts, 1);
+    // failure_reason should be cleared
+    assert!(graph.get_task("b").unwrap().failure_reason.is_none());
+    // assigned should be cleared
+    assert!(graph.get_task("a").unwrap().assigned.is_none());
+    assert!(graph.get_task("b").unwrap().assigned.is_none());
+}
+
+#[test]
+fn test_failure_restart_disabled() {
+    // Same cycle but restart_on_failure = false
+    let mut a = make_task("a", "A");
+    a.after = vec!["b".to_string()];
+    a.status = Status::Done;
+    let mut b = make_task("b", "B");
+    b.after = vec!["a".to_string()];
+    b.status = Status::Failed;
+    b.cycle_config = Some(CycleConfig {
+        max_iterations: 5,
+        guard: None,
+        delay: None,
+        no_converge: false,
+        restart_on_failure: false,
+        max_failure_restarts: None,
+    });
+
+    let mut graph = build_graph(vec![a, b]);
+    let ca = graph.compute_cycle_analysis();
+    let reactivated = evaluate_cycle_on_failure(&mut graph, "b", &ca);
+
+    assert!(
+        reactivated.is_empty(),
+        "Cycle should NOT be reactivated when restart_on_failure=false"
+    );
+    assert_eq!(graph.get_task("b").unwrap().status, Status::Failed);
+}
+
+#[test]
+fn test_failure_restart_max_exceeded() {
+    let mut a = make_task("a", "A");
+    a.after = vec!["b".to_string()];
+    a.status = Status::Done;
+    let mut b = make_task("b", "B");
+    b.after = vec!["a".to_string()];
+    b.status = Status::Failed;
+    b.cycle_failure_restarts = 3; // Already at max
+    b.cycle_config = Some(CycleConfig {
+        max_iterations: 5,
+        guard: None,
+        delay: None,
+        no_converge: false,
+        restart_on_failure: true,
+        max_failure_restarts: Some(3),
+    });
+
+    let mut graph = build_graph(vec![a, b]);
+    let ca = graph.compute_cycle_analysis();
+    let reactivated = evaluate_cycle_on_failure(&mut graph, "b", &ca);
+
+    assert!(
+        reactivated.is_empty(),
+        "Cycle should NOT restart when max_failure_restarts exceeded"
+    );
+    assert_eq!(graph.get_task("b").unwrap().status, Status::Failed);
+}
+
+#[test]
+fn test_failure_restart_preserves_iteration() {
+    // Cycle at iteration 2 — failure restart should keep iteration at 2
+    let mut a = make_task("a", "A");
+    a.after = vec!["b".to_string()];
+    a.status = Status::Done;
+    a.loop_iteration = 2;
+    let mut b = make_task("b", "B");
+    b.after = vec!["a".to_string()];
+    b.status = Status::Failed;
+    b.loop_iteration = 2;
+    b.cycle_config = Some(CycleConfig {
+        max_iterations: 5,
+        guard: None,
+        delay: None,
+        no_converge: false,
+        restart_on_failure: true,
+        max_failure_restarts: None,
+    });
+
+    let mut graph = build_graph(vec![a, b]);
+    let ca = graph.compute_cycle_analysis();
+    let reactivated = evaluate_cycle_on_failure(&mut graph, "b", &ca);
+
+    assert!(!reactivated.is_empty());
+    // loop_iteration stays the same
+    assert_eq!(graph.get_task("a").unwrap().loop_iteration, 2);
+    assert_eq!(graph.get_task("b").unwrap().loop_iteration, 2);
+}
+
+#[test]
+fn test_failure_restart_then_successful_iteration() {
+    // Simulate: cycle restarts due to failure, then completes successfully
+    let mut a = make_task("a", "A");
+    a.after = vec!["b".to_string()];
+    a.status = Status::Done;
+    let mut b = make_task("b", "B");
+    b.after = vec!["a".to_string()];
+    b.status = Status::Failed;
+    b.cycle_config = Some(CycleConfig {
+        max_iterations: 5,
+        guard: None,
+        delay: None,
+        no_converge: false,
+        restart_on_failure: true,
+        max_failure_restarts: None,
+    });
+
+    let mut graph = build_graph(vec![a, b]);
+    let ca = graph.compute_cycle_analysis();
+
+    // Step 1: Failure restart
+    let reactivated = evaluate_cycle_on_failure(&mut graph, "b", &ca);
+    assert!(!reactivated.is_empty());
+    assert_eq!(graph.get_task("b").unwrap().cycle_failure_restarts, 1);
+
+    // Step 2: Complete both tasks
+    graph.get_task_mut("a").unwrap().status = Status::Done;
+    graph.get_task_mut("b").unwrap().status = Status::Done;
+
+    // Step 3: Normal cycle iteration should work
+    let ca = graph.compute_cycle_analysis();
+    let reactivated = evaluate_cycle_iteration(&mut graph, "b", &ca);
+    assert!(
+        !reactivated.is_empty(),
+        "Normal iteration should still work after failure restart"
+    );
+    assert_eq!(graph.get_task("a").unwrap().loop_iteration, 1);
+    assert_eq!(graph.get_task("b").unwrap().loop_iteration, 1);
+}
+
+#[test]
+fn test_failure_restart_logs_failure_info() {
+    let mut a = make_task("a", "A");
+    a.after = vec!["b".to_string()];
+    a.status = Status::Done;
+    let mut b = make_task("b", "B");
+    b.after = vec!["a".to_string()];
+    b.status = Status::Failed;
+    b.failure_reason = Some("timeout exceeded".to_string());
+    b.cycle_config = Some(CycleConfig {
+        max_iterations: 5,
+        guard: None,
+        delay: None,
+        no_converge: false,
+        restart_on_failure: true,
+        max_failure_restarts: None,
+    });
+
+    let mut graph = build_graph(vec![a, b]);
+    let ca = graph.compute_cycle_analysis();
+    evaluate_cycle_on_failure(&mut graph, "b", &ca);
+
+    // Check that failure info is in the log
+    let a_log = &graph.get_task("a").unwrap().log;
+    let last_log = a_log.last().unwrap();
+    assert!(
+        last_log.message.contains("Cycle failure restart"),
+        "Log should mention cycle failure restart, got: {}",
+        last_log.message
+    );
+    assert!(
+        last_log.message.contains("timeout exceeded"),
+        "Log should contain failure reason, got: {}",
+        last_log.message
+    );
+}
+
+#[test]
+fn test_failure_restart_coordinator_sweep() {
+    // Test evaluate_all_cycle_failure_restarts (coordinator sweep)
+    let mut a = make_task("a", "A");
+    a.after = vec!["b".to_string()];
+    a.status = Status::Done;
+    let mut b = make_task("b", "B");
+    b.after = vec!["a".to_string()];
+    b.status = Status::Failed;
+    b.cycle_config = Some(CycleConfig {
+        max_iterations: 5,
+        guard: None,
+        delay: None,
+        no_converge: false,
+        restart_on_failure: true,
+        max_failure_restarts: None,
+    });
+
+    let mut graph = build_graph(vec![a, b]);
+    let ca = graph.compute_cycle_analysis();
+    let reactivated = evaluate_all_cycle_failure_restarts(&mut graph, &ca);
+
+    assert!(
+        !reactivated.is_empty(),
+        "Coordinator sweep should catch failed cycle members"
+    );
+    assert_eq!(graph.get_task("a").unwrap().status, Status::Open);
+    assert_eq!(graph.get_task("b").unwrap().status, Status::Open);
+}
+
+#[test]
+fn test_failure_restart_default_is_true() {
+    // Verify that restart_on_failure defaults to true for cycles
+    let config = CycleConfig {
+        max_iterations: 5,
+        guard: None,
+        delay: None,
+        no_converge: false,
+        restart_on_failure: true,
+        max_failure_restarts: None,
+    };
+    assert!(config.restart_on_failure);
+
+    // Test deserialization with missing field — should default to true
+    let json = r#"{"max_iterations": 3}"#;
+    let config: CycleConfig = serde_json::from_str(json).unwrap();
+    assert!(
+        config.restart_on_failure,
+        "restart_on_failure should default to true"
+    );
+}
+
+#[test]
+fn test_failure_restart_not_triggered_for_non_cycle_task() {
+    // A standalone failed task (not in a cycle) should not trigger any restart
+    let mut a = make_task("a", "A");
+    a.status = Status::Failed;
+
+    let mut graph = build_graph(vec![a]);
+    let ca = graph.compute_cycle_analysis();
+    let reactivated = evaluate_cycle_on_failure(&mut graph, "a", &ca);
+
+    assert!(
+        reactivated.is_empty(),
+        "Non-cycle task should not trigger restart"
+    );
 }

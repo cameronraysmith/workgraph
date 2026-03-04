@@ -218,6 +218,12 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
         }
     }
 
+    // Deferred centering: viewport_height is now set, so we can center properly.
+    if app.needs_center_on_selected {
+        app.needs_center_on_selected = false;
+        app.center_on_selected_task();
+    }
+
     // Top status bar
     draw_status_bar(frame, app, status_area);
 

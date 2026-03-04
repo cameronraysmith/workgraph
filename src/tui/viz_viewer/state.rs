@@ -1167,6 +1167,8 @@ pub struct VizApp {
     pub layout_mode: LayoutMode,
     /// Current input mode.
     pub input_mode: InputMode,
+    /// Deferred centering: set during state refresh, consumed by render after viewport_height is known.
+    pub needs_center_on_selected: bool,
     /// True when user explicitly dismissed chat input with Esc.
     /// Prevents auto-re-entering ChatInput until user navigates away from Chat tab.
     pub chat_input_dismissed: bool,
@@ -1382,6 +1384,7 @@ impl VizApp {
             hud_size: HudSize::Normal,
             layout_mode: LayoutMode::TwoThirdsInspector,
             input_mode: InputMode::Normal,
+            needs_center_on_selected: false,
             chat_input_dismissed: false,
             inspector_sub_focus: InspectorSubFocus::ChatHistory,
             task_form: None,
@@ -1597,11 +1600,11 @@ impl VizApp {
                         self.scroll_to_selected_task();
                     }
                 } else if new_task_focused {
-                    // New task appeared — center it in the viewport middle.
-                    self.center_on_selected_task();
+                    // New task appeared — defer centering until render sets viewport_height.
+                    self.needs_center_on_selected = true;
                 } else {
-                    // Selection changed (different task) — center on it.
-                    self.center_on_selected_task();
+                    // Selection changed (different task) — defer centering until render.
+                    self.needs_center_on_selected = true;
                 }
             }
             Err(_) => {
@@ -3581,6 +3584,7 @@ impl VizApp {
             hud_size: HudSize::Normal,
             layout_mode: LayoutMode::ThirdInspector,
             input_mode: InputMode::Normal,
+            needs_center_on_selected: false,
             chat_input_dismissed: false,
             inspector_sub_focus: InspectorSubFocus::ChatHistory,
             task_form: None,
