@@ -452,8 +452,8 @@ fn main() -> Result<()> {
         }
         Commands::Unclaim { id } => commands::claim::unclaim(&workgraph_dir, &id),
         Commands::Pause { id } => commands::pause::run(&workgraph_dir, &id),
-        Commands::Resume { id } => commands::resume::run(&workgraph_dir, &id),
-        Commands::Publish { id } => commands::resume::publish(&workgraph_dir, &id),
+        Commands::Resume { id, only } => commands::resume::run(&workgraph_dir, &id, only),
+        Commands::Publish { id, only } => commands::resume::publish(&workgraph_dir, &id, only),
         Commands::AddDep { task, dependency } => {
             commands::link::run_link(&workgraph_dir, &task, &dependency)
         }

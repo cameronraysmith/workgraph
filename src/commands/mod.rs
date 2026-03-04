@@ -564,7 +564,7 @@ mod provenance_coverage_tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].task_id.as_deref(), Some("prov-pause"));
 
-        super::resume::run(dir, "prov-pause").unwrap();
+        super::resume::run(dir, "prov-pause", false).unwrap();
         let entries = ops_with_type(dir, "resume");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].task_id.as_deref(), Some("prov-pause"));
@@ -768,7 +768,7 @@ mod provenance_coverage_tests {
         // pause
         super::pause::run(dir, "lifecycle").unwrap();
         // resume
-        super::resume::run(dir, "lifecycle").unwrap();
+        super::resume::run(dir, "lifecycle", false).unwrap();
         // claim
         super::claim::claim(dir, "lifecycle", Some("worker")).unwrap();
         // artifact add

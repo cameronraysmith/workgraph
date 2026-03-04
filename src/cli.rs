@@ -314,18 +314,24 @@ pub enum Commands {
         id: String,
     },
 
-    /// Resume a paused task
+    /// Resume a paused task (propagates to downstream subgraph by default)
     Resume {
         /// Task ID to resume
         #[arg(value_name = "TASK")]
         id: String,
+        /// Only resume this single task (skip subgraph propagation)
+        #[arg(long)]
+        only: bool,
     },
 
-    /// Publish a draft task (validates dependencies, then resumes)
+    /// Publish a draft task (validates dependencies, then resumes entire subgraph)
     Publish {
         /// Task ID to publish
         #[arg(value_name = "TASK")]
         id: String,
+        /// Only publish this single task (skip subgraph propagation)
+        #[arg(long)]
+        only: bool,
     },
 
     /// Add a dependency: task depends on (waits for) dependency
