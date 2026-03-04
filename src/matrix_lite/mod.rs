@@ -55,6 +55,12 @@ struct LoginResponse {
     access_token: String,
 }
 
+/// Response from sending an event
+#[derive(Debug, Deserialize)]
+struct SendEventResponse {
+    event_id: String,
+}
+
 impl MatrixClient {
     /// Create a new Matrix client
     ///
@@ -281,8 +287,8 @@ impl MatrixClient {
         Ok(())
     }
 
-    /// Send a text message to a room
-    pub async fn send_message(&self, room_id: &str, message: &str) -> Result<()> {
+    /// Send a text message to a room. Returns the Matrix event ID.
+    pub async fn send_message(&self, room_id: &str, message: &str) -> Result<String> {
         self.send_event(
             room_id,
             "m.room.message",
@@ -294,13 +300,13 @@ impl MatrixClient {
         .await
     }
 
-    /// Send an HTML message to a room
+    /// Send an HTML message to a room. Returns the Matrix event ID.
     pub async fn send_html_message(
         &self,
         room_id: &str,
         plain_text: &str,
         html: &str,
-    ) -> Result<()> {
+    ) -> Result<String> {
         self.send_event(
             room_id,
             "m.room.message",
@@ -314,13 +320,13 @@ impl MatrixClient {
         .await
     }
 
-    /// Send an event to a room
+    /// Send an event to a room. Returns the Matrix event ID.
     async fn send_event(
         &self,
         room_id: &str,
         event_type: &str,
         content: serde_json::Value,
-    ) -> Result<()> {
+    ) -> Result<String> {
         let txn_id = format!(
             "wg_{}",
             std::time::SystemTime::now()
@@ -351,7 +357,11 @@ impl MatrixClient {
             anyhow::bail!("Failed to send message: {} - {}", status, body);
         }
 
-        Ok(())
+        let body: SendEventResponse = resp
+            .json()
+            .await
+            .context("Failed to parse send event response")?;
+        Ok(body.event_id)
     }
 
     /// Register a message handler and return a receiver
