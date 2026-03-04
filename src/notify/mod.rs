@@ -5,6 +5,10 @@
 //! channels based on event type and supports escalation chains.
 
 pub mod config;
+#[cfg(feature = "matrix-lite")]
+pub mod matrix;
+pub mod telegram;
+pub mod webhook;
 
 use std::fmt;
 use std::time::Duration;
