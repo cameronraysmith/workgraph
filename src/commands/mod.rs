@@ -79,6 +79,7 @@ pub mod show;
 pub mod skills;
 pub mod spawn;
 pub mod status;
+pub mod telegram;
 pub mod structure;
 pub mod trace;
 pub mod trace_animate;

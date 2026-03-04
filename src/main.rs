@@ -1663,6 +1663,15 @@ fn main() -> Result<()> {
                 Ok(())
             }
         },
+        Commands::Telegram { command } => match command {
+            TelegramCommands::Listen { chat_id } => {
+                commands::telegram::run_listen(&workgraph_dir, chat_id.as_deref())
+            }
+            TelegramCommands::Send { message, chat_id } => {
+                commands::telegram::run_send(chat_id.as_deref(), &message)
+            }
+            TelegramCommands::Status => commands::telegram::run_status(cli.json),
+        },
         Commands::NativeExec {
             prompt_file,
             exec_mode,

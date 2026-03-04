@@ -24,6 +24,7 @@ pub mod query;
 pub mod runs;
 pub mod service;
 pub mod stream_event;
+pub mod telegram_commands;
 pub mod usage;
 
 pub use config::MatrixConfig;

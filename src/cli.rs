@@ -1188,6 +1188,12 @@ pub enum Commands {
         command: MatrixCommands,
     },
 
+    /// Telegram integration commands
+    Telegram {
+        #[command(subcommand)]
+        command: TelegramCommands,
+    },
+
     /// Run the native executor agent loop (internal, called by spawn)
     #[command(name = "native-exec", hide = true)]
     NativeExec {
@@ -2289,6 +2295,32 @@ pub enum MatrixCommands {
     Logout,
 }
 
+#[derive(Subcommand)]
+pub enum TelegramCommands {
+    /// Start the Telegram bot listener
+    ///
+    /// Polls the Telegram Bot API for messages and dispatches workgraph
+    /// commands like: claim, done, fail, input, status, ready, help
+    Listen {
+        /// Telegram chat ID to listen in (uses configured chat_id if not specified)
+        #[arg(long)]
+        chat_id: Option<String>,
+    },
+
+    /// Send a message to the configured Telegram chat
+    Send {
+        /// Message to send
+        message: String,
+
+        /// Target chat ID (uses configured chat_id if not specified)
+        #[arg(long)]
+        chat_id: Option<String>,
+    },
+
+    /// Show Telegram configuration status
+    Status,
+}
+
 /// Get the command name from a Commands enum variant for usage tracking
 pub fn command_name(cmd: &Commands) -> &'static str {
     match cmd {
@@ -2370,6 +2402,7 @@ pub fn command_name(cmd: &Commands) -> &'static str {
         Commands::Notify { .. } => "notify",
         #[cfg(any(feature = "matrix", feature = "matrix-lite"))]
         Commands::Matrix { .. } => "matrix",
+        Commands::Telegram { .. } => "telegram",
         Commands::Chat { .. } => "chat",
         Commands::NativeExec { .. } => "native-exec",
     }
@@ -2432,6 +2465,7 @@ pub fn supports_json(cmd: &Commands) -> bool {
             | Commands::Quickstart
             | Commands::Status
             | Commands::Chat { .. }
+            | Commands::Telegram { .. }
     ) || {
         #[cfg(any(feature = "matrix", feature = "matrix-lite"))]
         {
