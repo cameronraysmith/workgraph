@@ -912,6 +912,159 @@ fn record_tick_events(
     }
 }
 
+/// Dispatch notifications for recently changed tasks via the notification router.
+///
+/// Scans the graph for tasks that recently failed or became blocked, and sends
+/// notifications through the configured [`NotificationRouter`]. This is called
+/// after each coordinator tick.
+fn try_dispatch_notifications(dir: &Path, logger: &DaemonLogger) {
+    use workgraph::notify::config::NotifyConfig;
+    use workgraph::notify::dispatch::{TaskEvent, TaskEventKind};
+    use workgraph::notify::webhook::WebhookChannel;
+    use workgraph::notify::NotificationRouter;
+
+    // Load notification config — if not present, notifications are disabled.
+    let config = match NotifyConfig::load(Some(dir)) {
+        Ok(Some(c)) => c,
+        Ok(None) => return, // No config → notifications disabled
+        Err(e) => {
+            logger.warn(&format!("Failed to load notify config: {}", e));
+            return;
+        }
+    };
+
+    let rules = config.to_routing_rules();
+    let default_channels = config.default_channels().to_vec();
+
+    if rules.is_empty() && default_channels.is_empty() {
+        return; // No routing rules → nothing to dispatch
+    }
+
+    // Build channels from config. Each channel type is constructed if its
+    // config section exists.
+    let mut channels: Vec<Box<dyn workgraph::notify::NotificationChannel>> = Vec::new();
+
+    // Webhook channel (always available, no external runtime deps)
+    if config.has_channel_config("webhook") {
+        if let Some(val) = config.channels.get("webhook") {
+            match val.clone().try_into::<workgraph::notify::webhook::WebhookConfig>() {
+                Ok(wh_config) => {
+                    channels.push(Box::new(WebhookChannel::new(wh_config)));
+                }
+                Err(e) => {
+                    logger.warn(&format!("Invalid webhook config: {}", e));
+                }
+            }
+        }
+    }
+
+    // Telegram channel (if configured)
+    if config.has_channel_config("telegram") {
+        match workgraph::notify::telegram::TelegramConfig::from_notify_config(&config) {
+            Ok(tg_config) => {
+                channels.push(Box::new(
+                    workgraph::notify::telegram::TelegramChannel::new(tg_config),
+                ));
+            }
+            Err(e) => {
+                logger.warn(&format!("Invalid telegram config: {}", e));
+            }
+        }
+    }
+
+    if channels.is_empty() {
+        return; // No usable channels
+    }
+
+    let router = NotificationRouter::new(channels, rules, default_channels);
+
+    // Scan graph for recently changed tasks (last 10 seconds)
+    let gp = graph_path(dir);
+    let graph = match load_graph(&gp) {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+
+    let recent_cutoff = chrono::Utc::now() - chrono::Duration::seconds(10);
+    let mut events: Vec<TaskEvent> = Vec::new();
+
+    for task in graph.tasks() {
+        match task.status {
+            workgraph::graph::Status::Failed => {
+                if let Some(last_log) = task.log.last()
+                    && let Ok(dt) = last_log.timestamp.parse::<DateTime<Utc>>()
+                    && dt > recent_cutoff
+                {
+                    events.push(TaskEvent {
+                        task_id: task.id.clone(),
+                        title: task.title.clone(),
+                        kind: TaskEventKind::Failed,
+                        detail: task.failure_reason.clone(),
+                    });
+                }
+            }
+            workgraph::graph::Status::Blocked => {
+                if let Some(last_log) = task.log.last()
+                    && let Ok(dt) = last_log.timestamp.parse::<DateTime<Utc>>()
+                    && dt > recent_cutoff
+                {
+                    events.push(TaskEvent {
+                        task_id: task.id.clone(),
+                        title: task.title.clone(),
+                        kind: TaskEventKind::Blocked,
+                        detail: None,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if events.is_empty() {
+        return;
+    }
+
+    // Dispatch notifications using a short-lived tokio runtime
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            logger.warn(&format!("Failed to create notification runtime: {}", e));
+            return;
+        }
+    };
+
+    for event in &events {
+        // Use task_id as the routing target (webhook will parse it)
+        let target = &event.task_id;
+        match rt.block_on(workgraph::notify::dispatch::dispatch_event(
+            &router, target, event,
+        )) {
+            Ok(Some((ch, _mid))) => {
+                logger.info(&format!(
+                    "Notification sent for '{}' ({}) via {}",
+                    event.task_id,
+                    match event.kind {
+                        TaskEventKind::Failed => "failed",
+                        TaskEventKind::Blocked => "blocked",
+                        _ => "event",
+                    },
+                    ch,
+                ));
+            }
+            Ok(None) => {} // No channels for this event type
+            Err(e) => {
+                logger.warn(&format!(
+                    "Failed to send notification for '{}': {}",
+                    event.task_id, e
+                ));
+            }
+        }
+    }
+}
+
 /// Run the actual daemon loop (called by forked process)
 #[cfg(unix)]
 pub fn run_daemon(
@@ -1228,6 +1381,9 @@ pub fn run_daemon(
                         "Coordinator tick #{} complete: agents_alive={}, tasks_ready={}, spawned={}",
                         coord_state.ticks, result.agents_alive, result.tasks_ready, result.agents_spawned
                     ));
+
+                    // Dispatch notifications for task state changes (failures, blocks)
+                    try_dispatch_notifications(&dir, &logger);
                 }
                 Err(e) => {
                     coord_state.ticks += 1;

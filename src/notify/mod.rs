@@ -5,6 +5,7 @@
 //! channels based on event type and supports escalation chains.
 
 pub mod config;
+pub mod dispatch;
 #[cfg(feature = "matrix-lite")]
 pub mod matrix;
 pub mod telegram;
@@ -299,12 +300,13 @@ mod option_duration_secs {
 // Tests
 // ---------------------------------------------------------------------------
 
+/// Test helpers for notification channels. Public so submodule tests can reuse.
 #[cfg(test)]
-mod tests {
+pub mod tests_common {
     use super::*;
 
     /// Minimal in-memory channel for testing.
-    struct MockChannel {
+    pub struct MockChannel {
         name: String,
         fail: bool,
     }
@@ -350,12 +352,18 @@ mod tests {
         }
     }
 
-    fn mock(name: &str, fail: bool) -> Box<dyn NotificationChannel> {
+    pub fn mock(name: &str, fail: bool) -> Box<dyn NotificationChannel> {
         Box::new(MockChannel {
             name: name.to_string(),
             fail,
         })
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tests_common::mock;
 
     #[test]
     fn channels_for_event_returns_matching_rule() {
@@ -519,5 +527,248 @@ mod tests {
     fn trait_is_object_safe() {
         // This compiles iff NotificationChannel is object-safe.
         fn _assert_object_safe(_: &dyn NotificationChannel) {}
+    }
+
+    // -----------------------------------------------------------------------
+    // Integration tests: multi-channel routing, escalation, event dispatch
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn integration_route_different_events_to_different_channels() {
+        // Set up: urgent → telegram then sms, approval → email, default → webhook
+        let router = NotificationRouter::new(
+            vec![
+                mock("telegram", false),
+                mock("email", false),
+                mock("sms", false),
+                mock("webhook", false),
+            ],
+            vec![
+                RoutingRule {
+                    event_type: EventType::Urgent,
+                    channels: vec!["telegram".into(), "sms".into()],
+                    escalation_timeout: Some(Duration::from_secs(300)),
+                },
+                RoutingRule {
+                    event_type: EventType::Approval,
+                    channels: vec!["email".into()],
+                    escalation_timeout: Some(Duration::from_secs(900)),
+                },
+                RoutingRule {
+                    event_type: EventType::TaskFailed,
+                    channels: vec!["telegram".into(), "webhook".into()],
+                    escalation_timeout: None,
+                },
+            ],
+            vec!["webhook".into()],
+        );
+
+        // Urgent goes to telegram (first in chain)
+        let (ch, mid) = router
+            .send(EventType::Urgent, "user1", "server down")
+            .await
+            .unwrap();
+        assert_eq!(ch, "telegram");
+        assert_eq!(mid.0, "telegram:server down");
+
+        // Approval goes to email
+        let (ch, _) = router
+            .send(EventType::Approval, "user1", "deploy?")
+            .await
+            .unwrap();
+        assert_eq!(ch, "email");
+
+        // TaskFailed goes to telegram
+        let (ch, _) = router
+            .send(EventType::TaskFailed, "user1", "build broke")
+            .await
+            .unwrap();
+        assert_eq!(ch, "telegram");
+
+        // TaskReady has no explicit rule → falls back to default (webhook)
+        let (ch, _) = router
+            .send(EventType::TaskReady, "user1", "task ready")
+            .await
+            .unwrap();
+        assert_eq!(ch, "webhook");
+
+        // TaskBlocked also falls back to default
+        let (ch, _) = router
+            .send(EventType::TaskBlocked, "user1", "blocked")
+            .await
+            .unwrap();
+        assert_eq!(ch, "webhook");
+    }
+
+    #[tokio::test]
+    async fn integration_escalation_chain_fallthrough() {
+        // First channel fails → falls to second, second fails → falls to third
+        let router = NotificationRouter::new(
+            vec![
+                mock("telegram", true),  // fails
+                mock("sms", true),       // fails
+                mock("email", false),    // succeeds
+            ],
+            vec![RoutingRule {
+                event_type: EventType::Urgent,
+                channels: vec!["telegram".into(), "sms".into(), "email".into()],
+                escalation_timeout: Some(Duration::from_secs(600)),
+            }],
+            vec![],
+        );
+
+        // Should fall through telegram → sms → email
+        let (ch, mid) = router
+            .send(EventType::Urgent, "user1", "escalated")
+            .await
+            .unwrap();
+        assert_eq!(ch, "email");
+        assert_eq!(mid.0, "email:escalated");
+
+        // Verify escalation timeout is configured
+        assert_eq!(
+            router.escalation_timeout(EventType::Urgent),
+            Some(Duration::from_secs(600))
+        );
+    }
+
+    #[tokio::test]
+    async fn integration_rich_message_routing() {
+        let router = NotificationRouter::new(
+            vec![mock("telegram", false), mock("email", false)],
+            vec![RoutingRule {
+                event_type: EventType::TaskFailed,
+                channels: vec!["telegram".into(), "email".into()],
+                escalation_timeout: None,
+            }],
+            vec!["email".into()],
+        );
+
+        let msg = RichMessage {
+            plain_text: "Build failed on main".into(),
+            html: Some("<b>Build failed</b> on main".into()),
+            markdown: Some("**Build failed** on main".into()),
+        };
+
+        // TaskFailed rich message → telegram
+        let (ch, mid) = router
+            .send_rich(EventType::TaskFailed, "user1", &msg)
+            .await
+            .unwrap();
+        assert_eq!(ch, "telegram");
+        assert_eq!(mid.0, "telegram:Build failed on main");
+
+        // TaskReady rich message → default (email)
+        let (ch, _) = router
+            .send_rich(EventType::TaskReady, "user1", &msg)
+            .await
+            .unwrap();
+        assert_eq!(ch, "email");
+    }
+
+    #[tokio::test]
+    async fn integration_all_channels_fail_returns_last_error() {
+        let router = NotificationRouter::new(
+            vec![
+                mock("telegram", true),
+                mock("sms", true),
+                mock("email", true),
+            ],
+            vec![RoutingRule {
+                event_type: EventType::Urgent,
+                channels: vec!["telegram".into(), "sms".into(), "email".into()],
+                escalation_timeout: None,
+            }],
+            vec![],
+        );
+
+        let err = router
+            .send(EventType::Urgent, "user1", "help")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("mock failure"));
+    }
+
+    #[test]
+    fn integration_router_channel_lookup() {
+        let router = NotificationRouter::new(
+            vec![
+                mock("telegram", false),
+                mock("webhook", false),
+                mock("matrix", false),
+            ],
+            vec![],
+            vec![],
+        );
+
+        // All three channel types are discoverable
+        assert!(router.get_channel("telegram").is_some());
+        assert!(router.get_channel("webhook").is_some());
+        assert!(router.get_channel("matrix").is_some());
+        assert!(router.get_channel("nonexistent").is_none());
+
+        // Verify channel types
+        assert_eq!(router.get_channel("telegram").unwrap().channel_type(), "telegram");
+        assert_eq!(router.get_channel("webhook").unwrap().channel_type(), "webhook");
+        assert_eq!(router.get_channel("matrix").unwrap().channel_type(), "matrix");
+    }
+
+    #[test]
+    fn integration_config_to_router_rules() {
+        use super::config::*;
+        use std::collections::HashMap;
+
+        let config = NotifyConfig {
+            routing: RoutingConfig {
+                default: vec!["webhook".into()],
+                urgent: vec!["telegram".into(), "sms".into()],
+                approval: vec!["telegram".into()],
+                digest: vec!["email".into()],
+            },
+            escalation: EscalationConfig {
+                approval_timeout: 600,
+                urgent_timeout: 1200,
+            },
+            channels: HashMap::new(),
+        };
+
+        let rules = config.to_routing_rules();
+
+        // Build a router from config-generated rules
+        let router = NotificationRouter::new(
+            vec![
+                mock("telegram", false),
+                mock("sms", false),
+                mock("webhook", false),
+            ],
+            rules,
+            config.default_channels().to_vec(),
+        );
+
+        // Urgent → telegram, sms chain
+        assert_eq!(
+            router.channels_for_event(EventType::Urgent),
+            vec!["telegram", "sms"]
+        );
+        assert_eq!(
+            router.escalation_timeout(EventType::Urgent),
+            Some(Duration::from_secs(1200))
+        );
+
+        // Approval → telegram
+        assert_eq!(
+            router.channels_for_event(EventType::Approval),
+            vec!["telegram"]
+        );
+        assert_eq!(
+            router.escalation_timeout(EventType::Approval),
+            Some(Duration::from_secs(600))
+        );
+
+        // TaskReady → default (webhook)
+        assert_eq!(
+            router.channels_for_event(EventType::TaskReady),
+            vec!["webhook"]
+        );
     }
 }
