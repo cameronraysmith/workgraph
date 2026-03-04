@@ -17,6 +17,38 @@ use workgraph::graph::{Status, TokenUsage, format_tokens, parse_token_usage_live
 use workgraph::parser::load_graph;
 use workgraph::{AgentRegistry, AgentStatus};
 
+use edtui::{EditorEventHandler, EditorMode, EditorState};
+
+pub fn new_emacs_editor() -> EditorState {
+    let mut state = EditorState::default();
+    state.mode = EditorMode::Insert;
+    state
+}
+
+#[allow(dead_code)]
+pub fn new_emacs_editor_with(text: &str) -> EditorState {
+    use edtui::Lines;
+    let mut state = EditorState::new(Lines::from(text));
+    state.mode = EditorMode::Insert;
+    state
+}
+
+pub fn editor_text(state: &EditorState) -> String {
+    state.lines.to_string()
+}
+
+pub fn editor_is_empty(state: &EditorState) -> bool {
+    state.lines.to_string().is_empty()
+}
+
+pub fn editor_clear(state: &mut EditorState) {
+    *state = new_emacs_editor();
+}
+
+pub fn create_editor_handler() -> EditorEventHandler {
+    EditorEventHandler::default()
+}
+
 /// Maximum simultaneous animations before oldest are dropped.
 const MAX_ANIMATIONS: usize = 50;
 
@@ -563,17 +595,11 @@ impl TaskFormState {
 }
 
 /// State for the chat panel.
-#[derive(Default)]
 pub struct ChatState {
     /// Message history for display.
     pub messages: Vec<ChatMessage>,
-    /// Current input buffer (may contain newlines from paste).
-    pub input: String,
-    /// Cursor position (byte offset) within `input`.
-    pub cursor: usize,
-    /// Scroll offset within the input box (visual line index from top).
-    /// Used when input content exceeds the visible input area height.
-    pub input_scroll: usize,
+    /// Editor state for the input area.
+    pub editor: EditorState,
     /// Scroll offset in message history (lines from bottom; 0 = fully scrolled down).
     pub scroll: usize,
     /// Whether we're waiting for a coordinator response.
@@ -594,6 +620,25 @@ pub struct ChatState {
     pub line_to_message: Vec<Option<usize>>,
     /// Scroll offset from top (set each frame by renderer for click hit-testing).
     pub scroll_from_top: usize,
+}
+
+impl Default for ChatState {
+    fn default() -> Self {
+        Self {
+            messages: Vec::new(),
+            editor: new_emacs_editor(),
+            scroll: 0,
+            awaiting_response: false,
+            outbox_cursor: 0,
+            last_request_id: None,
+            coordinator_active: false,
+            pending_attachments: Vec::new(),
+            total_rendered_lines: 0,
+            viewport_height: 0,
+            line_to_message: Vec::new(),
+            scroll_from_top: 0,
+        }
+    }
 }
 
 /// A pending attachment waiting to be sent with the next chat message.
@@ -868,7 +913,6 @@ pub struct MessageSummary {
 }
 
 /// State for the Messages panel (panel 3) — shows message queue for the selected task.
-#[derive(Default)]
 pub struct MessagesPanelState {
     /// Cached rendered log lines (kept for fallback/compat).
     pub rendered_lines: Vec<String>,
@@ -880,17 +924,27 @@ pub struct MessagesPanelState {
     pub task_id: Option<String>,
     /// Scroll offset.
     pub scroll: usize,
-    /// Current input buffer for composing messages.
-    pub input: String,
-    /// Cursor position (byte offset) within `input`.
-    pub cursor: usize,
-    /// Scroll offset within the input box (visual line index from top).
-    /// Used when input content exceeds the visible input area height.
-    pub input_scroll: usize,
+    /// Editor state for the input area.
+    pub editor: EditorState,
     /// Total wrapped lines (set each frame by renderer, for scrollbar dragging).
     pub total_wrapped_lines: usize,
     /// Viewport height for the message area (set each frame by renderer).
     pub viewport_height: usize,
+}
+
+impl Default for MessagesPanelState {
+    fn default() -> Self {
+        Self {
+            rendered_lines: Vec::new(),
+            entries: Vec::new(),
+            summary: MessageSummary::default(),
+            task_id: None,
+            scroll: 0,
+            editor: new_emacs_editor(),
+            total_wrapped_lines: 0,
+            viewport_height: 0,
+        }
+    }
 }
 
 /// A single setting entry displayed in the Config panel.
@@ -1023,11 +1077,7 @@ pub enum CommandEffect {
 
 /// Text prompt state (shared input buffer for fail reason, message, etc.)
 pub struct TextPromptState {
-    pub input: String,
-    /// Byte-offset cursor position within `input`.
-    pub cursor: usize,
-    /// Vertical scroll offset (number of lines scrolled from top).
-    pub scroll: usize,
+    pub editor: EditorState,
 }
 
 /// Loaded detail for the HUD panel showing info about the selected task.
@@ -1342,9 +1392,7 @@ pub struct VizApp {
     /// When true, Shift+Enter is distinguishable from Enter.
     pub has_keyboard_enhancement: bool,
 
-    // ── Kill ring (Emacs-style) ──
-    /// Text killed by Ctrl+K / Ctrl+U / Ctrl+W, available for Ctrl+Y yank.
-    pub kill_ring: String,
+    pub editor_handler: EditorEventHandler,
 
     // ── Live refresh ──
     /// Last observed modification time of graph.jsonl.
@@ -1462,11 +1510,7 @@ impl VizApp {
             chat_input_dismissed: false,
             inspector_sub_focus: InspectorSubFocus::ChatHistory,
             task_form: None,
-            text_prompt: TextPromptState {
-                input: String::new(),
-                cursor: 0,
-                scroll: 0,
-            },
+            text_prompt: TextPromptState { editor: new_emacs_editor() },
             chat: ChatState::default(),
             agent_monitor: AgentMonitorState::default(),
             agent_streams: HashMap::new(),
@@ -1498,7 +1542,7 @@ impl VizApp {
             last_graph_hscrollbar_area: Rect::default(),
             last_panel_hscrollbar_area: Rect::default(),
             has_keyboard_enhancement: false,
-            kill_ring: String::new(),
+            editor_handler: create_editor_handler(),
             last_graph_mtime: graph_mtime,
             last_refresh: Instant::now(),
             last_refresh_display: chrono::Local::now().format("%H:%M:%S").to_string(),
@@ -3712,11 +3756,7 @@ impl VizApp {
             chat_input_dismissed: false,
             inspector_sub_focus: InspectorSubFocus::ChatHistory,
             task_form: None,
-            text_prompt: TextPromptState {
-                input: String::new(),
-                cursor: 0,
-                scroll: 0,
-            },
+            text_prompt: TextPromptState { editor: new_emacs_editor() },
             chat: ChatState::default(),
             agent_monitor: AgentMonitorState::default(),
             agent_streams: HashMap::new(),
@@ -3746,7 +3786,7 @@ impl VizApp {
             last_graph_hscrollbar_area: Rect::default(),
             last_panel_hscrollbar_area: Rect::default(),
             has_keyboard_enhancement: false,
-            kill_ring: String::new(),
+            editor_handler: create_editor_handler(),
             last_graph_mtime: None,
             last_refresh: Instant::now(),
             last_refresh_display: String::new(),

@@ -149,8 +149,7 @@ fn handle_paste(app: &mut VizApp, text: &str) {
     match &app.input_mode {
         InputMode::ChatInput => {
             // Insert pasted text at cursor position, preserving newlines.
-            app.chat.input.insert_str(app.chat.cursor, text);
-            app.chat.cursor += text.len();
+            app.editor_handler.on_paste_event(text.to_string(), &mut app.chat.editor);
         }
         InputMode::Search => {
             // Strip newlines for search — it's single-line.
@@ -158,17 +157,8 @@ fn handle_paste(app: &mut VizApp, text: &str) {
             app.search_input.push_str(&clean);
             app.update_search();
         }
-        InputMode::TextPrompt(action) => {
-            let is_multiline = matches!(action, TextPromptAction::EditDescription(_));
-            let clean: String = if is_multiline {
-                text.chars().filter(|c| *c != '\r').collect()
-            } else {
-                text.chars().filter(|c| *c != '\n' && *c != '\r').collect()
-            };
-            app.text_prompt
-                .input
-                .insert_str(app.text_prompt.cursor, &clean);
-            app.text_prompt.cursor += clean.len();
+        InputMode::TextPrompt(_action) => {
+            app.editor_handler.on_paste_event(text.to_string(), &mut app.text_prompt.editor);
         }
         InputMode::TaskForm => {
             if let Some(form) = app.task_form.as_mut() {
@@ -197,10 +187,7 @@ fn handle_paste(app: &mut VizApp, text: &str) {
         }
         InputMode::MessageInput => {
             // Insert pasted text at cursor position, preserving newlines (like chat).
-            app.messages_panel
-                .input
-                .insert_str(app.messages_panel.cursor, text);
-            app.messages_panel.cursor += text.len();
+            app.editor_handler.on_paste_event(text.to_string(), &mut app.messages_panel.editor);
         }
         InputMode::ConfigEdit => {
             let clean: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
@@ -295,216 +282,43 @@ fn handle_confirm_input(app: &mut VizApp, code: KeyCode) {
 }
 
 fn handle_text_prompt_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
-    let action = match &app.input_mode {
-        InputMode::TextPrompt(a) => a.clone(),
-        _ => return,
-    };
-
+    use super::state::{editor_clear, editor_text};
+    use crossterm::event::KeyEvent;
+    let action = match &app.input_mode { InputMode::TextPrompt(a) => a.clone(), _ => return };
     let is_multiline = matches!(action, TextPromptAction::EditDescription(_));
-
-    // Submit: Ctrl+Enter for multiline, Enter for single-line.
     let submit = match code {
         KeyCode::Enter if is_multiline && modifiers.contains(KeyModifiers::CONTROL) => true,
         KeyCode::Enter if !is_multiline => true,
         _ => false,
     };
-
     if submit {
-        let text = app.text_prompt.input.clone();
-        app.text_prompt.input.clear();
-        app.text_prompt.cursor = 0;
-        app.text_prompt.scroll = 0;
+        let text = editor_text(&app.text_prompt.editor);
+        editor_clear(&mut app.text_prompt.editor);
         if text.trim().is_empty() {
-            if action == TextPromptAction::AttachFile {
-                app.input_mode = InputMode::ChatInput;
-                app.inspector_sub_focus = InspectorSubFocus::TextEntry;
-            } else {
-                app.input_mode = InputMode::Normal;
-            }
+            if action == TextPromptAction::AttachFile { app.input_mode = InputMode::ChatInput; app.inspector_sub_focus = InspectorSubFocus::TextEntry; }
+            else { app.input_mode = InputMode::Normal; }
             return;
         }
         match action {
-            TextPromptAction::MarkFailed(task_id) => {
-                app.exec_command(
-                    vec![
-                        "fail".to_string(),
-                        task_id.clone(),
-                        "--reason".to_string(),
-                        text,
-                    ],
-                    CommandEffect::RefreshAndNotify(format!("Marked '{}' failed", task_id)),
-                );
-            }
-            TextPromptAction::SendMessage(task_id) => {
-                app.exec_command(
-                    vec![
-                        "msg".to_string(),
-                        "send".to_string(),
-                        task_id.clone(),
-                        text,
-                        "--from".to_string(),
-                        "tui".to_string(),
-                    ],
-                    CommandEffect::Notify(format!("Message sent to '{}'", task_id)),
-                );
-            }
-            TextPromptAction::EditDescription(task_id) => {
-                app.exec_command(
-                    vec!["edit".to_string(), task_id.clone(), "-d".to_string(), text],
-                    CommandEffect::RefreshAndNotify(format!("Updated '{}'", task_id)),
-                );
-            }
-            TextPromptAction::AttachFile => {
-                app.attach_file(&text);
-                app.input_mode = InputMode::ChatInput;
-                app.inspector_sub_focus = InspectorSubFocus::TextEntry;
-                return;
-            }
+            TextPromptAction::MarkFailed(task_id) => { app.exec_command(vec!["fail".into(), task_id.clone(), "--reason".into(), text], CommandEffect::RefreshAndNotify(format!("Marked '{}' failed", task_id))); }
+            TextPromptAction::SendMessage(task_id) => { app.exec_command(vec!["msg".into(), "send".into(), task_id.clone(), text, "--from".into(), "tui".into()], CommandEffect::Notify(format!("Message sent to '{}'", task_id))); }
+            TextPromptAction::EditDescription(task_id) => { app.exec_command(vec!["edit".into(), task_id.clone(), "-d".into(), text], CommandEffect::RefreshAndNotify(format!("Updated '{}'", task_id))); }
+            TextPromptAction::AttachFile => { app.attach_file(&text); app.input_mode = InputMode::ChatInput; app.inspector_sub_focus = InspectorSubFocus::TextEntry; return; }
         }
         app.input_mode = InputMode::Normal;
         return;
     }
-
     match code {
-        KeyCode::Esc => {
-            app.text_prompt.input.clear();
-            app.text_prompt.cursor = 0;
-            app.text_prompt.scroll = 0;
-            if action == TextPromptAction::AttachFile {
-                app.input_mode = InputMode::ChatInput;
-                app.inspector_sub_focus = InspectorSubFocus::TextEntry;
+        KeyCode::Esc => { editor_clear(&mut app.text_prompt.editor); if action == TextPromptAction::AttachFile { app.input_mode = InputMode::ChatInput; app.inspector_sub_focus = InspectorSubFocus::TextEntry; } else { app.input_mode = InputMode::Normal; } }
+        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => { editor_clear(&mut app.text_prompt.editor); app.input_mode = InputMode::Normal; }
+        KeyCode::Char('v') if modifiers.contains(KeyModifiers::CONTROL) => {}
+        _ => {
+            if code == KeyCode::Enter && (is_multiline || modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::ALT)) {
+                app.editor_handler.on_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &mut app.text_prompt.editor);
             } else {
-                app.input_mode = InputMode::Normal;
+                app.editor_handler.on_key_event(KeyEvent::new(code, modifiers), &mut app.text_prompt.editor);
             }
         }
-        // In multiline mode, bare Enter inserts a newline.
-        KeyCode::Enter if is_multiline => {
-            app.text_prompt.input.insert(app.text_prompt.cursor, '\n');
-            app.text_prompt.cursor += 1;
-        }
-        KeyCode::Backspace => {
-            if app.text_prompt.cursor > 0 {
-                let prev = prev_char_boundary(&app.text_prompt.input, app.text_prompt.cursor);
-                app.text_prompt.input.drain(prev..app.text_prompt.cursor);
-                app.text_prompt.cursor = prev;
-            }
-        }
-        KeyCode::Delete => {
-            if app.text_prompt.cursor < app.text_prompt.input.len() {
-                let next = next_char_boundary(&app.text_prompt.input, app.text_prompt.cursor);
-                app.text_prompt.input.drain(app.text_prompt.cursor..next);
-            }
-        }
-        // Ctrl+A: beginning of line
-        KeyCode::Char('a') if modifiers.contains(KeyModifiers::CONTROL) => {
-            app.text_prompt.cursor = line_start(&app.text_prompt.input, app.text_prompt.cursor);
-        }
-        // Ctrl+E: end of line
-        KeyCode::Char('e') if modifiers.contains(KeyModifiers::CONTROL) => {
-            app.text_prompt.cursor = line_end(&app.text_prompt.input, app.text_prompt.cursor);
-        }
-        // Ctrl+B: backward one char
-        KeyCode::Char('b') if modifiers.contains(KeyModifiers::CONTROL) => {
-            app.text_prompt.cursor =
-                prev_char_boundary(&app.text_prompt.input, app.text_prompt.cursor);
-        }
-        // Ctrl+F: forward one char
-        KeyCode::Char('f') if modifiers.contains(KeyModifiers::CONTROL) => {
-            app.text_prompt.cursor =
-                next_char_boundary(&app.text_prompt.input, app.text_prompt.cursor);
-        }
-        // Ctrl+K: kill to end of line
-        KeyCode::Char('k') if modifiers.contains(KeyModifiers::CONTROL) => {
-            let end = line_end(&app.text_prompt.input, app.text_prompt.cursor);
-            if end == app.text_prompt.cursor
-                && app.text_prompt.cursor < app.text_prompt.input.len()
-            {
-                app.kill_ring =
-                    app.text_prompt.input[app.text_prompt.cursor..app.text_prompt.cursor + 1]
-                        .to_string();
-                app.text_prompt
-                    .input
-                    .drain(app.text_prompt.cursor..app.text_prompt.cursor + 1);
-            } else {
-                app.kill_ring =
-                    app.text_prompt.input[app.text_prompt.cursor..end].to_string();
-                app.text_prompt.input.drain(app.text_prompt.cursor..end);
-            }
-        }
-        // Ctrl+U: kill to beginning of line
-        KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
-            let start = line_start(&app.text_prompt.input, app.text_prompt.cursor);
-            app.kill_ring =
-                app.text_prompt.input[start..app.text_prompt.cursor].to_string();
-            app.text_prompt.input.drain(start..app.text_prompt.cursor);
-            app.text_prompt.cursor = start;
-        }
-        // Ctrl+W: delete word backward
-        KeyCode::Char('w') if modifiers.contains(KeyModifiers::CONTROL) => {
-            let start = word_boundary_back(&app.text_prompt.input, app.text_prompt.cursor);
-            app.kill_ring =
-                app.text_prompt.input[start..app.text_prompt.cursor].to_string();
-            app.text_prompt.input.drain(start..app.text_prompt.cursor);
-            app.text_prompt.cursor = start;
-        }
-        // Ctrl+Y: yank
-        KeyCode::Char('y') if modifiers.contains(KeyModifiers::CONTROL) => {
-            if !app.kill_ring.is_empty() {
-                let text = app.kill_ring.clone();
-                app.text_prompt
-                    .input
-                    .insert_str(app.text_prompt.cursor, &text);
-                app.text_prompt.cursor += text.len();
-            }
-        }
-        // Ctrl+D: delete forward
-        KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
-            if app.text_prompt.cursor < app.text_prompt.input.len() {
-                let next = next_char_boundary(&app.text_prompt.input, app.text_prompt.cursor);
-                app.text_prompt.input.drain(app.text_prompt.cursor..next);
-            }
-        }
-        // Ctrl+C: cancel
-        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-            app.text_prompt.input.clear();
-            app.text_prompt.cursor = 0;
-            app.text_prompt.scroll = 0;
-            app.input_mode = InputMode::Normal;
-        }
-        // Left: move cursor left; wraps to end of previous line at line start
-        KeyCode::Left => {
-            app.text_prompt.cursor =
-                prev_char_boundary(&app.text_prompt.input, app.text_prompt.cursor);
-        }
-        // Right: move cursor right; wraps to start of next line at line end
-        KeyCode::Right => {
-            app.text_prompt.cursor =
-                next_char_boundary(&app.text_prompt.input, app.text_prompt.cursor);
-        }
-        // Up: move to previous line
-        KeyCode::Up => {
-            app.text_prompt.cursor =
-                move_cursor_up(&app.text_prompt.input, app.text_prompt.cursor);
-        }
-        // Down: move to next line
-        KeyCode::Down => {
-            app.text_prompt.cursor =
-                move_cursor_down(&app.text_prompt.input, app.text_prompt.cursor);
-        }
-        // Home/End
-        KeyCode::Home => {
-            app.text_prompt.cursor =
-                line_start(&app.text_prompt.input, app.text_prompt.cursor);
-        }
-        KeyCode::End => {
-            app.text_prompt.cursor =
-                line_end(&app.text_prompt.input, app.text_prompt.cursor);
-        }
-        KeyCode::Char(c) => {
-            app.text_prompt.input.insert(app.text_prompt.cursor, c);
-            app.text_prompt.cursor += c.len_utf8();
-        }
-        _ => {}
     }
 }
 
@@ -607,279 +421,39 @@ fn handle_task_form_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
     }
 }
 
-/// Shared text editing keybindings for multi-line input fields.
-/// Returns `true` if the key was handled, `false` if the caller should handle it
-/// (e.g. Esc, Enter, Ctrl+C, Ctrl+V which have mode-specific behavior).
-fn handle_text_editing(
-    input: &mut String,
-    cursor: &mut usize,
-    kill_ring: &mut String,
-    code: KeyCode,
-    modifiers: KeyModifiers,
-) -> bool {
-    match code {
-        // Shift+Enter or Alt+Enter: insert newline.
-        KeyCode::Enter
-            if modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::ALT) =>
-        {
-            input.insert(*cursor, '\n');
-            *cursor += 1;
-            true
-        }
-        KeyCode::Backspace => {
-            if *cursor > 0 {
-                let prev = prev_char_boundary(input, *cursor);
-                input.drain(prev..*cursor);
-                *cursor = prev;
-            }
-            true
-        }
-        KeyCode::Delete => {
-            if *cursor < input.len() {
-                let next = next_char_boundary(input, *cursor);
-                input.drain(*cursor..next);
-            }
-            true
-        }
-        // Ctrl+A: move to beginning of current line (Emacs)
-        KeyCode::Char('a') if modifiers.contains(KeyModifiers::CONTROL) => {
-            *cursor = line_start(input, *cursor);
-            true
-        }
-        // Ctrl+E: move to end of current line
-        KeyCode::Char('e') if modifiers.contains(KeyModifiers::CONTROL) => {
-            *cursor = line_end(input, *cursor);
-            true
-        }
-        // Ctrl+B: move backward one char
-        KeyCode::Char('b') if modifiers.contains(KeyModifiers::CONTROL) => {
-            *cursor = prev_char_boundary(input, *cursor);
-            true
-        }
-        // Ctrl+F: move forward one char
-        KeyCode::Char('f') if modifiers.contains(KeyModifiers::CONTROL) => {
-            *cursor = next_char_boundary(input, *cursor);
-            true
-        }
-        // Ctrl+K: kill to end of current line (saved to kill ring for Ctrl+Y)
-        KeyCode::Char('k') if modifiers.contains(KeyModifiers::CONTROL) => {
-            let end = line_end(input, *cursor);
-            if end == *cursor && *cursor < input.len() {
-                // At end of line: kill the newline character to join lines.
-                *kill_ring = input[*cursor..*cursor + 1].to_string();
-                input.drain(*cursor..*cursor + 1);
-            } else {
-                *kill_ring = input[*cursor..end].to_string();
-                input.drain(*cursor..end);
-            }
-            true
-        }
-        // Ctrl+U: kill to beginning of current line (saved to kill ring for Ctrl+Y)
-        KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
-            let start = line_start(input, *cursor);
-            *kill_ring = input[start..*cursor].to_string();
-            input.drain(start..*cursor);
-            *cursor = start;
-            true
-        }
-        // Ctrl+W: delete word backward (saved to kill ring for Ctrl+Y)
-        KeyCode::Char('w') if modifiers.contains(KeyModifiers::CONTROL) => {
-            let start = word_boundary_back(input, *cursor);
-            *kill_ring = input[start..*cursor].to_string();
-            input.drain(start..*cursor);
-            *cursor = start;
-            true
-        }
-        // Ctrl+Y: yank (paste from kill ring)
-        KeyCode::Char('y') if modifiers.contains(KeyModifiers::CONTROL) => {
-            if !kill_ring.is_empty() {
-                let text = kill_ring.clone();
-                input.insert_str(*cursor, &text);
-                *cursor += text.len();
-            }
-            true
-        }
-        // Ctrl+D: delete char forward (or no-op at end)
-        KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
-            if *cursor < input.len() {
-                let next = next_char_boundary(input, *cursor);
-                input.drain(*cursor..next);
-            }
-            true
-        }
-        // Arrow keys: Left/Right move within text
-        KeyCode::Left => {
-            *cursor = prev_char_boundary(input, *cursor);
-            true
-        }
-        KeyCode::Right => {
-            *cursor = next_char_boundary(input, *cursor);
-            true
-        }
-        // Up/Down: navigate between lines in multi-line input.
-        KeyCode::Up if !modifiers.contains(KeyModifiers::ALT) => {
-            let new_pos = move_cursor_up(input, *cursor);
-            if new_pos != *cursor {
-                *cursor = new_pos;
-            }
-            true
-        }
-        KeyCode::Down if !modifiers.contains(KeyModifiers::ALT) => {
-            let new_pos = move_cursor_down(input, *cursor);
-            if new_pos != *cursor {
-                *cursor = new_pos;
-            }
-            true
-        }
-        // Home/End: start/end of current line
-        KeyCode::Home => {
-            *cursor = line_start(input, *cursor);
-            true
-        }
-        KeyCode::End => {
-            *cursor = line_end(input, *cursor);
-            true
-        }
-        KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) => {
-            input.insert(*cursor, c);
-            *cursor += c.len_utf8();
-            true
-        }
-        _ => false,
-    }
-}
 
 fn handle_chat_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
-    // Try shared text editing first.
-    if handle_text_editing(
-        &mut app.chat.input,
-        &mut app.chat.cursor,
-        &mut app.kill_ring,
-        code,
-        modifiers,
-    ) {
-        return;
-    }
-    // Mode-specific keys.
+    use super::state::{editor_clear, editor_text};
+    use crossterm::event::KeyEvent;
     match code {
-        KeyCode::Esc => {
-            // Exit text entry, but stay in the chat panel with history sub-focus.
-            app.input_mode = InputMode::Normal;
-            app.chat_input_dismissed = true;
-            app.inspector_sub_focus = InspectorSubFocus::ChatHistory;
+        KeyCode::Esc => { app.input_mode = InputMode::Normal; app.chat_input_dismissed = true; app.inspector_sub_focus = InspectorSubFocus::ChatHistory; return; }
+        KeyCode::Enter if !modifiers.contains(KeyModifiers::SHIFT) && !modifiers.contains(KeyModifiers::ALT) => {
+            let text = editor_text(&app.chat.editor);
+            editor_clear(&mut app.chat.editor);
+            if !text.trim().is_empty() { app.send_chat_message(text); }
+            return;
         }
-        KeyCode::Enter => {
-            // Enter sends the message (newlines from paste are preserved in the content).
-            // Stay in ChatInput mode so the user can immediately type another message.
-            let text = app.chat.input.clone();
-            app.chat.input.clear();
-            app.chat.cursor = 0;
-            app.chat.input_scroll = 0;
-            if !text.trim().is_empty() {
-                app.send_chat_message(text);
-            }
-        }
-        // Ctrl+C: cancel input
-        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-            app.chat.input.clear();
-            app.chat.cursor = 0;
-            app.chat.input_scroll = 0;
-            app.input_mode = InputMode::Normal;
-            app.inspector_sub_focus = InspectorSubFocus::ChatHistory;
-        }
-        // Ctrl+V: check clipboard for image before falling through to text paste.
-        KeyCode::Char('v') if modifiers.contains(KeyModifiers::CONTROL) => {
-            app.try_paste_clipboard_image();
-        }
-        // Alt+Up/Down: scroll chat history
-        KeyCode::Up if modifiers.contains(KeyModifiers::ALT) => {
-            app.record_panel_scroll_activity();
-            app.chat.scroll = app.chat.scroll.saturating_add(1);
-        }
-        KeyCode::Down if modifiers.contains(KeyModifiers::ALT) => {
-            app.record_panel_scroll_activity();
-            app.chat.scroll = app.chat.scroll.saturating_sub(1);
-        }
+        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => { editor_clear(&mut app.chat.editor); app.input_mode = InputMode::Normal; app.inspector_sub_focus = InspectorSubFocus::ChatHistory; return; }
+        KeyCode::Char('v') if modifiers.contains(KeyModifiers::CONTROL) => { app.try_paste_clipboard_image(); return; }
+        KeyCode::Up if modifiers.contains(KeyModifiers::ALT) => { app.record_panel_scroll_activity(); app.chat.scroll = app.chat.scroll.saturating_add(1); return; }
+        KeyCode::Down if modifiers.contains(KeyModifiers::ALT) => { app.record_panel_scroll_activity(); app.chat.scroll = app.chat.scroll.saturating_sub(1); return; }
         _ => {}
     }
-}
-
-/// Find the byte offset of the start of the line containing `pos`.
-fn line_start(s: &str, pos: usize) -> usize {
-    s[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0)
-}
-
-/// Find the byte offset of the end of the line containing `pos` (before the '\n').
-fn line_end(s: &str, pos: usize) -> usize {
-    s[pos..].find('\n').map(|i| pos + i).unwrap_or(s.len())
-}
-
-/// Move cursor up one line, preserving column position as best as possible.
-fn move_cursor_up(s: &str, pos: usize) -> usize {
-    let cur_line_start = line_start(s, pos);
-    if cur_line_start == 0 {
-        // Already on the first line.
-        return pos;
+    if code == KeyCode::Enter && (modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::ALT)) {
+        app.editor_handler.on_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &mut app.chat.editor);
+        return;
     }
-    let col = s[cur_line_start..pos].chars().count();
-    // Previous line ends at cur_line_start - 1 (the '\n').
-    let prev_line_start = line_start(s, cur_line_start - 1);
-    let prev_line_end = cur_line_start - 1; // byte offset of the '\n'
-    let prev_line = &s[prev_line_start..prev_line_end];
-    let target_col = col.min(prev_line.chars().count());
-    // Convert char offset to byte offset.
-    let byte_offset: usize = prev_line
-        .chars()
-        .take(target_col)
-        .map(|c| c.len_utf8())
-        .sum();
-    prev_line_start + byte_offset
-}
-
-/// Move cursor down one line, preserving column position as best as possible.
-fn move_cursor_down(s: &str, pos: usize) -> usize {
-    let cur_line_end = line_end(s, pos);
-    if cur_line_end >= s.len() {
-        // Already on the last line.
-        return pos;
-    }
-    let cur_line_start = line_start(s, pos);
-    let col = s[cur_line_start..pos].chars().count();
-    let next_line_start = cur_line_end + 1; // skip the '\n'
-    let next_line_end = line_end(s, next_line_start);
-    let next_line = &s[next_line_start..next_line_end];
-    let target_col = col.min(next_line.chars().count());
-    let byte_offset: usize = next_line
-        .chars()
-        .take(target_col)
-        .map(|c| c.len_utf8())
-        .sum();
-    next_line_start + byte_offset
+    app.editor_handler.on_key_event(KeyEvent::new(code, modifiers), &mut app.chat.editor);
 }
 
 fn handle_message_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
-    // Try shared text editing first.
-    if handle_text_editing(
-        &mut app.messages_panel.input,
-        &mut app.messages_panel.cursor,
-        &mut app.kill_ring,
-        code,
-        modifiers,
-    ) {
-        return;
-    }
-    // Mode-specific keys (matches handle_chat_input behavior).
+    use super::state::{editor_clear, editor_text};
+    use crossterm::event::KeyEvent;
     match code {
-        KeyCode::Esc => {
-            app.input_mode = InputMode::Normal;
-        }
-        KeyCode::Enter => {
-            // Enter sends the message (newlines from paste are preserved in the content).
-            // Stay in MessageInput mode so the user can immediately type another message.
-            let text = app.messages_panel.input.clone();
-            app.messages_panel.input.clear();
-            app.messages_panel.cursor = 0;
-            app.messages_panel.input_scroll = 0;
+        KeyCode::Esc => { app.input_mode = InputMode::Normal; return; }
+        KeyCode::Enter if !modifiers.contains(KeyModifiers::SHIFT) && !modifiers.contains(KeyModifiers::ALT) => {
+            let text = editor_text(&app.messages_panel.editor);
+            editor_clear(&mut app.messages_panel.editor);
             if !text.trim().is_empty()
                 && let Some(task_id) = app.messages_panel.task_id.clone()
             {
@@ -894,73 +468,22 @@ fn handle_message_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers
                     ],
                     CommandEffect::Notify(format!("Message sent to '{}'", task_id)),
                 );
-                // Invalidate so messages reload on next frame.
                 app.invalidate_messages_panel();
                 app.load_messages_panel();
             }
+            return;
         }
-        // Ctrl+C: cancel input
-        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-            app.messages_panel.input.clear();
-            app.messages_panel.cursor = 0;
-            app.messages_panel.input_scroll = 0;
-            app.input_mode = InputMode::Normal;
-        }
-        // Ctrl+V: check clipboard for image before falling through to text paste.
-        KeyCode::Char('v') if modifiers.contains(KeyModifiers::CONTROL) => {
-            app.try_paste_clipboard_image();
-        }
-        // Alt+Up/Down: scroll message history
-        // (messages_panel.scroll is from-top, so sub = up, add = down)
-        KeyCode::Up if modifiers.contains(KeyModifiers::ALT) => {
-            app.record_panel_scroll_activity();
-            app.messages_panel.scroll = app.messages_panel.scroll.saturating_sub(1);
-        }
-        KeyCode::Down if modifiers.contains(KeyModifiers::ALT) => {
-            app.record_panel_scroll_activity();
-            app.messages_panel.scroll = app.messages_panel.scroll.saturating_add(1);
-        }
+        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => { editor_clear(&mut app.messages_panel.editor); app.input_mode = InputMode::Normal; return; }
+        KeyCode::Char('v') if modifiers.contains(KeyModifiers::CONTROL) => { app.try_paste_clipboard_image(); return; }
+        KeyCode::Up if modifiers.contains(KeyModifiers::ALT) => { app.record_panel_scroll_activity(); app.messages_panel.scroll = app.messages_panel.scroll.saturating_sub(1); return; }
+        KeyCode::Down if modifiers.contains(KeyModifiers::ALT) => { app.record_panel_scroll_activity(); app.messages_panel.scroll = app.messages_panel.scroll.saturating_add(1); return; }
         _ => {}
     }
-}
-
-/// Find the byte offset of the previous char boundary (or 0).
-fn prev_char_boundary(s: &str, pos: usize) -> usize {
-    if pos == 0 {
-        return 0;
+    if code == KeyCode::Enter && (modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::ALT)) {
+        app.editor_handler.on_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &mut app.messages_panel.editor);
+        return;
     }
-    let mut i = pos - 1;
-    while i > 0 && !s.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
-}
-
-/// Find the byte offset of the next char boundary (or len).
-fn next_char_boundary(s: &str, pos: usize) -> usize {
-    if pos >= s.len() {
-        return s.len();
-    }
-    let mut i = pos + 1;
-    while i < s.len() && !s.is_char_boundary(i) {
-        i += 1;
-    }
-    i
-}
-
-/// Find the start of the previous word (skips whitespace, then non-whitespace).
-fn word_boundary_back(s: &str, pos: usize) -> usize {
-    let bytes = s.as_bytes();
-    let mut i = pos;
-    // Skip whitespace backward
-    while i > 0 && bytes[i - 1].is_ascii_whitespace() {
-        i -= 1;
-    }
-    // Skip non-whitespace backward
-    while i > 0 && !bytes[i - 1].is_ascii_whitespace() {
-        i -= 1;
-    }
-    i
+    app.editor_handler.on_key_event(KeyEvent::new(code, modifiers), &mut app.messages_panel.editor);
 }
 
 fn handle_normal_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
@@ -1183,9 +706,7 @@ fn handle_graph_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
         // f: mark selected task failed (text prompt for reason)
         KeyCode::Char('f') => {
             if let Some(task_id) = app.selected_task_id().map(|s| s.to_string()) {
-                app.text_prompt.input.clear();
-                app.text_prompt.cursor = 0;
-                app.text_prompt.scroll = 0;
+                super::state::editor_clear(&mut app.text_prompt.editor);
                 app.input_mode = InputMode::TextPrompt(TextPromptAction::MarkFailed(task_id));
             }
         }
@@ -1200,9 +721,7 @@ fn handle_graph_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
         // e: edit task description (text prompt)
         KeyCode::Char('e') => {
             if let Some(task_id) = app.selected_task_id().map(|s| s.to_string()) {
-                app.text_prompt.input.clear();
-                app.text_prompt.cursor = 0;
-                app.text_prompt.scroll = 0;
+                super::state::editor_clear(&mut app.text_prompt.editor);
                 app.input_mode = InputMode::TextPrompt(TextPromptAction::EditDescription(task_id));
             }
         }
@@ -1368,11 +887,9 @@ fn handle_right_panel_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
                 app.chat_input_dismissed = false;
                 app.input_mode = InputMode::ChatInput;
                 app.inspector_sub_focus = InspectorSubFocus::TextEntry;
-                // Place cursor at end of existing text.
-                app.chat.cursor = app.chat.input.len();
+                // Editor cursor is already at the right position.
             } else if app.right_panel_tab == RightPanelTab::Messages {
-                app.messages_panel.input.clear();
-                app.messages_panel.cursor = 0;
+                super::state::editor_clear(&mut app.messages_panel.editor);
                 app.input_mode = InputMode::MessageInput;
             } else if app.right_panel_tab == RightPanelTab::Config {
                 config_enter_edit(app);
@@ -1604,7 +1121,7 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
     match kind {
         MouseEventKind::ScrollUp => {
             if in_text_prompt {
-                app.text_prompt.scroll = app.text_prompt.scroll.saturating_sub(3);
+                // Mouse scroll in text prompt: handled by edtui
             } else if in_graph {
                 app.record_graph_scroll_activity();
                 app.scroll.scroll_up(3);
@@ -1630,8 +1147,7 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
         }
         MouseEventKind::ScrollDown => {
             if in_text_prompt {
-                let max_scroll = app.text_prompt.input.matches('\n').count();
-                app.text_prompt.scroll = (app.text_prompt.scroll + 3).min(max_scroll);
+                // Mouse scroll in text prompt: handled by edtui
             } else if in_graph {
                 app.record_graph_scroll_activity();
                 app.scroll.scroll_down(3);
@@ -1702,8 +1218,7 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
                 app.chat_input_dismissed = false;
                 app.input_mode = InputMode::ChatInput;
                 app.inspector_sub_focus = InspectorSubFocus::TextEntry;
-                // Place cursor at end of existing text.
-                app.chat.cursor = app.chat.input.len();
+                // Editor cursor is already at the right position.
             } else if in_right_content
                 && app.right_panel_tab == RightPanelTab::Chat
                 && app.last_chat_message_area.height > 0
