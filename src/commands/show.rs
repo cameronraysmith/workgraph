@@ -86,6 +86,8 @@ struct TaskDetails {
     exec_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     token_usage: Option<TokenUsage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
 }
 
 fn is_default_visibility(val: &str) -> bool {
@@ -204,6 +206,7 @@ pub fn run(dir: &Path, id: &str, json: bool) -> Result<()> {
         context_scope: task.context_scope.clone(),
         exec_mode: task.exec_mode.clone(),
         token_usage,
+        session_id: task.session_id.clone(),
     };
 
     if json {
@@ -516,6 +519,7 @@ mod tests {
             exec_mode: None,
             cycle_config: None,
             token_usage: None,
+            session_id: None,
         };
 
         let json = serde_json::to_string(&details).unwrap();

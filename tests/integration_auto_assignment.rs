@@ -258,6 +258,7 @@ fn build_assign_subgraph(dir: &Path) {
             exec_mode: None,
             cycle_config: None,
             token_usage: None,
+            session_id: None,
         };
 
         mutable_graph.add_node(Node::Task(assign_task));
