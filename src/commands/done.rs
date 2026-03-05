@@ -26,6 +26,23 @@ fn run_verify_command(verify_cmd: &str, project_root: &Path) -> Result<()> {
         .spawn()
         .with_context(|| format!("Failed to spawn verify command: {}", verify_cmd))?;
 
+    // Read stdout and stderr in background threads to prevent pipe buffer deadlock.
+    // Without this, a child producing >64KB of output blocks on write and never exits.
+    let stdout_handle = child.stdout.take().map(|s| {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            std::io::Read::read_to_string(&mut std::io::BufReader::new(s), &mut buf).ok();
+            buf
+        })
+    });
+    let stderr_handle = child.stderr.take().map(|s| {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            std::io::Read::read_to_string(&mut std::io::BufReader::new(s), &mut buf).ok();
+            buf
+        })
+    });
+
     let timeout = Duration::from_secs(120);
     let start = Instant::now();
 
@@ -54,16 +71,8 @@ fn run_verify_command(verify_cmd: &str, project_root: &Path) -> Result<()> {
     if status.success() {
         Ok(())
     } else {
-        let stdout = child.stdout.take().map(|mut s| {
-            let mut buf = String::new();
-            std::io::Read::read_to_string(&mut s, &mut buf).ok();
-            buf
-        }).unwrap_or_default();
-        let stderr = child.stderr.take().map(|mut s| {
-            let mut buf = String::new();
-            std::io::Read::read_to_string(&mut s, &mut buf).ok();
-            buf
-        }).unwrap_or_default();
+        let stdout = stdout_handle.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
+        let stderr = stderr_handle.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
         let mut combined = stderr;
         if !stdout.is_empty() {
             if !combined.is_empty() {
