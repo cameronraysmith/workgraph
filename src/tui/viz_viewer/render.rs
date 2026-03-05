@@ -1574,7 +1574,6 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
 
 /// Draw the chat input line at the bottom of the chat panel.
 fn draw_chat_input(frame: &mut Frame, app: &mut VizApp, area: Rect) {
-    use edtui::{EditorTheme, EditorView};
     let is_editing = app.input_mode == InputMode::ChatInput;
     let has_text = !super::state::editor_is_empty(&app.chat.editor);
     app.last_chat_input_area = area;
@@ -1648,19 +1647,18 @@ fn draw_chat_input(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         } else {
             Color::DarkGray
         };
-        let theme = EditorTheme::default()
-            .hide_status_line()
-            .base(Style::default().fg(text_color))
-            .cursor_style(if is_editing {
-                Style::default().fg(Color::Black).bg(Color::White)
-            } else {
-                Style::default().fg(text_color)
-            });
-        frame.render_widget(
-            EditorView::new(&mut app.chat.editor)
-                .wrap(true)
-                .theme(theme),
+        let cursor_style = if is_editing {
+            Style::default().fg(Color::Black).bg(Color::White)
+        } else {
+            Style::default().fg(text_color)
+        };
+        render_editor_word_wrap(
+            frame,
+            &app.chat.editor,
             editor_area,
+            Style::default().fg(text_color),
+            cursor_style,
+            is_editing,
         );
         if !app.chat.pending_attachments.is_empty() {
             let att_text: String = app
@@ -1724,14 +1722,219 @@ fn count_visual_lines(input: &str, usable_width: usize) -> usize {
     }
     let mut count = 0;
     for line in input.split('\n') {
-        let chars = line.chars().count();
-        if chars == 0 {
-            count += 1;
-        } else {
-            count += chars.div_ceil(usable_width);
-        }
+        count += word_wrap_segments(line, usable_width).len();
     }
     count
+}
+
+/// Word-wrap a single logical line into segments, breaking at word boundaries.
+/// Returns `Vec<(start_char, end_char)>` pairs — character index ranges within the line.
+/// Characters between consecutive segments (gaps) are consumed whitespace.
+/// Only hard-breaks when a single word exceeds the width.
+fn word_wrap_segments(line: &str, width: usize) -> Vec<(usize, usize)> {
+    use unicode_width::UnicodeWidthChar;
+
+    let chars: Vec<char> = line.chars().collect();
+    let n = chars.len();
+
+    if n == 0 {
+        return vec![(0, 0)];
+    }
+    if width == 0 {
+        return vec![(0, n)];
+    }
+
+    let cw = |c: char| -> usize { UnicodeWidthChar::width(c).unwrap_or(0) };
+
+    let mut result = Vec::new();
+    let mut pos = 0;
+
+    while pos < n {
+        let seg_start = pos;
+        let mut col: usize = 0;
+        // Last position where we could end the visual line (after a word or at a ws→word boundary).
+        let mut last_break: Option<usize> = None;
+
+        while pos < n {
+            let char_width = cw(chars[pos]);
+
+            if col + char_width > width && pos > seg_start {
+                break;
+            }
+
+            col += char_width;
+            pos += 1;
+
+            // Record break points at word boundaries:
+            // - non-ws followed by ws (end of word)
+            // - ws followed by non-ws (start of word)
+            if pos < n {
+                let curr_is_ws = chars[pos - 1].is_whitespace();
+                let next_is_ws = chars[pos].is_whitespace();
+                if !curr_is_ws && next_is_ws {
+                    last_break = Some(pos);
+                } else if curr_is_ws && !next_is_ws {
+                    last_break = Some(pos);
+                }
+            }
+        }
+
+        if pos >= n {
+            result.push((seg_start, n));
+            break;
+        }
+
+        // Overflow: break at last word boundary, or hard-break.
+        if let Some(bp) = last_break {
+            result.push((seg_start, bp));
+            pos = bp;
+            while pos < n && chars[pos].is_whitespace() {
+                pos += 1;
+            }
+        } else {
+            // No word boundary in this segment — hard break.
+            result.push((seg_start, pos));
+        }
+    }
+
+    if result.is_empty() {
+        result.push((0, 0));
+    }
+
+    result
+}
+
+/// Map a cursor column (char index) in a logical line to (visual_line_offset, char_offset)
+/// within the word-wrapped segments.
+fn cursor_in_segments(segments: &[(usize, usize)], cursor_col: usize) -> (usize, usize) {
+    for (i, &(start, end)) in segments.iter().enumerate() {
+        if cursor_col < end {
+            return (i, cursor_col - start);
+        }
+        // Cursor is in the gap (consumed whitespace) between segments.
+        let next_start = segments.get(i + 1).map(|s| s.0).unwrap_or(end);
+        if cursor_col < next_start {
+            return (i, end - start);
+        }
+    }
+    // Past the end — show at end of last segment.
+    if let Some(&(start, end)) = segments.last() {
+        (segments.len() - 1, end - start)
+    } else {
+        (0, 0)
+    }
+}
+
+/// Render an edtui EditorState with word-boundary wrapping.
+/// Replaces EditorView for cases where word wrapping is needed.
+fn render_editor_word_wrap(
+    frame: &mut Frame,
+    editor: &edtui::EditorState,
+    area: Rect,
+    text_style: Style,
+    cursor_style: Style,
+    show_cursor: bool,
+) {
+    use unicode_width::UnicodeWidthChar;
+
+    let text = editor.lines.to_string();
+    let width = area.width as usize;
+    if width == 0 || area.height == 0 {
+        return;
+    }
+
+    let logical_lines: Vec<&str> = text.split('\n').collect();
+
+    // Build visual lines and find cursor position.
+    let mut visual_lines: Vec<String> = Vec::new();
+    let mut cursor_visual_row = 0usize;
+    let mut cursor_char_offset = 0usize; // char offset within the visual line
+    let mut found_cursor = false;
+
+    for (line_idx, logical_line) in logical_lines.iter().enumerate() {
+        let chars: Vec<char> = logical_line.chars().collect();
+        let segments = word_wrap_segments(logical_line, width);
+
+        if line_idx == editor.cursor.row && !found_cursor {
+            let (sub_row, sub_col) = cursor_in_segments(&segments, editor.cursor.col);
+            cursor_visual_row = visual_lines.len() + sub_row;
+            cursor_char_offset = sub_col;
+            found_cursor = true;
+        }
+
+        for &(start, end) in &segments {
+            let line_text: String = chars[start..end].iter().collect();
+            visual_lines.push(line_text);
+        }
+    }
+
+    let total_visual = visual_lines.len();
+    let viewport_h = area.height as usize;
+
+    // Scroll to keep cursor visible.
+    let scroll = if cursor_visual_row >= viewport_h {
+        cursor_visual_row - viewport_h + 1
+    } else {
+        0
+    };
+
+    // Render visible lines.
+    let visible_end = (scroll + viewport_h).min(total_visual);
+    for (i, vi) in (scroll..visible_end).enumerate() {
+        let y = area.y + i as u16;
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                visual_lines[vi].clone(),
+                text_style,
+            ))),
+            Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height: 1,
+            },
+        );
+    }
+
+    // Draw cursor.
+    if show_cursor && cursor_visual_row >= scroll && cursor_visual_row < scroll + viewport_h {
+        let cursor_y = area.y + (cursor_visual_row - scroll) as u16;
+        // Convert char offset to display column.
+        let cursor_display_col: usize = if cursor_visual_row < visual_lines.len() {
+            visual_lines[cursor_visual_row]
+                .chars()
+                .take(cursor_char_offset)
+                .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
+                .sum()
+        } else {
+            0
+        };
+        let cursor_x = area.x + (cursor_display_col as u16).min(area.width.saturating_sub(1));
+
+        // Character under cursor (or space if at end of line).
+        let cursor_char = if cursor_visual_row < visual_lines.len() {
+            visual_lines[cursor_visual_row]
+                .chars()
+                .nth(cursor_char_offset)
+                .unwrap_or(' ')
+        } else {
+            ' '
+        };
+        let char_w = UnicodeWidthChar::width(cursor_char).unwrap_or(1).max(1) as u16;
+
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                cursor_char.to_string(),
+                cursor_style,
+            ))),
+            Rect {
+                x: cursor_x,
+                y: cursor_y,
+                width: char_w.min(area.width.saturating_sub(cursor_display_col as u16)),
+                height: 1,
+            },
+        );
+    }
 }
 
 /// Draw the Log tab content (panel 2) — reverse chronological activity log.
@@ -2260,7 +2463,6 @@ fn draw_messages_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
 
 /// Draw the message input line at the bottom of the messages panel.
 fn draw_message_input(frame: &mut Frame, app: &mut VizApp, area: Rect) {
-    use edtui::{EditorTheme, EditorView};
     let is_editing = app.input_mode == InputMode::MessageInput;
     let has_text = !super::state::editor_is_empty(&app.messages_panel.editor);
     let border_color = if is_editing {
@@ -2333,19 +2535,18 @@ fn draw_message_input(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         } else {
             Color::DarkGray
         };
-        let theme = EditorTheme::default()
-            .hide_status_line()
-            .base(Style::default().fg(text_color))
-            .cursor_style(if is_editing {
-                Style::default().fg(Color::Black).bg(Color::White)
-            } else {
-                Style::default().fg(text_color)
-            });
-        frame.render_widget(
-            EditorView::new(&mut app.messages_panel.editor)
-                .wrap(true)
-                .theme(theme),
+        let cursor_style = if is_editing {
+            Style::default().fg(Color::Black).bg(Color::White)
+        } else {
+            Style::default().fg(text_color)
+        };
+        render_editor_word_wrap(
+            frame,
+            &app.messages_panel.editor,
             editor_area,
+            Style::default().fg(text_color),
+            cursor_style,
+            is_editing,
         );
     } else {
         frame.render_widget(
@@ -7130,5 +7331,91 @@ mod tests {
             first_line.spans.iter().any(|s| s.style == blue),
             "Blue style should be present in first wrapped line"
         );
+    }
+
+    // ── word_wrap_segments tests ──
+
+    /// Helper: extract visual line strings from segments.
+    fn segments_to_strings(line: &str, segments: &[(usize, usize)]) -> Vec<String> {
+        let chars: Vec<char> = line.chars().collect();
+        segments
+            .iter()
+            .map(|&(s, e)| chars[s..e].iter().collect::<String>())
+            .collect()
+    }
+
+    #[test]
+    fn test_wrap_segments_basic_word_boundary() {
+        let line = "hello world";
+        let segs = word_wrap_segments(line, 5);
+        assert_eq!(segments_to_strings(line, &segs), vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn test_wrap_segments_exact_fit() {
+        let line = "hi there";
+        let segs = word_wrap_segments(line, 8);
+        assert_eq!(segments_to_strings(line, &segs), vec!["hi there"]);
+    }
+
+    #[test]
+    fn test_wrap_segments_multi_word() {
+        let line = "hi there world";
+        let segs = word_wrap_segments(line, 8);
+        assert_eq!(
+            segments_to_strings(line, &segs),
+            vec!["hi there", "world"]
+        );
+    }
+
+    #[test]
+    fn test_wrap_segments_hard_break_long_word() {
+        let line = "longword";
+        let segs = word_wrap_segments(line, 5);
+        assert_eq!(segments_to_strings(line, &segs), vec!["longw", "ord"]);
+    }
+
+    #[test]
+    fn test_wrap_segments_leading_spaces() {
+        let line = "  hello";
+        let segs = word_wrap_segments(line, 5);
+        // Leading spaces + "hello" (7 cols) exceeds 5; break at space→word boundary.
+        assert_eq!(segments_to_strings(line, &segs), vec!["  ", "hello"]);
+    }
+
+    #[test]
+    fn test_wrap_segments_empty_line() {
+        let segs = word_wrap_segments("", 10);
+        assert_eq!(segs, vec![(0, 0)]);
+    }
+
+    #[test]
+    fn test_wrap_segments_single_word_fits() {
+        let segs = word_wrap_segments("hello", 10);
+        assert_eq!(segs, vec![(0, 5)]);
+    }
+
+    #[test]
+    fn test_count_visual_lines_word_wrap() {
+        assert_eq!(count_visual_lines("hello world", 5), 2);
+        assert_eq!(count_visual_lines("hello\nworld", 10), 2);
+        assert_eq!(count_visual_lines("a b c d e f", 5), 2);
+        assert_eq!(count_visual_lines("", 10), 1);
+    }
+
+    #[test]
+    fn test_cursor_in_segments_basic() {
+        let segs = word_wrap_segments("hello world", 5);
+        // segs: [(0,5), (6,11)]
+        // Cursor on 'o' (col 4): visual line 0, offset 4.
+        assert_eq!(cursor_in_segments(&segs, 4), (0, 4));
+        // Cursor on space (col 5): in gap, show at end of first visual line.
+        assert_eq!(cursor_in_segments(&segs, 5), (0, 5));
+        // Cursor on 'w' (col 6): visual line 1, offset 0.
+        assert_eq!(cursor_in_segments(&segs, 6), (1, 0));
+        // Cursor on 'd' (col 10): visual line 1, offset 4.
+        assert_eq!(cursor_in_segments(&segs, 10), (1, 4));
+        // Cursor at end (col 11): past end of last segment.
+        assert_eq!(cursor_in_segments(&segs, 11), (1, 5));
     }
 }
