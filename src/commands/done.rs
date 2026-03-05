@@ -12,7 +12,77 @@ use super::graph_path;
 #[cfg(test)]
 use workgraph::parser::load_graph;
 
-pub fn run(dir: &Path, id: &str, converged: bool) -> Result<()> {
+/// Run a verify command in a shell, returning Ok(()) if it passes or an error if it fails/times out.
+fn run_verify_command(verify_cmd: &str, project_root: &Path) -> Result<()> {
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(verify_cmd)
+        .current_dir(project_root)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .with_context(|| format!("Failed to spawn verify command: {}", verify_cmd))?;
+
+    let timeout = Duration::from_secs(120);
+    let start = Instant::now();
+
+    // Poll with short sleeps to implement timeout without external crate
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    anyhow::bail!(
+                        "Verify command timed out after {}s: {}",
+                        timeout.as_secs(),
+                        verify_cmd,
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => {
+                anyhow::bail!("Failed to wait on verify command: {}", e);
+            }
+        }
+    };
+
+    if status.success() {
+        Ok(())
+    } else {
+        let stdout = child.stdout.take().map(|mut s| {
+            let mut buf = String::new();
+            std::io::Read::read_to_string(&mut s, &mut buf).ok();
+            buf
+        }).unwrap_or_default();
+        let stderr = child.stderr.take().map(|mut s| {
+            let mut buf = String::new();
+            std::io::Read::read_to_string(&mut s, &mut buf).ok();
+            buf
+        }).unwrap_or_default();
+        let mut combined = stderr;
+        if !stdout.is_empty() {
+            if !combined.is_empty() {
+                combined.push('\n');
+            }
+            combined.push_str(&stdout);
+        }
+        let truncated: String = combined.chars().take(500).collect();
+        let code = status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".to_string());
+        anyhow::bail!(
+            "Verify command failed (exit code {}): {}\nOutput: {}",
+            code,
+            verify_cmd,
+            truncated,
+        );
+    }
+}
+
+pub fn run(dir: &Path, id: &str, converged: bool, skip_verify: bool) -> Result<()> {
     let (mut graph, path) = super::load_workgraph_mut(dir)?;
 
     let task = graph.get_task_mut_or_err(id)?;
@@ -56,6 +126,25 @@ pub fn run(dir: &Path, id: &str, converged: bool) -> Result<()> {
                 effective_blockers.len(),
                 blocker_list.join("\n")
             );
+        }
+    }
+
+    // Run verify command gate (if task has a verify field)
+    if let Some(verify_cmd) = graph.get_task(id).and_then(|t| t.verify.clone()) {
+        if skip_verify {
+            // Block agents from using --skip-verify
+            if std::env::var("WG_AGENT_ID").is_ok() {
+                anyhow::bail!(
+                    "Agents cannot use --skip-verify. The verify command must pass:\n  {}",
+                    verify_cmd,
+                );
+            }
+            eprintln!("Warning: skipping verify command: {}", verify_cmd);
+        } else {
+            let project_root = dir.parent().unwrap_or(dir);
+            eprintln!("Running verify command: {}", verify_cmd);
+            run_verify_command(&verify_cmd, project_root)?;
+            eprintln!("Verify command passed");
         }
     }
 
@@ -259,7 +348,7 @@ mod tests {
         let dir_path = dir.path();
         setup_workgraph(dir_path, vec![make_task("t1", "Test task", Status::Open)]);
 
-        let result = run(dir_path, "t1", false);
+        let result = run(dir_path, "t1", false, false);
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -277,7 +366,7 @@ mod tests {
             vec![make_task("t1", "Test task", Status::InProgress)],
         );
 
-        let result = run(dir_path, "t1", false);
+        let result = run(dir_path, "t1", false, false);
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -293,7 +382,7 @@ mod tests {
         setup_workgraph(dir_path, vec![make_task("t1", "Test task", Status::Done)]);
 
         // Should return Ok (idempotent) rather than error
-        let result = run(dir_path, "t1", false);
+        let result = run(dir_path, "t1", false, false);
         assert!(result.is_ok());
     }
 
@@ -308,7 +397,7 @@ mod tests {
 
         setup_workgraph(dir_path, vec![blocker, blocked]);
 
-        let result = run(dir_path, "blocked", false);
+        let result = run(dir_path, "blocked", false, false);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("blocked by"));
@@ -326,7 +415,7 @@ mod tests {
 
         setup_workgraph(dir_path, vec![blocker, blocked]);
 
-        let result = run(dir_path, "blocked", false);
+        let result = run(dir_path, "blocked", false, false);
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -347,7 +436,7 @@ mod tests {
 
         setup_workgraph(dir_path, vec![blocker, blocked]);
 
-        let result = run(dir_path, "blocked", false);
+        let result = run(dir_path, "blocked", false, false);
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -368,7 +457,7 @@ mod tests {
 
         setup_workgraph(dir_path, vec![blocker, blocked]);
 
-        let result = run(dir_path, "blocked", false);
+        let result = run(dir_path, "blocked", false, false);
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -383,12 +472,11 @@ mod tests {
         let dir_path = dir.path();
 
         let mut task = make_task("t1", "Verified task", Status::InProgress);
-        task.verify = Some("Check output quality".to_string());
+        task.verify = Some("true".to_string());
 
         setup_workgraph(dir_path, vec![task]);
 
-        // Verified tasks can now use wg done directly (submit is deprecated)
-        let result = run(dir_path, "t1", false);
+        let result = run(dir_path, "t1", false, false);
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -404,7 +492,7 @@ mod tests {
         setup_workgraph(dir_path, vec![make_task("t1", "Test task", Status::Open)]);
 
         let before = Utc::now();
-        let result = run(dir_path, "t1", false);
+        let result = run(dir_path, "t1", false, false);
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -427,7 +515,7 @@ mod tests {
         task.assigned = Some("agent-1".to_string());
         setup_workgraph(dir_path, vec![task]);
 
-        let result = run(dir_path, "t1", false);
+        let result = run(dir_path, "t1", false, false);
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -446,7 +534,7 @@ mod tests {
         let dir_path = dir.path();
         setup_workgraph(dir_path, vec![]);
 
-        let result = run(dir_path, "nonexistent", false);
+        let result = run(dir_path, "nonexistent", false, false);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("not found"));
@@ -458,7 +546,7 @@ mod tests {
         let dir_path = dir.path();
         // Don't initialize workgraph
 
-        let result = run(dir_path, "t1", false);
+        let result = run(dir_path, "t1", false, false);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("not initialized"));
@@ -470,7 +558,7 @@ mod tests {
         let dir_path = dir.path();
         setup_workgraph(dir_path, vec![make_task("t1", "Test task", Status::Open)]);
 
-        let result = run(dir_path, "t1", false);
+        let result = run(dir_path, "t1", false, false);
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -487,7 +575,7 @@ mod tests {
         let dir_path = dir.path();
         setup_workgraph(dir_path, vec![make_task("t1", "Test task", Status::Open)]);
 
-        let result = run(dir_path, "t1", true);
+        let result = run(dir_path, "t1", true, false);
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -522,7 +610,7 @@ mod tests {
 
         setup_workgraph(dir_path, vec![header]);
 
-        let result = run(dir_path, "header", true);
+        let result = run(dir_path, "header", true, false);
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -572,7 +660,7 @@ mod tests {
 
         setup_workgraph(dir_path, vec![header, worker]);
 
-        let result = run(dir_path, "worker", true);
+        let result = run(dir_path, "worker", true, false);
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -613,7 +701,7 @@ mod tests {
 
         setup_workgraph(dir_path, vec![header]);
 
-        let result = run(dir_path, "header", true);
+        let result = run(dir_path, "header", true, false);
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -650,7 +738,7 @@ mod tests {
 
         setup_workgraph(dir_path, vec![header]);
 
-        let result = run(dir_path, "header", true);
+        let result = run(dir_path, "header", true, false);
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -671,7 +759,7 @@ mod tests {
         let dir_path = dir.path();
         setup_workgraph(dir_path, vec![make_task("t1", "Test task", Status::Open)]);
 
-        let result = run(dir_path, "t1", false);
+        let result = run(dir_path, "t1", false, false);
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -701,7 +789,7 @@ mod tests {
         });
         setup_workgraph(dir_path, vec![task]);
 
-        let result = run(dir_path, "t1", false);
+        let result = run(dir_path, "t1", false, false);
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -737,7 +825,7 @@ mod tests {
 
         setup_workgraph(dir_path, vec![header]);
 
-        let result = run(dir_path, "header", true);
+        let result = run(dir_path, "header", true, false);
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -787,7 +875,7 @@ mod tests {
 
         setup_workgraph(dir_path, vec![header, worker]);
 
-        let result = run(dir_path, "worker", true);
+        let result = run(dir_path, "worker", true, false);
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -810,5 +898,156 @@ mod tests {
             "Log should contain forced-ignore message, got: {:?}",
             task.log.iter().map(|e| &e.message).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn test_done_verify_passing_allows_transition() {
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+
+        let mut task = make_task("t1", "Task with passing verify", Status::InProgress);
+        task.verify = Some("exit 0".to_string());
+        setup_workgraph(dir_path, vec![task]);
+
+        let result = run(dir_path, "t1", false, false);
+        assert!(result.is_ok());
+
+        let path = graph_path(dir_path);
+        let graph = load_graph(&path).unwrap();
+        let task = graph.get_task("t1").unwrap();
+        assert_eq!(task.status, Status::Done);
+    }
+
+    #[test]
+    fn test_done_verify_failing_blocks_transition() {
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+
+        let mut task = make_task("t1", "Task with failing verify", Status::InProgress);
+        task.verify = Some("exit 1".to_string());
+        setup_workgraph(dir_path, vec![task]);
+
+        let result = run(dir_path, "t1", false, false);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Verify command failed"), "got: {}", err);
+        assert!(err.contains("exit 1"), "got: {}", err);
+
+        // Task should still be in-progress
+        let path = graph_path(dir_path);
+        let graph = load_graph(&path).unwrap();
+        let task = graph.get_task("t1").unwrap();
+        assert_eq!(task.status, Status::InProgress);
+    }
+
+    #[test]
+    fn test_done_verify_failing_includes_output() {
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+
+        let mut task = make_task("t1", "Task with failing verify", Status::InProgress);
+        task.verify = Some("echo 'test failed: expected 42 got 0' >&2; exit 1".to_string());
+        setup_workgraph(dir_path, vec![task]);
+
+        let result = run(dir_path, "t1", false, false);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("test failed: expected 42 got 0"),
+            "error should include command output, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_done_skip_verify_bypasses_gate() {
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+
+        let mut task = make_task("t1", "Task with failing verify", Status::InProgress);
+        task.verify = Some("exit 1".to_string());
+        setup_workgraph(dir_path, vec![task]);
+
+        // Remove WG_AGENT_ID to simulate human usage
+        unsafe { std::env::remove_var("WG_AGENT_ID") };
+
+        let result = run(dir_path, "t1", false, true);
+        assert!(result.is_ok());
+
+        let path = graph_path(dir_path);
+        let graph = load_graph(&path).unwrap();
+        let task = graph.get_task("t1").unwrap();
+        assert_eq!(task.status, Status::Done);
+    }
+
+    #[test]
+    fn test_done_skip_verify_blocked_for_agents() {
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+
+        let mut task = make_task("t1", "Task with failing verify", Status::InProgress);
+        task.verify = Some("exit 1".to_string());
+        setup_workgraph(dir_path, vec![task]);
+
+        // Set WG_AGENT_ID to simulate agent context
+        unsafe { std::env::set_var("WG_AGENT_ID", "agent-test-123") };
+
+        let result = run(dir_path, "t1", false, true);
+
+        // Clean up env var
+        unsafe { std::env::remove_var("WG_AGENT_ID") };
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Agents cannot use --skip-verify"),
+            "got: {}",
+            err
+        );
+
+        // Task should not have transitioned
+        let path = graph_path(dir_path);
+        let graph = load_graph(&path).unwrap();
+        let task = graph.get_task("t1").unwrap();
+        assert_eq!(task.status, Status::InProgress);
+    }
+
+    #[test]
+    fn test_done_no_verify_field_works_as_before() {
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+
+        let task = make_task("t1", "Task without verify", Status::InProgress);
+        assert!(task.verify.is_none());
+        setup_workgraph(dir_path, vec![task]);
+
+        let result = run(dir_path, "t1", false, false);
+        assert!(result.is_ok());
+
+        let path = graph_path(dir_path);
+        let graph = load_graph(&path).unwrap();
+        let task = graph.get_task("t1").unwrap();
+        assert_eq!(task.status, Status::Done);
+    }
+
+    #[test]
+    fn test_done_converged_also_runs_verify() {
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+
+        let mut task = make_task("t1", "Task with failing verify", Status::InProgress);
+        task.verify = Some("exit 1".to_string());
+        setup_workgraph(dir_path, vec![task]);
+
+        let result = run(dir_path, "t1", true, false);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Verify command failed"), "got: {}", err);
+
+        // Task should still be in-progress
+        let path = graph_path(dir_path);
+        let graph = load_graph(&path).unwrap();
+        let task = graph.get_task("t1").unwrap();
+        assert_eq!(task.status, Status::InProgress);
     }
 }

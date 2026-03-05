@@ -263,6 +263,10 @@ pub enum Commands {
         /// Signal that the task's iterative loop has converged (stops loop edges from firing)
         #[arg(long)]
         converged: bool,
+
+        /// Skip the verify command gate (human escape hatch, blocked when WG_AGENT_ID is set)
+        #[arg(long)]
+        skip_verify: bool,
     },
 
     /// Mark a task as failed (can be retried)

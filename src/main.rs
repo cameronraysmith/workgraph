@@ -436,7 +436,11 @@ fn main() -> Result<()> {
             delay.as_deref(),
             not_before.as_deref(),
         ),
-        Commands::Done { id, converged } => commands::done::run(&workgraph_dir, &id, converged),
+        Commands::Done {
+            id,
+            converged,
+            skip_verify,
+        } => commands::done::run(&workgraph_dir, &id, converged, skip_verify),
         Commands::Fail {
             id,
             reason,
