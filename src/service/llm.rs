@@ -127,7 +127,9 @@ fn call_anthropic_native(model: &str, prompt: &str, timeout_secs: u64) -> Result
 }
 
 fn call_openai_native(model: &str, prompt: &str, timeout_secs: u64) -> Result<String> {
-    use crate::executor::native::client::{ContentBlock, LlmClient, Message, MessagesRequest, Role};
+    use crate::executor::native::client::{
+        ContentBlock, LlmClient, Message, MessagesRequest, Role,
+    };
     use crate::executor::native::openai_client::OpenAiClient;
 
     let client = OpenAiClient::from_env(model)
@@ -184,7 +186,10 @@ mod tests {
         let config = Config::default();
         let resolved = config.resolve_model_for_role(DispatchRole::Triage);
         assert_eq!(resolved.model, "haiku");
-        assert!(resolved.provider.is_none(), "Default triage should have no explicit provider");
+        assert!(
+            resolved.provider.is_none(),
+            "Default triage should have no explicit provider"
+        );
     }
 
     #[test]

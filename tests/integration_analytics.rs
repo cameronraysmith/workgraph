@@ -196,9 +196,8 @@ fn velocity_all_tasks_open() {
 fn forecast_empty_graph() {
     let tmp = TempDir::new().unwrap();
     let wg_dir = setup_workgraph(&tmp, vec![]);
-    let output = wg_ok(&wg_dir, &["forecast"]);
-    // Should not panic; output may say no remaining work
-    assert!(!output.is_empty() || true); // command ran successfully
+    let _output = wg_ok(&wg_dir, &["forecast"]);
+    // wg_ok already asserts the command succeeded
 }
 
 #[test]
@@ -277,9 +276,8 @@ fn forecast_json_output() {
 fn aging_empty_graph() {
     let tmp = TempDir::new().unwrap();
     let wg_dir = setup_workgraph(&tmp, vec![]);
-    let output = wg_ok(&wg_dir, &["aging"]);
-    // Should run without error
-    assert!(!output.is_empty() || true);
+    let _output = wg_ok(&wg_dir, &["aging"]);
+    // wg_ok already asserts the command succeeded
 }
 
 #[test]
@@ -431,9 +429,8 @@ fn coordinate_json_output() {
 fn workload_empty_graph() {
     let tmp = TempDir::new().unwrap();
     let wg_dir = setup_workgraph(&tmp, vec![]);
-    let output = wg_ok(&wg_dir, &["workload"]);
-    // Should run without error; may show "no agents" or empty output
-    assert!(!output.is_empty() || true);
+    let _output = wg_ok(&wg_dir, &["workload"]);
+    // wg_ok already asserts the command succeeded
 }
 
 #[test]

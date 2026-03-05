@@ -136,7 +136,7 @@ fn test_special_agents_exist_in_cache() {
     let agent_files: Vec<_> = std::fs::read_dir(&agents_dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "yaml"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "yaml"))
         .collect();
     assert_eq!(
         agent_files.len(),

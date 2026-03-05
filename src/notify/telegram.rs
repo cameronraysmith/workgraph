@@ -71,11 +71,7 @@ impl TelegramChannel {
     }
 
     /// Send a request to the Telegram Bot API and return the result.
-    async fn api_call(
-        &self,
-        method: &str,
-        body: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
+    async fn api_call(&self, method: &str, body: &serde_json::Value) -> Result<serde_json::Value> {
         let resp = self
             .client
             .post(self.api_url(method))
@@ -357,10 +353,7 @@ chat_id = "456"
             format_button_label("Reject", ActionStyle::Danger),
             "❌ Reject"
         );
-        assert_eq!(
-            format_button_label("Skip", ActionStyle::Secondary),
-            "Skip"
-        );
+        assert_eq!(format_button_label("Skip", ActionStyle::Secondary), "Skip");
     }
 
     #[test]

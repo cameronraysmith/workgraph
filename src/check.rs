@@ -184,9 +184,7 @@ fn levenshtein(a: &str, b: &str) -> usize {
         curr[0] = i + 1;
         for (j, cb) in b.chars().enumerate() {
             let cost = if ca == cb { 0 } else { 1 };
-            curr[j + 1] = (prev[j + 1] + 1)
-                .min(curr[j] + 1)
-                .min(prev[j] + cost);
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
         }
         std::mem::swap(&mut prev, &mut curr);
     }
@@ -205,10 +203,8 @@ pub fn fuzzy_match_task_id<'a>(
 
     for id in task_ids {
         let dist = levenshtein(orphan_target, id);
-        if dist > 0 && dist <= max_distance {
-            if best.as_ref().is_none_or(|(_, d)| dist < *d) {
-                best = Some((id.to_string(), dist));
-            }
+        if dist > 0 && dist <= max_distance && best.as_ref().is_none_or(|(_, d)| dist < *d) {
+            best = Some((id.to_string(), dist));
         }
     }
 
@@ -718,7 +714,10 @@ mod tests {
         // "kitten" -> "sitting": 3 edits (k->s, e->i, +g)
         assert_eq!(super::levenshtein("abc", "axyz"), 3);
         // "stream" -> "streem" is 1 edit (a->e)
-        assert_eq!(super::levenshtein("implement-stream", "implement-streem"), 1);
+        assert_eq!(
+            super::levenshtein("implement-stream", "implement-streem"),
+            1
+        );
     }
 
     #[test]
@@ -730,7 +729,7 @@ mod tests {
 
     #[test]
     fn test_fuzzy_match_finds_close_match() {
-        let ids = vec!["setup-database", "deploy-service", "build-artifacts"];
+        let ids = ["setup-database", "deploy-service", "build-artifacts"];
         let result = fuzzy_match_task_id("setup-databse", ids.iter().copied(), 3);
         assert!(result.is_some());
         assert_eq!(result.unwrap().0, "setup-database");
@@ -738,7 +737,7 @@ mod tests {
 
     #[test]
     fn test_fuzzy_match_no_close_match() {
-        let ids = vec!["setup-database", "deploy-service"];
+        let ids = ["setup-database", "deploy-service"];
         let result = fuzzy_match_task_id("completely-different", ids.iter().copied(), 3);
         assert!(result.is_none());
     }
@@ -746,14 +745,14 @@ mod tests {
     #[test]
     fn test_fuzzy_match_exact_match_excluded() {
         // Exact match (distance 0) should not be suggested
-        let ids = vec!["setup-db"];
+        let ids = ["setup-db"];
         let result = fuzzy_match_task_id("setup-db", ids.iter().copied(), 3);
         assert!(result.is_none());
     }
 
     #[test]
     fn test_fuzzy_match_picks_closest() {
-        let ids = vec!["ab", "abc", "abcd"];
+        let ids = ["ab", "abc", "abcd"];
         let result = fuzzy_match_task_id("abx", ids.iter().copied(), 3);
         assert!(result.is_some());
         // "abc" is distance 1, "ab" is distance 1, "abcd" is distance 2

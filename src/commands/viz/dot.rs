@@ -271,7 +271,10 @@ pub(crate) fn generate_mermaid(
     // Add styling for dangling nodes
     if !dangling_targets.is_empty() {
         lines.push(String::new());
-        lines.push("  classDef dangling fill:#fff,stroke:#f00,stroke-dasharray: 5 5,color:#f00".to_string());
+        lines.push(
+            "  classDef dangling fill:#fff,stroke:#f00,stroke-dasharray: 5 5,color:#f00"
+                .to_string(),
+        );
     }
 
     lines.join("\n")

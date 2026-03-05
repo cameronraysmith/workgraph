@@ -255,13 +255,13 @@ fn config_list_json() {
     });
     assert!(json.is_array(), "Expected array from config --list --json");
     // Each entry should have key, value, source
-    if let Some(arr) = json.as_array() {
-        if !arr.is_empty() {
-            let first = &arr[0];
-            assert!(first.get("key").is_some());
-            assert!(first.get("value").is_some());
-            assert!(first.get("source").is_some());
-        }
+    if let Some(arr) = json.as_array()
+        && !arr.is_empty()
+    {
+        let first = &arr[0];
+        assert!(first.get("key").is_some());
+        assert!(first.get("value").is_some());
+        assert!(first.get("source").is_some());
     }
 }
 

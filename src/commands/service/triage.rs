@@ -22,24 +22,32 @@ fn extract_session_id(agent: &AgentEntry) -> Option<String> {
 
     // Try unified stream.jsonl first
     let stream_path = agent_dir.join(stream_event::STREAM_FILE_NAME);
-    if stream_path.exists() {
-        if let Ok((events, _)) = stream_event::read_stream_events(&stream_path, 0) {
-            for event in &events {
-                if let StreamEvent::Init { session_id: Some(sid), .. } = event {
-                    return Some(sid.clone());
-                }
+    if stream_path.exists()
+        && let Ok((events, _)) = stream_event::read_stream_events(&stream_path, 0)
+    {
+        for event in &events {
+            if let StreamEvent::Init {
+                session_id: Some(sid),
+                ..
+            } = event
+            {
+                return Some(sid.clone());
             }
         }
     }
 
     // Try raw_stream.jsonl (Claude CLI)
     let raw_path = agent_dir.join(stream_event::RAW_STREAM_FILE_NAME);
-    if raw_path.exists() {
-        if let Ok((events, _)) = stream_event::translate_claude_stream(&raw_path, 0) {
-            for event in &events {
-                if let StreamEvent::Init { session_id: Some(sid), .. } = event {
-                    return Some(sid.clone());
-                }
+    if raw_path.exists()
+        && let Ok((events, _)) = stream_event::translate_claude_stream(&raw_path, 0)
+    {
+        for event in &events {
+            if let StreamEvent::Init {
+                session_id: Some(sid),
+                ..
+            } = event
+            {
+                return Some(sid.clone());
             }
         }
     }
@@ -65,18 +73,18 @@ fn check_stream_liveness(agent: &AgentEntry) -> Option<i64> {
 
     // Try unified stream.jsonl first (native executor, amplifier/shell bookends)
     let stream_path = agent_dir.join(stream_event::STREAM_FILE_NAME);
-    if stream_path.exists() {
-        if let Ok((events, _)) = stream_event::read_stream_events(&stream_path, 0) {
-            return events.last().map(|e| e.timestamp_ms());
-        }
+    if stream_path.exists()
+        && let Ok((events, _)) = stream_event::read_stream_events(&stream_path, 0)
+    {
+        return events.last().map(|e| e.timestamp_ms());
     }
 
     // Try raw_stream.jsonl (Claude CLI)
     let raw_path = agent_dir.join(stream_event::RAW_STREAM_FILE_NAME);
-    if raw_path.exists() {
-        if let Ok((events, _)) = stream_event::translate_claude_stream(&raw_path, 0) {
-            return events.last().map(|e| e.timestamp_ms());
-        }
+    if raw_path.exists()
+        && let Ok((events, _)) = stream_event::translate_claude_stream(&raw_path, 0)
+    {
+        return events.last().map(|e| e.timestamp_ms());
     }
 
     None
@@ -224,15 +232,13 @@ pub(crate) fn cleanup_dead_agents(dir: &Path, graph_path: &Path) -> Result<Vec<S
     // Extract token usage and session_id from dead agents' stream files
     for (agent_id, task_id, _pid, output_file, _reason) in &dead {
         // Extract session_id from stream events
-        if let Some(agent) = locked_registry.get_agent(agent_id) {
-            if let Some(sid) = extract_session_id(agent) {
-                if let Some(task) = graph.get_task_mut(task_id)
-                    && task.session_id.is_none()
-                {
-                    task.session_id = Some(sid);
-                    tasks_modified = true;
-                }
-            }
+        if let Some(agent) = locked_registry.get_agent(agent_id)
+            && let Some(sid) = extract_session_id(agent)
+            && let Some(task) = graph.get_task_mut(task_id)
+            && task.session_id.is_none()
+        {
+            task.session_id = Some(sid);
+            tasks_modified = true;
         }
 
         // Extract token usage from output.log

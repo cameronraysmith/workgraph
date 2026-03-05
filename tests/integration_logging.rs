@@ -280,7 +280,10 @@ fn full_lifecycle_produces_ordered_operations() {
     fs::write(wg_dir.join("graph.jsonl"), "").unwrap();
 
     // add -> claim -> pause -> resume -> done
-    wg_ok(&wg_dir, &["add", "Lifecycle task", "--id", "lifecycle", "--immediate"]);
+    wg_ok(
+        &wg_dir,
+        &["add", "Lifecycle task", "--id", "lifecycle", "--immediate"],
+    );
     wg_ok(&wg_dir, &["claim", "lifecycle", "--actor", "agent-1"]);
     wg_ok(&wg_dir, &["pause", "lifecycle"]);
     wg_ok(&wg_dir, &["resume", "lifecycle"]);
@@ -310,7 +313,10 @@ fn fail_retry_done_lifecycle() {
     fs::write(wg_dir.join("graph.jsonl"), "").unwrap();
 
     // add -> claim -> fail -> retry -> claim -> done
-    wg_ok(&wg_dir, &["add", "Retry task", "--id", "retry-task", "--immediate"]);
+    wg_ok(
+        &wg_dir,
+        &["add", "Retry task", "--id", "retry-task", "--immediate"],
+    );
     wg_ok(&wg_dir, &["claim", "retry-task"]);
     wg_ok(&wg_dir, &["fail", "retry-task", "--reason", "oops"]);
     wg_ok(&wg_dir, &["retry", "retry-task"]);
@@ -792,9 +798,18 @@ fn coherency_after_archive_and_gc() {
     fs::write(wg_dir.join("graph.jsonl"), "").unwrap();
 
     // Add tasks, complete one, abandon another
-    wg_ok(&wg_dir, &["add", "Done task", "--id", "done-task", "--immediate"]);
-    wg_ok(&wg_dir, &["add", "Abandon task", "--id", "abandon-task", "--immediate"]);
-    wg_ok(&wg_dir, &["add", "Keep task", "--id", "keep-task", "--immediate"]);
+    wg_ok(
+        &wg_dir,
+        &["add", "Done task", "--id", "done-task", "--immediate"],
+    );
+    wg_ok(
+        &wg_dir,
+        &["add", "Abandon task", "--id", "abandon-task", "--immediate"],
+    );
+    wg_ok(
+        &wg_dir,
+        &["add", "Keep task", "--id", "keep-task", "--immediate"],
+    );
 
     wg_ok(&wg_dir, &["done", "done-task"]);
     wg_ok(&wg_dir, &["abandon", "abandon-task"]);

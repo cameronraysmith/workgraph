@@ -33,6 +33,7 @@ pub struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum Commands {
     /// Initialize a new workgraph in the current directory
     Init {

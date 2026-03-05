@@ -56,10 +56,7 @@ impl VoiceConfig {
             .channels
             .get("voice")
             .context("no [voice] section in notify config")?;
-        let cfg: Self = val
-            .clone()
-            .try_into()
-            .context("invalid [voice] config")?;
+        let cfg: Self = val.clone().try_into().context("invalid [voice] config")?;
         Ok(cfg)
     }
 }

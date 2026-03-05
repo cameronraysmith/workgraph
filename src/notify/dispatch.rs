@@ -150,12 +150,14 @@ mod tests {
     use super::*;
     use crate::notify::tests_common::mock;
     use crate::notify::{NotificationRouter, RoutingRule};
-    use std::time::Duration;
 
     #[test]
     fn task_event_kind_maps_to_event_type() {
         assert_eq!(TaskEventKind::Ready.to_event_type(), EventType::TaskReady);
-        assert_eq!(TaskEventKind::Blocked.to_event_type(), EventType::TaskBlocked);
+        assert_eq!(
+            TaskEventKind::Blocked.to_event_type(),
+            EventType::TaskBlocked
+        );
         assert_eq!(TaskEventKind::Failed.to_event_type(), EventType::TaskFailed);
         assert_eq!(
             TaskEventKind::ApprovalNeeded.to_event_type(),
@@ -176,7 +178,12 @@ mod tests {
         assert!(msg.plain_text.contains("build-frontend"));
         assert!(msg.plain_text.contains("Build Frontend"));
         assert!(msg.plain_text.contains("ready"));
-        assert!(msg.html.as_ref().unwrap().contains("<code>build-frontend</code>"));
+        assert!(
+            msg.html
+                .as_ref()
+                .unwrap()
+                .contains("<code>build-frontend</code>")
+        );
     }
 
     #[test]

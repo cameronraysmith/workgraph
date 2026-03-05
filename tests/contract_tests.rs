@@ -23,6 +23,7 @@ struct EvalOutput {
 
 /// Mirrors the EvolverOperation struct in commands/evolve.rs.
 #[derive(serde::Deserialize, Debug)]
+#[allow(dead_code)]
 struct EvolverOperation {
     op: String,
     #[serde(default)]
@@ -81,6 +82,7 @@ struct EvolverOperation {
 
 /// Mirrors the EvolverOutput struct in commands/evolve.rs.
 #[derive(serde::Deserialize, Debug)]
+#[allow(dead_code)]
 struct EvolverOutput {
     #[serde(default)]
     run_id: Option<String>,

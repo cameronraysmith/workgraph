@@ -8,9 +8,9 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
+use workgraph::notify::NotificationChannel;
 use workgraph::notify::config::NotifyConfig;
 use workgraph::notify::telegram::{TelegramChannel, TelegramConfig};
-use workgraph::notify::NotificationChannel;
 
 /// Run the Telegram listener.
 ///
@@ -23,7 +23,11 @@ pub fn run_listen(dir: &Path, chat_id: Option<&str>) -> Result<()> {
         .unwrap_or_else(|| config.chat_id.clone());
 
     println!("Starting Telegram listener...");
-    println!("Bot token: {}...{}", &config.bot_token[..6], &config.bot_token[config.bot_token.len().saturating_sub(4)..]);
+    println!(
+        "Bot token: {}...{}",
+        &config.bot_token[..6],
+        &config.bot_token[config.bot_token.len().saturating_sub(4)..]
+    );
     println!("Chat ID: {}", effective_chat_id);
     println!("Press Ctrl+C to stop\n");
 
@@ -51,10 +55,7 @@ pub fn run_listen(dir: &Path, chat_id: Option<&str>) -> Result<()> {
                     workgraph::telegram_commands::execute(&workgraph_dir, &cmd, &msg.sender);
 
                 // Send response back
-                if let Err(e) = channel
-                    .send_text(&effective_chat_id, &response)
-                    .await
-                {
+                if let Err(e) = channel.send_text(&effective_chat_id, &response).await {
                     eprintln!("Failed to send response: {e}");
                 }
             } else if let Some(ref action_id) = msg.action_id {
@@ -69,10 +70,7 @@ pub fn run_listen(dir: &Path, chat_id: Option<&str>) -> Result<()> {
                 // Action IDs follow the pattern "action:task_id" (e.g. "approve:my-task")
                 let response = handle_action(&workgraph_dir, action_id, &msg.sender);
 
-                if let Err(e) = channel
-                    .send_text(&effective_chat_id, &response)
-                    .await
-                {
+                if let Err(e) = channel.send_text(&effective_chat_id, &response).await {
                     eprintln!("Failed to send response: {e}");
                 }
             } else {
@@ -122,7 +120,10 @@ pub fn run_status(json: bool) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&status)?);
             } else {
                 println!("Telegram: configured");
-                println!("  Bot token: {}...", &config.bot_token[..config.bot_token.len().min(6)]);
+                println!(
+                    "  Bot token: {}...",
+                    &config.bot_token[..config.bot_token.len().min(6)]
+                );
                 println!("  Chat ID: {}", config.chat_id);
             }
         }
@@ -157,9 +158,11 @@ fn handle_action(workgraph_dir: &Path, action_id: &str, sender: &str) -> String 
         "approve" | "claim" => {
             workgraph::matrix_commands::execute_claim(workgraph_dir, task_id, Some(sender))
         }
-        "reject" | "fail" => {
-            workgraph::matrix_commands::execute_fail(workgraph_dir, task_id, Some("rejected via Telegram"))
-        }
+        "reject" | "fail" => workgraph::matrix_commands::execute_fail(
+            workgraph_dir,
+            task_id,
+            Some("rejected via Telegram"),
+        ),
         "done" => workgraph::matrix_commands::execute_done(workgraph_dir, task_id),
         _ => format!("Unknown action: {action}"),
     }

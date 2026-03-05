@@ -215,27 +215,33 @@ mod tests {
         let roles_dir = agency_dir.join("cache/roles");
         let tradeoffs_dir = agency_dir.join("primitives/tradeoffs");
         assert!(roles_dir.exists(), "agency/roles should be created");
-        assert!(
-            tradeoffs_dir.exists(),
-            "agency/tradeoffs should be created"
-        );
+        assert!(tradeoffs_dir.exists(), "agency/tradeoffs should be created");
 
         // Full agency init creates roles, tradeoffs, and agents
         let role_count = fs::read_dir(&roles_dir).unwrap().count();
         let tradeoff_count = fs::read_dir(&tradeoffs_dir).unwrap().count();
-        assert!(role_count >= 8, "should seed at least 8 roles (4 starter + 4 special)");
+        assert!(
+            role_count >= 8,
+            "should seed at least 8 roles (4 starter + 4 special)"
+        );
         assert!(tradeoff_count >= 4, "should seed at least 4 tradeoffs");
 
         // Agents should be created (1 default + 4 special)
         let agents_dir = agency_dir.join("cache/agents");
         assert!(agents_dir.exists(), "agents dir should be created");
         let agent_count = fs::read_dir(&agents_dir).unwrap().count();
-        assert_eq!(agent_count, 5, "should create 5 agents (1 default + 4 special)");
+        assert_eq!(
+            agent_count, 5,
+            "should create 5 agents (1 default + 4 special)"
+        );
 
         // Config should have auto_assign and auto_evaluate enabled
         let config = workgraph::config::Config::load(&wg_dir).unwrap();
         assert!(config.agency.auto_assign, "auto_assign should be enabled");
-        assert!(config.agency.auto_evaluate, "auto_evaluate should be enabled");
+        assert!(
+            config.agency.auto_evaluate,
+            "auto_evaluate should be enabled"
+        );
     }
 
     #[test]
@@ -251,7 +257,10 @@ mod tests {
 
         // Agency dir should NOT exist
         let agency_dir = wg_dir.join("agency");
-        assert!(!agency_dir.exists(), "agency should not be created with --no-agency");
+        assert!(
+            !agency_dir.exists(),
+            "agency should not be created with --no-agency"
+        );
     }
 
     #[test]

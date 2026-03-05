@@ -483,6 +483,7 @@ Respond with ONLY a JSON object:
 
     // Parse as the expected eval format
     #[derive(serde::Deserialize)]
+    #[allow(dead_code)]
     struct EvalOutput {
         score: f64,
         #[serde(default)]

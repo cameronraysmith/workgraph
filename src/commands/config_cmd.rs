@@ -99,7 +99,10 @@ pub fn show(dir: &Path, scope: Option<ConfigScope>, json: bool) -> Result<()> {
         if let Some(threshold) = config.agency.flip_verification_threshold {
             println!("  flip_verification_threshold = {}", threshold);
         }
-        println!("  flip_verification_model = \"{}\"", config.agency.flip_verification_model);
+        println!(
+            "  flip_verification_model = \"{}\"",
+            config.agency.flip_verification_model
+        );
         println!();
         println!("[guardrails]");
         println!(
@@ -284,21 +287,30 @@ pub fn update(
     if let Some(m) = assigner_model {
         config.agency.assigner_model = Some(m.to_string());
         println!("Set agency.assigner_model = \"{}\"", m);
-        eprintln!("Warning: --assigner-model is deprecated. Use --role-model assigner={} or --set-model assigner {} instead.", m, m);
+        eprintln!(
+            "Warning: --assigner-model is deprecated. Use --role-model assigner={} or --set-model assigner {} instead.",
+            m, m
+        );
         changed = true;
     }
 
     if let Some(m) = evaluator_model {
         config.agency.evaluator_model = Some(m.to_string());
         println!("Set agency.evaluator_model = \"{}\"", m);
-        eprintln!("Warning: --evaluator-model is deprecated. Use --role-model evaluator={} or --set-model evaluator {} instead.", m, m);
+        eprintln!(
+            "Warning: --evaluator-model is deprecated. Use --role-model evaluator={} or --set-model evaluator {} instead.",
+            m, m
+        );
         changed = true;
     }
 
     if let Some(m) = evolver_model {
         config.agency.evolver_model = Some(m.to_string());
         println!("Set agency.evolver_model = \"{}\"", m);
-        eprintln!("Warning: --evolver-model is deprecated. Use --role-model evolver={} or --set-model evolver {} instead.", m, m);
+        eprintln!(
+            "Warning: --evolver-model is deprecated. Use --role-model evolver={} or --set-model evolver {} instead.",
+            m, m
+        );
         changed = true;
     }
 
@@ -329,7 +341,10 @@ pub fn update(
     if let Some(v) = creator_model {
         config.agency.creator_model = Some(v.to_string());
         println!("Set agency.creator_model = \"{}\"", v);
-        eprintln!("Warning: --creator-model is deprecated. Use --role-model creator={} or --set-model creator {} instead.", v, v);
+        eprintln!(
+            "Warning: --creator-model is deprecated. Use --role-model creator={} or --set-model creator {} instead.",
+            v, v
+        );
         changed = true;
     }
 
@@ -348,7 +363,10 @@ pub fn update(
     if let Some(m) = triage_model {
         config.agency.triage_model = Some(m.to_string());
         println!("Set agency.triage_model = \"{}\"", m);
-        eprintln!("Warning: --triage-model is deprecated. Use --role-model triage={} or --set-model triage {} instead.", m, m);
+        eprintln!(
+            "Warning: --triage-model is deprecated. Use --role-model triage={} or --set-model triage {} instead.",
+            m, m
+        );
         changed = true;
     }
 
@@ -406,14 +424,20 @@ pub fn update(
     if let Some(m) = flip_inference_model {
         config.agency.flip_inference_model = Some(m.to_string());
         println!("Set agency.flip_inference_model = \"{}\"", m);
-        eprintln!("Warning: --flip-inference-model is deprecated. Use --role-model flip_inference={} or --set-model flip_inference {} instead.", m, m);
+        eprintln!(
+            "Warning: --flip-inference-model is deprecated. Use --role-model flip_inference={} or --set-model flip_inference {} instead.",
+            m, m
+        );
         changed = true;
     }
 
     if let Some(m) = flip_comparison_model {
         config.agency.flip_comparison_model = Some(m.to_string());
         println!("Set agency.flip_comparison_model = \"{}\"", m);
-        eprintln!("Warning: --flip-comparison-model is deprecated. Use --role-model flip_comparison={} or --set-model flip_comparison {} instead.", m, m);
+        eprintln!(
+            "Warning: --flip-comparison-model is deprecated. Use --role-model flip_comparison={} or --set-model flip_comparison {} instead.",
+            m, m
+        );
         changed = true;
     }
 
@@ -426,7 +450,10 @@ pub fn update(
     if let Some(m) = flip_verification_model {
         config.agency.flip_verification_model = m.to_string();
         println!("Set agency.flip_verification_model = \"{}\"", m);
-        eprintln!("Warning: --flip-verification-model is deprecated. Use --role-model verification={} or --set-model verification {} instead.", m, m);
+        eprintln!(
+            "Warning: --flip-verification-model is deprecated. Use --role-model verification={} or --set-model verification {} instead.",
+            m, m
+        );
         changed = true;
     }
 
@@ -749,10 +776,7 @@ pub fn show_model_routing(dir: &Path, json: bool) -> Result<()> {
         println!("Model Routing Configuration");
         println!("===========================");
         println!();
-        println!(
-            "  {:<20} {:<20} {}",
-            "ROLE", "MODEL", "PROVIDER"
-        );
+        println!("  {:<20} {:<20} PROVIDER", "ROLE", "MODEL");
         println!("  {}", "-".repeat(55));
 
         // Default

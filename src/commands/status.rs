@@ -14,7 +14,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use std::path::Path;
-use workgraph::check::{check_orphans, OrphanRef};
+use workgraph::check::{OrphanRef, check_orphans};
 use workgraph::graph::Status;
 use workgraph::parser::load_graph;
 use workgraph::query::ready_tasks;
@@ -722,7 +722,10 @@ mod tests {
         save_graph(&graph, &path).unwrap();
 
         let dangling = gather_dangling_deps(temp_dir.path());
-        assert!(dangling.is_empty(), "dangling dep should auto-resolve when target is created");
+        assert!(
+            dangling.is_empty(),
+            "dangling dep should auto-resolve when target is created"
+        );
     }
 
     #[test]

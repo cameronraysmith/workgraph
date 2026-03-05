@@ -1533,6 +1533,7 @@ mod tests {
     // ─────────────────────────────────────────────────────
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_performance_1000_node_graph() {
         // 1000-node graph with multiple cycles
         let n = 1000;

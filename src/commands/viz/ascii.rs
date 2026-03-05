@@ -239,7 +239,7 @@ pub(crate) fn generate_ascii(
             Status::Blocked => "\x1b[90m",    // gray
             Status::Failed => "\x1b[31m",     // red
             Status::Abandoned => "\x1b[90m",  // gray
-            Status::Waiting => "\x1b[33m",  // yellow
+            Status::Waiting => "\x1b[33m",    // yellow
         }
     };
     let reset = if use_color { "\x1b[0m" } else { "" };
@@ -3203,16 +3203,16 @@ mod tests {
         for (line_idx, line) in lines.iter().enumerate() {
             let chars: Vec<char> = line.chars().collect();
             for (col, &ch) in chars.iter().enumerate() {
-                if matches!(ch, '─' | '←' | '┐' | '┘' | '┤' | '┼') {
-                    if let Some(edges) = viz.char_edge_map.get(&(line_idx, col)) {
-                        assert!(
-                            !edges.is_empty(),
-                            "Arc char '{}' at ({}, {}) has empty edge map",
-                            ch,
-                            line_idx,
-                            col
-                        );
-                    }
+                if matches!(ch, '─' | '←' | '┐' | '┘' | '┤' | '┼')
+                    && let Some(edges) = viz.char_edge_map.get(&(line_idx, col))
+                {
+                    assert!(
+                        !edges.is_empty(),
+                        "Arc char '{}' at ({}, {}) has empty edge map",
+                        ch,
+                        line_idx,
+                        col
+                    );
                 }
             }
         }
@@ -3239,15 +3239,16 @@ mod tests {
         for (line_idx, line) in lines.iter().enumerate() {
             let chars: Vec<char> = line.chars().collect();
             for (col, &ch) in chars.iter().enumerate() {
-                if ch == '│' && col > 10 {
-                    if let Some(edges) = viz.char_edge_map.get(&(line_idx, col)) {
-                        assert!(
-                            !edges.is_empty(),
-                            "Right-side │ at ({}, {}) should have edge entries",
-                            line_idx,
-                            col
-                        );
-                    }
+                if ch == '│'
+                    && col > 10
+                    && let Some(edges) = viz.char_edge_map.get(&(line_idx, col))
+                {
+                    assert!(
+                        !edges.is_empty(),
+                        "Right-side │ at ({}, {}) should have edge entries",
+                        line_idx,
+                        col
+                    );
                 }
             }
         }
@@ -3993,10 +3994,11 @@ mod tests {
             .unwrap_or(0);
         let mut unmapped_dashes = Vec::new();
         for (i, ch) in src_plain.chars().enumerate() {
-            if i > text_end && (ch == '─' || ch == '┐' || ch == '┘' || ch == '┤') {
-                if !viz.char_edge_map.contains_key(&(src_line, i)) {
-                    unmapped_dashes.push((i, ch));
-                }
+            if i > text_end
+                && (ch == '─' || ch == '┐' || ch == '┘' || ch == '┤')
+                && !viz.char_edge_map.contains_key(&(src_line, i))
+            {
+                unmapped_dashes.push((i, ch));
             }
         }
         assert!(
@@ -4204,10 +4206,11 @@ mod tests {
         let text_end = ue_plain.rfind(')').map(|p| p + 1).unwrap_or(0);
         let mut unmapped = Vec::new();
         for (i, ch) in ue_plain.chars().enumerate() {
-            if i >= text_end && (ch == '─' || ch == '┐' || ch == '┘' || ch == '┤') {
-                if !viz.char_edge_map.contains_key(&(ue_line, i)) {
-                    unmapped.push((i, ch));
-                }
+            if i >= text_end
+                && (ch == '─' || ch == '┐' || ch == '┘' || ch == '┤')
+                && !viz.char_edge_map.contains_key(&(ue_line, i))
+            {
+                unmapped.push((i, ch));
             }
         }
         assert!(

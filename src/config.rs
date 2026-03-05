@@ -588,13 +588,13 @@ impl Config {
     /// Provider resolution follows the same cascade but only from [models].
     pub fn resolve_model_for_role(&self, role: DispatchRole) -> ResolvedModel {
         // 1. Check role-specific [models] config
-        if let Some(role_cfg) = self.models.get_role(role) {
-            if let Some(ref model) = role_cfg.model {
-                return ResolvedModel {
-                    model: model.clone(),
-                    provider: role_cfg.provider.clone(),
-                };
-            }
+        if let Some(role_cfg) = self.models.get_role(role)
+            && let Some(ref model) = role_cfg.model
+        {
+            return ResolvedModel {
+                model: model.clone(),
+                provider: role_cfg.provider.clone(),
+            };
         }
 
         // 2. Legacy per-role config (backward compatibility)
@@ -619,10 +619,7 @@ impl Config {
         };
         if let Some(model) = legacy_model {
             // Legacy config has no provider — check if [models] role has provider set
-            let provider = self
-                .models
-                .get_role(role)
-                .and_then(|c| c.provider.clone());
+            let provider = self.models.get_role(role).and_then(|c| c.provider.clone());
             return ResolvedModel {
                 model: model.clone(),
                 provider,
@@ -640,10 +637,7 @@ impl Config {
             _ => None,
         };
         if let Some(default_model) = tier_default {
-            let provider = self
-                .models
-                .get_role(role)
-                .and_then(|c| c.provider.clone());
+            let provider = self.models.get_role(role).and_then(|c| c.provider.clone());
             return ResolvedModel {
                 model: default_model.to_string(),
                 provider,
@@ -651,13 +645,13 @@ impl Config {
         }
 
         // 3. Check [models.default]
-        if let Some(default_cfg) = self.models.get_role(DispatchRole::Default) {
-            if let Some(ref model) = default_cfg.model {
-                return ResolvedModel {
-                    model: model.clone(),
-                    provider: default_cfg.provider.clone(),
-                };
-            }
+        if let Some(default_cfg) = self.models.get_role(DispatchRole::Default)
+            && let Some(ref model) = default_cfg.model
+        {
+            return ResolvedModel {
+                model: model.clone(),
+                provider: default_cfg.provider.clone(),
+            };
         }
 
         // 4. Global fallback
@@ -694,11 +688,7 @@ impl Config {
                 &self.agency.creator_model,
                 "creator",
             ),
-            (
-                "agency.triage_model",
-                &self.agency.triage_model,
-                "triage",
-            ),
+            ("agency.triage_model", &self.agency.triage_model, "triage"),
             (
                 "agency.flip_inference_model",
                 &self.agency.flip_inference_model,
@@ -734,8 +724,7 @@ impl Config {
             eprintln!(
                 "Warning: agency.flip_verification_model is deprecated. Use [models.verification] model = \"{}\" instead. \
                  Migrate with: wg config --set-model verification {}",
-                self.agency.flip_verification_model,
-                self.agency.flip_verification_model,
+                self.agency.flip_verification_model, self.agency.flip_verification_model,
             );
             deprecated.push("agency.flip_verification_model".to_string());
         }

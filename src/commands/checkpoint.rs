@@ -33,6 +33,7 @@ pub enum CheckpointType {
 }
 
 /// Save a checkpoint for a task
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     dir: &Path,
     task_id: &str,
@@ -87,15 +88,19 @@ pub fn run(
 
     // Write checkpoint to storage
     let checkpoint_dir = dir.join("agents").join(&agent_id).join("checkpoints");
-    std::fs::create_dir_all(&checkpoint_dir)
-        .with_context(|| format!("Failed to create checkpoint dir: {}", checkpoint_dir.display()))?;
+    std::fs::create_dir_all(&checkpoint_dir).with_context(|| {
+        format!(
+            "Failed to create checkpoint dir: {}",
+            checkpoint_dir.display()
+        )
+    })?;
 
     // Use timestamp-based filename (replace colons for filesystem compatibility)
     let filename = format!("{}.json", timestamp.replace(':', "-"));
     let checkpoint_path = checkpoint_dir.join(&filename);
 
-    let checkpoint_json = serde_json::to_string_pretty(&checkpoint)
-        .context("Failed to serialize checkpoint")?;
+    let checkpoint_json =
+        serde_json::to_string_pretty(&checkpoint).context("Failed to serialize checkpoint")?;
     std::fs::write(&checkpoint_path, &checkpoint_json)
         .with_context(|| format!("Failed to write checkpoint: {}", checkpoint_path.display()))?;
 
@@ -165,12 +170,17 @@ pub fn run_list(dir: &Path, agent_id: &str, task_id: Option<&str>, json: bool) -
 
     for entry in std::fs::read_dir(&checkpoint_dir)? {
         let entry = entry?;
-        if entry.path().extension().map(|e| e == "json").unwrap_or(false) {
+        if entry
+            .path()
+            .extension()
+            .map(|e| e == "json")
+            .unwrap_or(false)
+        {
             let content = std::fs::read_to_string(entry.path())?;
-            if let Ok(cp) = serde_json::from_str::<Checkpoint>(&content) {
-                if task_id.is_none() || task_id == Some(cp.task_id.as_str()) {
-                    checkpoints.push(cp);
-                }
+            if let Ok(cp) = serde_json::from_str::<Checkpoint>(&content)
+                && (task_id.is_none() || task_id == Some(cp.task_id.as_str()))
+            {
+                checkpoints.push(cp);
             }
         }
     }
@@ -519,11 +529,7 @@ mod tests {
                 turn_count: None,
                 token_usage: None,
             };
-            std::fs::write(
-                cp_dir.join(filename),
-                serde_json::to_string(&cp).unwrap(),
-            )
-            .unwrap();
+            std::fs::write(cp_dir.join(filename), serde_json::to_string(&cp).unwrap()).unwrap();
         }
 
         prune_checkpoints(&cp_dir, 5).unwrap();

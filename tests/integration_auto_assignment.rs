@@ -184,14 +184,13 @@ fn build_assign_subgraph(dir: &Path) {
         }
 
         // Grace period: skip tasks created less than grace_seconds ago
-        if grace_seconds > 0 {
-            if let Some(ref created_str) = ready_task.created_at {
-                if let Ok(created) = created_str.parse::<chrono::DateTime<chrono::Utc>>() {
-                    let age = chrono::Utc::now().signed_duration_since(created);
-                    if age.num_seconds() < grace_seconds as i64 {
-                        continue;
-                    }
-                }
+        if grace_seconds > 0
+            && let Some(ref created_str) = ready_task.created_at
+            && let Ok(created) = created_str.parse::<chrono::DateTime<chrono::Utc>>()
+        {
+            let age = chrono::Utc::now().signed_duration_since(created);
+            if age.num_seconds() < grace_seconds as i64 {
+                continue;
             }
         }
 

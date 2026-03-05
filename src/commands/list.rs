@@ -573,7 +573,7 @@ mod tests {
         let path = setup_workgraph(dir.path(), vec![both, one]);
         let graph = load_graph(&path).unwrap();
 
-        let tags = vec!["foo".to_string(), "bar".to_string()];
+        let tags = ["foo".to_string(), "bar".to_string()];
         let filtered: Vec<_> = graph
             .tasks()
             .filter(|t| tags.iter().all(|tag| t.tags.contains(tag)))

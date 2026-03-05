@@ -1188,15 +1188,8 @@ fn main() -> Result<()> {
             if list {
                 let agent_id = agent
                     .or_else(|| std::env::var("WG_AGENT_ID").ok())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("--agent or WG_AGENT_ID required for --list")
-                    })?;
-                commands::checkpoint::run_list(
-                    &workgraph_dir,
-                    &agent_id,
-                    Some(&task),
-                    cli.json,
-                )
+                    .ok_or_else(|| anyhow::anyhow!("--agent or WG_AGENT_ID required for --list"))?;
+                commands::checkpoint::run_list(&workgraph_dir, &agent_id, Some(&task), cli.json)
             } else {
                 let cp_type = match checkpoint_type.as_str() {
                     "auto" => commands::checkpoint::CheckpointType::Auto,

@@ -588,10 +588,7 @@ mod tests {
         let result = run(dir.path(), "a", false);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("Cycle without --max-iterations"),
-            "got: {msg}"
-        );
+        assert!(msg.contains("Cycle without --max-iterations"), "got: {msg}");
 
         // Atomic: nothing unpaused
         let graph = load_graph(graph_path(dir.path())).unwrap();

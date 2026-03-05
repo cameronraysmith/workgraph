@@ -123,7 +123,7 @@ mod tests {
         assert!(ContextScope::Task >= ContextScope::Task);
         assert!(ContextScope::Graph >= ContextScope::Task);
         assert!(ContextScope::Full >= ContextScope::Task);
-        assert!(!(ContextScope::Clean >= ContextScope::Task));
+        assert!((ContextScope::Clean < ContextScope::Task));
     }
 
     #[test]

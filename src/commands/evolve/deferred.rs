@@ -129,8 +129,8 @@ pub(crate) fn defer_self_mutation(
         session_id: None,
         wait_condition: None,
         checkpoint: None,
-            resurrection_count: 0,
-            last_resurrected_at: None,
+        resurrection_count: 0,
+        last_resurrected_at: None,
         exec_mode: None,
     };
 

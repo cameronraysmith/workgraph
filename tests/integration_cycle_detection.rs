@@ -3384,7 +3384,10 @@ fn test_deep_three_task_cycle_reopen_and_ordering() {
 
     // Create pipeline: A → B → C
     wg_ok(&wg_dir, &["add", "Task A", "--id", "a", "--immediate"]);
-    wg_ok(&wg_dir, &["add", "Task B", "--id", "b", "--after", "a", "--immediate"]);
+    wg_ok(
+        &wg_dir,
+        &["add", "Task B", "--id", "b", "--after", "a", "--immediate"],
+    );
     wg_ok(
         &wg_dir,
         &[
@@ -3539,7 +3542,15 @@ fn test_deep_mixed_deps_setup_included_behavior() {
     wg_ok(&wg_dir, &["add", "Setup", "--id", "setup", "--immediate"]);
     wg_ok(
         &wg_dir,
-        &["add", "Implement", "--id", "impl", "--after", "setup", "--immediate"],
+        &[
+            "add",
+            "Implement",
+            "--id",
+            "impl",
+            "--after",
+            "setup",
+            "--immediate",
+        ],
     );
     wg_ok(
         &wg_dir,

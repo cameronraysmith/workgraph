@@ -1241,6 +1241,7 @@ fn merged_agent_differs(original: &Agent, merged: &Agent) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use crate::agency::{self, EvaluationRef, Lineage, PerformanceRecord};

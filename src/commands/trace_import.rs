@@ -236,8 +236,7 @@ mod tests {
     #[test]
     fn test_source_tag_from_explicit_arg() {
         // When source is provided as arg, it takes priority
-        let source = Some("my-source")
-            .map(String::from)
+        let source = Some(String::from("my-source"))
             .or(None)
             .unwrap_or_else(|| "fallback".to_string());
         assert_eq!(source, "my-source");

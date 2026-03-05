@@ -989,7 +989,7 @@ mod tests {
         let mut merged: Vec<Option<usize>> = vec![None; comp_members.len()];
         fn find_root<'a>(
             comp: &mut HashMap<&'a str, usize>,
-            merged: &mut Vec<Option<usize>>,
+            merged: &mut [Option<usize>],
             id: &'a str,
         ) -> usize {
             let mut c = comp[id];

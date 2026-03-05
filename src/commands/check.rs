@@ -122,11 +122,9 @@ pub fn run(dir: &Path, json: bool) -> Result<()> {
             );
 
             // Fuzzy match suggestion
-            if let Some((suggestion, _dist)) = workgraph::check::fuzzy_match_task_id(
-                &orphan.to,
-                all_task_ids.iter().copied(),
-                3,
-            ) {
+            if let Some((suggestion, _dist)) =
+                workgraph::check::fuzzy_match_task_id(&orphan.to, all_task_ids.iter().copied(), 3)
+            {
                 eprintln!("    → Did you mean '{}'?", suggestion);
             }
         }

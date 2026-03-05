@@ -62,10 +62,7 @@ impl PushConfig {
             .channels
             .get("push")
             .context("no [push] section in notify config")?;
-        let cfg: Self = val
-            .clone()
-            .try_into()
-            .context("invalid [push] config")?;
+        let cfg: Self = val.clone().try_into().context("invalid [push] config")?;
         Ok(cfg)
     }
 
@@ -196,8 +193,7 @@ impl PushChannel {
         subscription: &PushSubscription,
         payload: &PushPayload,
     ) -> Result<MessageId> {
-        let body =
-            serde_json::to_string(payload).context("failed to serialize push payload")?;
+        let body = serde_json::to_string(payload).context("failed to serialize push payload")?;
 
         // Web Push protocol: POST to the subscription endpoint with:
         // - Authorization: vapid t=<JWT>, k=<public_key>
@@ -434,7 +430,8 @@ vapid_subject = "mailto:test@example.com"
     #[test]
     fn resolve_subscription_json() {
         let ch = PushChannel::new(test_config());
-        let json = r#"{"endpoint":"https://push.example.com/xyz","p256dh":"key1","auth":"secret1"}"#;
+        let json =
+            r#"{"endpoint":"https://push.example.com/xyz","p256dh":"key1","auth":"secret1"}"#;
         let sub = ch.resolve_subscription(json).unwrap();
         assert_eq!(sub.endpoint, "https://push.example.com/xyz");
         assert_eq!(sub.p256dh, "key1");
@@ -455,9 +452,10 @@ vapid_subject = "mailto:test@example.com"
     #[test]
     fn resolve_subscription_endpoint_url_without_default_keys_errors() {
         let ch = PushChannel::new(test_config_no_defaults());
-        assert!(ch
-            .resolve_subscription("https://push.example.com/send/abc")
-            .is_err());
+        assert!(
+            ch.resolve_subscription("https://push.example.com/send/abc")
+                .is_err()
+        );
     }
 
     // -----------------------------------------------------------------------

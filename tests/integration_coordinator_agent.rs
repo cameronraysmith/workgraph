@@ -139,12 +139,11 @@ fn wait_for_coordinator_agent(wg_dir: &Path) {
                 log
             );
         }
-        if let Ok(content) = fs::read_to_string(&log_path) {
-            if content.contains("Claude CLI started")
-                || content.contains("Coordinator agent spawned successfully")
-            {
-                return;
-            }
+        if let Ok(content) = fs::read_to_string(&log_path)
+            && (content.contains("Claude CLI started")
+                || content.contains("Coordinator agent spawned successfully"))
+        {
+            return;
         }
         std::thread::sleep(Duration::from_millis(100));
     }

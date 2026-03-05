@@ -149,7 +149,8 @@ fn handle_paste(app: &mut VizApp, text: &str) {
     match &app.input_mode {
         InputMode::ChatInput => {
             // Insert pasted text at cursor position, preserving newlines.
-            app.editor_handler.on_paste_event(text.to_string(), &mut app.chat.editor);
+            app.editor_handler
+                .on_paste_event(text.to_string(), &mut app.chat.editor);
         }
         InputMode::Search => {
             // Strip newlines for search — it's single-line.
@@ -158,7 +159,8 @@ fn handle_paste(app: &mut VizApp, text: &str) {
             app.update_search();
         }
         InputMode::TextPrompt(_action) => {
-            app.editor_handler.on_paste_event(text.to_string(), &mut app.text_prompt.editor);
+            app.editor_handler
+                .on_paste_event(text.to_string(), &mut app.text_prompt.editor);
         }
         InputMode::TaskForm => {
             if let Some(form) = app.task_form.as_mut() {
@@ -187,7 +189,8 @@ fn handle_paste(app: &mut VizApp, text: &str) {
         }
         InputMode::MessageInput => {
             // Insert pasted text at cursor position, preserving newlines (like chat).
-            app.editor_handler.on_paste_event(text.to_string(), &mut app.messages_panel.editor);
+            app.editor_handler
+                .on_paste_event(text.to_string(), &mut app.messages_panel.editor);
         }
         InputMode::ConfigEdit => {
             let clean: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
@@ -284,7 +287,10 @@ fn handle_confirm_input(app: &mut VizApp, code: KeyCode) {
 fn handle_text_prompt_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
     use super::state::{editor_clear, editor_text};
     use crossterm::event::KeyEvent;
-    let action = match &app.input_mode { InputMode::TextPrompt(a) => a.clone(), _ => return };
+    let action = match &app.input_mode {
+        InputMode::TextPrompt(a) => a.clone(),
+        _ => return,
+    };
     let is_multiline = matches!(action, TextPromptAction::EditDescription(_));
     let submit = match code {
         KeyCode::Enter if is_multiline && modifiers.contains(KeyModifiers::CONTROL) => true,
@@ -295,28 +301,78 @@ fn handle_text_prompt_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModif
         let text = editor_text(&app.text_prompt.editor);
         editor_clear(&mut app.text_prompt.editor);
         if text.trim().is_empty() {
-            if action == TextPromptAction::AttachFile { app.input_mode = InputMode::ChatInput; app.inspector_sub_focus = InspectorSubFocus::TextEntry; }
-            else { app.input_mode = InputMode::Normal; }
+            if action == TextPromptAction::AttachFile {
+                app.input_mode = InputMode::ChatInput;
+                app.inspector_sub_focus = InspectorSubFocus::TextEntry;
+            } else {
+                app.input_mode = InputMode::Normal;
+            }
             return;
         }
         match action {
-            TextPromptAction::MarkFailed(task_id) => { app.exec_command(vec!["fail".into(), task_id.clone(), "--reason".into(), text], CommandEffect::RefreshAndNotify(format!("Marked '{}' failed", task_id))); }
-            TextPromptAction::SendMessage(task_id) => { app.exec_command(vec!["msg".into(), "send".into(), task_id.clone(), text, "--from".into(), "tui".into()], CommandEffect::Notify(format!("Message sent to '{}'", task_id))); }
-            TextPromptAction::EditDescription(task_id) => { app.exec_command(vec!["edit".into(), task_id.clone(), "-d".into(), text], CommandEffect::RefreshAndNotify(format!("Updated '{}'", task_id))); }
-            TextPromptAction::AttachFile => { app.attach_file(&text); app.input_mode = InputMode::ChatInput; app.inspector_sub_focus = InspectorSubFocus::TextEntry; return; }
+            TextPromptAction::MarkFailed(task_id) => {
+                app.exec_command(
+                    vec!["fail".into(), task_id.clone(), "--reason".into(), text],
+                    CommandEffect::RefreshAndNotify(format!("Marked '{}' failed", task_id)),
+                );
+            }
+            TextPromptAction::SendMessage(task_id) => {
+                app.exec_command(
+                    vec![
+                        "msg".into(),
+                        "send".into(),
+                        task_id.clone(),
+                        text,
+                        "--from".into(),
+                        "tui".into(),
+                    ],
+                    CommandEffect::Notify(format!("Message sent to '{}'", task_id)),
+                );
+            }
+            TextPromptAction::EditDescription(task_id) => {
+                app.exec_command(
+                    vec!["edit".into(), task_id.clone(), "-d".into(), text],
+                    CommandEffect::RefreshAndNotify(format!("Updated '{}'", task_id)),
+                );
+            }
+            TextPromptAction::AttachFile => {
+                app.attach_file(&text);
+                app.input_mode = InputMode::ChatInput;
+                app.inspector_sub_focus = InspectorSubFocus::TextEntry;
+                return;
+            }
         }
         app.input_mode = InputMode::Normal;
         return;
     }
     match code {
-        KeyCode::Esc => { editor_clear(&mut app.text_prompt.editor); if action == TextPromptAction::AttachFile { app.input_mode = InputMode::ChatInput; app.inspector_sub_focus = InspectorSubFocus::TextEntry; } else { app.input_mode = InputMode::Normal; } }
-        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => { editor_clear(&mut app.text_prompt.editor); app.input_mode = InputMode::Normal; }
+        KeyCode::Esc => {
+            editor_clear(&mut app.text_prompt.editor);
+            if action == TextPromptAction::AttachFile {
+                app.input_mode = InputMode::ChatInput;
+                app.inspector_sub_focus = InspectorSubFocus::TextEntry;
+            } else {
+                app.input_mode = InputMode::Normal;
+            }
+        }
+        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+            editor_clear(&mut app.text_prompt.editor);
+            app.input_mode = InputMode::Normal;
+        }
         KeyCode::Char('v') if modifiers.contains(KeyModifiers::CONTROL) => {}
         _ => {
-            if code == KeyCode::Enter && (is_multiline || modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::ALT)) {
-                app.editor_handler.on_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &mut app.text_prompt.editor);
+            if code == KeyCode::Enter
+                && (is_multiline
+                    || modifiers.contains(KeyModifiers::SHIFT)
+                    || modifiers.contains(KeyModifiers::ALT))
+            {
+                app.editor_handler.on_key_event(
+                    KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                    &mut app.text_prompt.editor,
+                );
             } else {
-                app.editor_handler.on_key_event(KeyEvent::new(code, modifiers), &mut app.text_prompt.editor);
+                app.editor_handler
+                    .on_key_event(KeyEvent::new(code, modifiers), &mut app.text_prompt.editor);
             }
         }
     }
@@ -421,37 +477,74 @@ fn handle_task_form_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
     }
 }
 
-
 fn handle_chat_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
     use super::state::{editor_clear, editor_text};
     use crossterm::event::KeyEvent;
     match code {
-        KeyCode::Esc => { app.input_mode = InputMode::Normal; app.chat_input_dismissed = true; app.inspector_sub_focus = InspectorSubFocus::ChatHistory; return; }
-        KeyCode::Enter if !modifiers.contains(KeyModifiers::SHIFT) && !modifiers.contains(KeyModifiers::ALT) => {
-            let text = editor_text(&app.chat.editor);
-            editor_clear(&mut app.chat.editor);
-            if !text.trim().is_empty() { app.send_chat_message(text); }
+        KeyCode::Esc => {
+            app.input_mode = InputMode::Normal;
+            app.chat_input_dismissed = true;
+            app.inspector_sub_focus = InspectorSubFocus::ChatHistory;
             return;
         }
-        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => { editor_clear(&mut app.chat.editor); app.input_mode = InputMode::Normal; app.inspector_sub_focus = InspectorSubFocus::ChatHistory; return; }
-        KeyCode::Char('v') if modifiers.contains(KeyModifiers::CONTROL) => { app.try_paste_clipboard_image(); return; }
-        KeyCode::Up if modifiers.contains(KeyModifiers::ALT) => { app.record_panel_scroll_activity(); app.chat.scroll = app.chat.scroll.saturating_add(1); return; }
-        KeyCode::Down if modifiers.contains(KeyModifiers::ALT) => { app.record_panel_scroll_activity(); app.chat.scroll = app.chat.scroll.saturating_sub(1); return; }
+        KeyCode::Enter
+            if !modifiers.contains(KeyModifiers::SHIFT)
+                && !modifiers.contains(KeyModifiers::ALT) =>
+        {
+            let text = editor_text(&app.chat.editor);
+            editor_clear(&mut app.chat.editor);
+            if !text.trim().is_empty() {
+                app.send_chat_message(text);
+            }
+            return;
+        }
+        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+            editor_clear(&mut app.chat.editor);
+            app.input_mode = InputMode::Normal;
+            app.inspector_sub_focus = InspectorSubFocus::ChatHistory;
+            return;
+        }
+        KeyCode::Char('v') if modifiers.contains(KeyModifiers::CONTROL) => {
+            app.try_paste_clipboard_image();
+            return;
+        }
+        KeyCode::Up if modifiers.contains(KeyModifiers::ALT) => {
+            app.record_panel_scroll_activity();
+            app.chat.scroll = app.chat.scroll.saturating_add(1);
+            return;
+        }
+        KeyCode::Down if modifiers.contains(KeyModifiers::ALT) => {
+            app.record_panel_scroll_activity();
+            app.chat.scroll = app.chat.scroll.saturating_sub(1);
+            return;
+        }
         _ => {}
     }
-    if code == KeyCode::Enter && (modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::ALT)) {
-        app.editor_handler.on_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &mut app.chat.editor);
+    if code == KeyCode::Enter
+        && (modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::ALT))
+    {
+        app.editor_handler.on_key_event(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &mut app.chat.editor,
+        );
         return;
     }
-    app.editor_handler.on_key_event(KeyEvent::new(code, modifiers), &mut app.chat.editor);
+    app.editor_handler
+        .on_key_event(KeyEvent::new(code, modifiers), &mut app.chat.editor);
 }
 
 fn handle_message_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
     use super::state::{editor_clear, editor_text};
     use crossterm::event::KeyEvent;
     match code {
-        KeyCode::Esc => { app.input_mode = InputMode::Normal; return; }
-        KeyCode::Enter if !modifiers.contains(KeyModifiers::SHIFT) && !modifiers.contains(KeyModifiers::ALT) => {
+        KeyCode::Esc => {
+            app.input_mode = InputMode::Normal;
+            return;
+        }
+        KeyCode::Enter
+            if !modifiers.contains(KeyModifiers::SHIFT)
+                && !modifiers.contains(KeyModifiers::ALT) =>
+        {
             let text = editor_text(&app.messages_panel.editor);
             editor_clear(&mut app.messages_panel.editor);
             if !text.trim().is_empty()
@@ -473,17 +566,40 @@ fn handle_message_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers
             }
             return;
         }
-        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => { editor_clear(&mut app.messages_panel.editor); app.input_mode = InputMode::Normal; return; }
-        KeyCode::Char('v') if modifiers.contains(KeyModifiers::CONTROL) => { app.try_paste_clipboard_image(); return; }
-        KeyCode::Up if modifiers.contains(KeyModifiers::ALT) => { app.record_panel_scroll_activity(); app.messages_panel.scroll = app.messages_panel.scroll.saturating_sub(1); return; }
-        KeyCode::Down if modifiers.contains(KeyModifiers::ALT) => { app.record_panel_scroll_activity(); app.messages_panel.scroll = app.messages_panel.scroll.saturating_add(1); return; }
+        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+            editor_clear(&mut app.messages_panel.editor);
+            app.input_mode = InputMode::Normal;
+            return;
+        }
+        KeyCode::Char('v') if modifiers.contains(KeyModifiers::CONTROL) => {
+            app.try_paste_clipboard_image();
+            return;
+        }
+        KeyCode::Up if modifiers.contains(KeyModifiers::ALT) => {
+            app.record_panel_scroll_activity();
+            app.messages_panel.scroll = app.messages_panel.scroll.saturating_sub(1);
+            return;
+        }
+        KeyCode::Down if modifiers.contains(KeyModifiers::ALT) => {
+            app.record_panel_scroll_activity();
+            app.messages_panel.scroll = app.messages_panel.scroll.saturating_add(1);
+            return;
+        }
         _ => {}
     }
-    if code == KeyCode::Enter && (modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::ALT)) {
-        app.editor_handler.on_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &mut app.messages_panel.editor);
+    if code == KeyCode::Enter
+        && (modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::ALT))
+    {
+        app.editor_handler.on_key_event(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &mut app.messages_panel.editor,
+        );
         return;
     }
-    app.editor_handler.on_key_event(KeyEvent::new(code, modifiers), &mut app.messages_panel.editor);
+    app.editor_handler.on_key_event(
+        KeyEvent::new(code, modifiers),
+        &mut app.messages_panel.editor,
+    );
 }
 
 fn handle_normal_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
@@ -774,9 +890,7 @@ fn handle_right_panel_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
                 KeyCode::Char('=') | KeyCode::BackTab | KeyCode::Char('i') => {
                     app.cycle_layout_mode()
                 }
-                KeyCode::Char('I') => {
-                    app.cycle_layout_mode_reverse()
-                }
+                KeyCode::Char('I') => app.cycle_layout_mode_reverse(),
                 KeyCode::Esc => {
                     app.focused_panel = FocusedPanel::Graph;
                 }
@@ -1250,13 +1364,10 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
                         fb.focus = super::file_browser::FileBrowserFocus::Preview;
                     }
                 }
-            } else if in_right_content
-                && app.right_panel_tab == RightPanelTab::Detail
-            {
+            } else if in_right_content && app.right_panel_tab == RightPanelTab::Detail {
                 // Click in Detail tab: toggle section collapse if clicking a header.
                 app.focused_panel = FocusedPanel::RightPanel;
-                let content_row =
-                    row.saturating_sub(app.last_right_content_area.y) as usize;
+                let content_row = row.saturating_sub(app.last_right_content_area.y) as usize;
                 app.toggle_detail_section_at_screen_row(content_row);
             } else if in_right_content {
                 // Click in right panel content: focus the right panel.
@@ -1322,19 +1433,19 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
                                 (ts..chars.len().saturating_sub(1))
                                     .find(|&i| chars[i] == ' ' && chars[i + 1] == '(')
                             });
-                            if let (Some(ts), Some(ps)) = (text_start, paren_start) {
-                                if app.right_panel_visible {
-                                    // Inspector already open — update which tab is shown.
-                                    if content_col >= ts && content_col < ps {
-                                        app.right_panel_tab = RightPanelTab::Detail;
-                                    } else if content_col >= ps {
-                                        app.right_panel_tab = RightPanelTab::Log;
-                                        app.invalidate_log_pane();
-                                        app.load_log_pane();
-                                    }
+                            if let (Some(ts), Some(ps)) = (text_start, paren_start)
+                                && app.right_panel_visible
+                            {
+                                // Inspector already open — update which tab is shown.
+                                if content_col >= ts && content_col < ps {
+                                    app.right_panel_tab = RightPanelTab::Detail;
+                                } else if content_col >= ps {
+                                    app.right_panel_tab = RightPanelTab::Log;
+                                    app.invalidate_log_pane();
+                                    app.load_log_pane();
                                 }
-                                // If inspector is closed, just select — don't auto-open.
                             }
+                            // If inspector is closed, just select — don't auto-open.
                         }
                     }
                 }

@@ -918,10 +918,10 @@ fn record_tick_events(
 /// notifications through the configured [`NotificationRouter`]. This is called
 /// after each coordinator tick.
 fn try_dispatch_notifications(dir: &Path, logger: &DaemonLogger) {
+    use workgraph::notify::NotificationRouter;
     use workgraph::notify::config::NotifyConfig;
     use workgraph::notify::dispatch::{TaskEvent, TaskEventKind};
     use workgraph::notify::webhook::WebhookChannel;
-    use workgraph::notify::NotificationRouter;
 
     // Load notification config — if not present, notifications are disabled.
     let config = match NotifyConfig::load(Some(dir)) {
@@ -945,15 +945,18 @@ fn try_dispatch_notifications(dir: &Path, logger: &DaemonLogger) {
     let mut channels: Vec<Box<dyn workgraph::notify::NotificationChannel>> = Vec::new();
 
     // Webhook channel (always available, no external runtime deps)
-    if config.has_channel_config("webhook") {
-        if let Some(val) = config.channels.get("webhook") {
-            match val.clone().try_into::<workgraph::notify::webhook::WebhookConfig>() {
-                Ok(wh_config) => {
-                    channels.push(Box::new(WebhookChannel::new(wh_config)));
-                }
-                Err(e) => {
-                    logger.warn(&format!("Invalid webhook config: {}", e));
-                }
+    if config.has_channel_config("webhook")
+        && let Some(val) = config.channels.get("webhook")
+    {
+        match val
+            .clone()
+            .try_into::<workgraph::notify::webhook::WebhookConfig>()
+        {
+            Ok(wh_config) => {
+                channels.push(Box::new(WebhookChannel::new(wh_config)));
+            }
+            Err(e) => {
+                logger.warn(&format!("Invalid webhook config: {}", e));
             }
         }
     }
@@ -962,9 +965,9 @@ fn try_dispatch_notifications(dir: &Path, logger: &DaemonLogger) {
     if config.has_channel_config("telegram") {
         match workgraph::notify::telegram::TelegramConfig::from_notify_config(&config) {
             Ok(tg_config) => {
-                channels.push(Box::new(
-                    workgraph::notify::telegram::TelegramChannel::new(tg_config),
-                ));
+                channels.push(Box::new(workgraph::notify::telegram::TelegramChannel::new(
+                    tg_config,
+                )));
             }
             Err(e) => {
                 logger.warn(&format!("Invalid telegram config: {}", e));

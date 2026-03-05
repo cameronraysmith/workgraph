@@ -1,3 +1,4 @@
+#![allow(clippy::field_reassign_with_default)]
 //! End-to-end integration tests for the agent message queue system.
 //!
 //! Tests exercise real `wg` CLI commands in isolated temp directories.

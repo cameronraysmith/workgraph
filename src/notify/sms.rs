@@ -42,10 +42,7 @@ impl SmsConfig {
             .channels
             .get("sms")
             .context("no [sms] section in notify config")?;
-        let cfg: Self = val
-            .clone()
-            .try_into()
-            .context("invalid [sms] config")?;
+        let cfg: Self = val.clone().try_into().context("invalid [sms] config")?;
         Ok(cfg)
     }
 }

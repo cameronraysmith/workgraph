@@ -97,10 +97,7 @@ impl NotificationChannel for MatrixChannel {
             target
         };
 
-        let action_text: Vec<String> = actions
-            .iter()
-            .map(|a| format!("[{}]", a.label))
-            .collect();
+        let action_text: Vec<String> = actions.iter().map(|a| format!("[{}]", a.label)).collect();
         let full_message = format!("{}\n\nActions: {}", message, action_text.join("  "));
 
         let event_id = self.client.send_message(room, &full_message).await?;

@@ -256,7 +256,7 @@ mod tests {
 
         run_link(tmp.path(), "task-a", "task-b").unwrap();
 
-        let graph = load_graph(&graph_path(tmp.path())).unwrap();
+        let graph = load_graph(graph_path(tmp.path())).unwrap();
         let a = graph.get_task("task-a").unwrap();
         assert!(a.after.contains(&"task-b".to_string()));
 
@@ -272,7 +272,7 @@ mod tests {
         run_link(tmp.path(), "task-a", "task-b").unwrap();
         run_link(tmp.path(), "task-a", "task-b").unwrap(); // no-op
 
-        let graph = load_graph(&graph_path(tmp.path())).unwrap();
+        let graph = load_graph(graph_path(tmp.path())).unwrap();
         let a = graph.get_task("task-a").unwrap();
         assert_eq!(
             a.after.iter().filter(|x| *x == "task-b").count(),
@@ -314,7 +314,7 @@ mod tests {
         run_link(tmp.path(), "task-a", "task-b").unwrap();
         run_unlink(tmp.path(), "task-a", "task-b").unwrap();
 
-        let graph = load_graph(&graph_path(tmp.path())).unwrap();
+        let graph = load_graph(graph_path(tmp.path())).unwrap();
         let a = graph.get_task("task-a").unwrap();
         assert!(!a.after.contains(&"task-b".to_string()));
 
@@ -340,7 +340,7 @@ mod tests {
         run_link(tmp.path(), "task-a", "task-b").unwrap();
         run_link(tmp.path(), "task-a", "task-c").unwrap();
 
-        let graph = load_graph(&graph_path(tmp.path())).unwrap();
+        let graph = load_graph(graph_path(tmp.path())).unwrap();
         let a = graph.get_task("task-a").unwrap();
         assert!(a.after.contains(&"task-b".to_string()));
         assert!(a.after.contains(&"task-c".to_string()));
@@ -355,7 +355,7 @@ mod tests {
         run_link(tmp.path(), "task-a", "task-c").unwrap();
         run_unlink(tmp.path(), "task-a", "task-b").unwrap();
 
-        let graph = load_graph(&graph_path(tmp.path())).unwrap();
+        let graph = load_graph(graph_path(tmp.path())).unwrap();
         let a = graph.get_task("task-a").unwrap();
         assert!(!a.after.contains(&"task-b".to_string()));
         assert!(a.after.contains(&"task-c".to_string()));

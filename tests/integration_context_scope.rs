@@ -429,6 +429,6 @@ fn test_scope_ordering_is_strict() {
     assert!(ContextScope::Graph >= ContextScope::Task);
     assert!(ContextScope::Full >= ContextScope::Task);
     assert!(ContextScope::Full >= ContextScope::Graph);
-    assert!(!(ContextScope::Clean >= ContextScope::Task));
-    assert!(!(ContextScope::Task >= ContextScope::Graph));
+    assert!((ContextScope::Clean < ContextScope::Task));
+    assert!((ContextScope::Task < ContextScope::Graph));
 }

@@ -33,10 +33,7 @@ pub enum StreamEvent {
         timestamp_ms: i64,
     },
     /// Tool execution started.
-    ToolStart {
-        name: String,
-        timestamp_ms: i64,
-    },
+    ToolStart { name: String, timestamp_ms: i64 },
     /// Tool execution completed.
     ToolEnd {
         name: String,
@@ -45,9 +42,7 @@ pub enum StreamEvent {
         timestamp_ms: i64,
     },
     /// Periodic heartbeat.
-    Heartbeat {
-        timestamp_ms: i64,
-    },
+    Heartbeat { timestamp_ms: i64 },
     /// Final event — aggregated usage and outcome.
     Result {
         success: bool,
@@ -153,14 +148,13 @@ impl StreamWriter {
 
     /// Write a single event to the stream file.
     pub fn write_event(&self, event: &StreamEvent) {
-        if let Ok(json) = serde_json::to_string(event) {
-            if let Ok(mut file) = std::fs::OpenOptions::new()
+        if let Ok(json) = serde_json::to_string(event)
+            && let Ok(mut file) = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&self.path)
-            {
-                let _ = writeln!(file, "{}", json);
-            }
+        {
+            let _ = writeln!(file, "{}", json);
         }
     }
 
@@ -242,10 +236,7 @@ pub fn translate_claude_event(line: &str) -> Option<StreamEvent> {
                 .get("session_id")
                 .and_then(|v| v.as_str())
                 .map(String::from);
-            let model = val
-                .get("model")
-                .and_then(|v| v.as_str())
-                .map(String::from);
+            let model = val.get("model").and_then(|v| v.as_str()).map(String::from);
             Some(StreamEvent::Init {
                 executor_type: "claude".to_string(),
                 model,
@@ -257,14 +248,8 @@ pub fn translate_claude_event(line: &str) -> Option<StreamEvent> {
             // Turn completed — extract usage from message.usage
             let usage = val.get("message").and_then(|m| m.get("usage"));
             let turn_usage = usage.map(|u| TurnUsage {
-                input_tokens: u
-                    .get("input_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0),
-                output_tokens: u
-                    .get("output_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0),
+                input_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+                output_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
                 cache_read_input_tokens: u
                     .get("cache_read_input_tokens")
                     .or_else(|| u.get("cacheReadInputTokens"))
@@ -340,10 +325,7 @@ pub fn translate_claude_event(line: &str) -> Option<StreamEvent> {
 ///
 /// Reads `raw_stream.jsonl` from `offset`, translates each line, and returns
 /// the StreamEvents plus the new offset.
-pub fn translate_claude_stream(
-    path: &Path,
-    offset: u64,
-) -> Result<(Vec<StreamEvent>, u64)> {
+pub fn translate_claude_stream(path: &Path, offset: u64) -> Result<(Vec<StreamEvent>, u64)> {
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
 
     let mut file = std::fs::File::open(path)?;
@@ -453,10 +435,7 @@ impl AgentStreamState {
             cost_usd: self.accumulated_usage.cost_usd.unwrap_or(0.0),
             input_tokens: self.accumulated_usage.input_tokens,
             output_tokens: self.accumulated_usage.output_tokens,
-            cache_read_input_tokens: self
-                .accumulated_usage
-                .cache_read_input_tokens
-                .unwrap_or(0),
+            cache_read_input_tokens: self.accumulated_usage.cache_read_input_tokens.unwrap_or(0),
             cache_creation_input_tokens: self
                 .accumulated_usage
                 .cache_creation_input_tokens
@@ -506,9 +485,7 @@ mod tests {
                 duration_ms: 150,
                 timestamp_ms: 3150,
             },
-            StreamEvent::Heartbeat {
-                timestamp_ms: 4000,
-            },
+            StreamEvent::Heartbeat { timestamp_ms: 4000 },
             StreamEvent::Result {
                 success: true,
                 usage: TotalUsage {

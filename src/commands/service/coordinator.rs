@@ -251,9 +251,7 @@ fn is_condition_unsatisfiable(
 }
 
 /// Detect circular waits: task A waiting on task B, task B waiting on task A.
-fn detect_circular_waits(
-    graph: &workgraph::graph::WorkGraph,
-) -> Vec<Vec<String>> {
+fn detect_circular_waits(graph: &workgraph::graph::WorkGraph) -> Vec<Vec<String>> {
     let mut cycles = Vec::new();
     let waiting_tasks: Vec<_> = graph
         .tasks()
@@ -261,7 +259,8 @@ fn detect_circular_waits(
         .collect();
 
     // Build a map: task_id -> set of task_ids it's waiting on (via TaskStatus conditions)
-    let mut wait_edges: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
+    let mut wait_edges: std::collections::HashMap<&str, Vec<&str>> =
+        std::collections::HashMap::new();
     for t in &waiting_tasks {
         if let Some(ref spec) = t.wait_condition {
             let conditions = match spec {
@@ -322,11 +321,7 @@ fn detect_circular_waits(
 
 /// Build a brief graph state delta for resume context injection.
 /// Shows what changed while the task was waiting (~100 tokens).
-fn build_resume_delta(
-    graph: &workgraph::graph::WorkGraph,
-    task: &Task,
-    dir: &Path,
-) -> String {
+fn build_resume_delta(graph: &workgraph::graph::WorkGraph, task: &Task, dir: &Path) -> String {
     let mut delta = String::new();
     delta.push_str("## Resume Context\n");
 
@@ -339,17 +334,17 @@ fn build_resume_delta(
 
         // Show status of referenced tasks
         for cond in conditions {
-            if let WaitCondition::TaskStatus { task_id, status } = cond {
-                if let Some(dep) = graph.get_task(task_id) {
-                    delta.push_str(&format!(
-                        "- {}: {} (expected: {})\n",
-                        task_id, dep.status, status
-                    ));
-                    // Include artifacts if any
-                    if !dep.artifacts.is_empty() {
-                        for art in &dep.artifacts {
-                            delta.push_str(&format!("  artifact: {}\n", art));
-                        }
+            if let WaitCondition::TaskStatus { task_id, status } = cond
+                && let Some(dep) = graph.get_task(task_id)
+            {
+                delta.push_str(&format!(
+                    "- {}: {} (expected: {})\n",
+                    task_id, dep.status, status
+                ));
+                // Include artifacts if any
+                if !dep.artifacts.is_empty() {
+                    for art in &dep.artifacts {
+                        delta.push_str(&format!("  artifact: {}\n", art));
                     }
                 }
             }
@@ -367,7 +362,10 @@ fn build_resume_delta(
         if !recent.is_empty() {
             delta.push_str("\nRecent messages:\n");
             for msg in recent.iter().rev() {
-                delta.push_str(&format!("- [{}] {}: {}\n", msg.timestamp, msg.sender, msg.body));
+                delta.push_str(&format!(
+                    "- [{}] {}: {}\n",
+                    msg.timestamp, msg.sender, msg.body
+                ));
             }
         }
     }
@@ -378,36 +376,24 @@ fn build_resume_delta(
 
 /// Evaluate waiting tasks and transition them when conditions are met.
 /// Returns `true` if the graph was modified.
-fn evaluate_waiting_tasks(
-    graph: &mut workgraph::graph::WorkGraph,
-    dir: &Path,
-) -> bool {
+fn evaluate_waiting_tasks(graph: &mut workgraph::graph::WorkGraph, dir: &Path) -> bool {
     let mut modified = false;
 
     // First, detect circular waits
     let circular = detect_circular_waits(graph);
     for cycle in &circular {
-        eprintln!(
-            "[coordinator] Circular wait detected: {:?}",
-            cycle
-        );
+        eprintln!("[coordinator] Circular wait detected: {:?}", cycle);
         for task_id in cycle {
             if let Some(t) = graph.get_task_mut(task_id)
                 && t.status == Status::Waiting
             {
                 t.status = Status::Failed;
                 t.wait_condition = None;
-                t.failure_reason = Some(format!(
-                    "Circular wait detected: {}",
-                    cycle.join(" -> ")
-                ));
+                t.failure_reason = Some(format!("Circular wait detected: {}", cycle.join(" -> ")));
                 t.log.push(LogEntry {
                     timestamp: Utc::now().to_rfc3339(),
                     actor: Some("coordinator".to_string()),
-                    message: format!(
-                        "Failed: circular wait detected ({})",
-                        cycle.join(" -> ")
-                    ),
+                    message: format!("Failed: circular wait detected ({})", cycle.join(" -> ")),
                 });
                 modified = true;
             }
@@ -488,13 +474,7 @@ fn evaluate_waiting_tasks(
         }
 
         // Evaluate the wait spec
-        let satisfied = evaluate_wait_spec(
-            &spec,
-            graph,
-            dir,
-            task_id,
-            wait_started.as_deref(),
-        );
+        let satisfied = evaluate_wait_spec(spec, graph, dir, task_id, wait_started.as_deref());
 
         if satisfied {
             // Build resume delta before mutating
@@ -546,10 +526,7 @@ const RESURRECTION_COOLDOWN_SECS: i64 = 60;
 ///
 /// Guards: rate limit, sender whitelist, abandoned exclusion.
 /// Returns `true` if the graph was modified.
-fn resurrect_done_tasks(
-    graph: &mut workgraph::graph::WorkGraph,
-    dir: &Path,
-) -> bool {
+fn resurrect_done_tasks(graph: &mut workgraph::graph::WorkGraph, dir: &Path) -> bool {
     let mut modified = false;
 
     // Collect Done tasks with unread messages from whitelisted senders
@@ -570,19 +547,28 @@ fn resurrect_done_tasks(
         })
         .collect();
 
-    for (task_id, assigned_agent, downstream_ids, session_id, checkpoint, resurrection_count, last_resurrected_at) in candidates {
+    for (
+        task_id,
+        assigned_agent,
+        downstream_ids,
+        session_id,
+        checkpoint,
+        resurrection_count,
+        last_resurrected_at,
+    ) in candidates
+    {
         // Rate limit: max resurrections
         if resurrection_count >= MAX_RESURRECTIONS {
             continue;
         }
 
         // Rate limit: cooldown
-        if let Some(ref last_ts) = last_resurrected_at {
-            if let Ok(last_time) = last_ts.parse::<chrono::DateTime<chrono::Utc>>() {
-                let elapsed = Utc::now().signed_duration_since(last_time);
-                if elapsed.num_seconds() < RESURRECTION_COOLDOWN_SECS {
-                    continue;
-                }
+        if let Some(ref last_ts) = last_resurrected_at
+            && let Ok(last_time) = last_ts.parse::<chrono::DateTime<chrono::Utc>>()
+        {
+            let elapsed = Utc::now().signed_duration_since(last_time);
+            if elapsed.num_seconds() < RESURRECTION_COOLDOWN_SECS {
+                continue;
             }
         }
 
@@ -624,9 +610,9 @@ fn resurrect_done_tasks(
 
         // Check downstream state to decide reopen vs child task
         let has_active_downstream = downstream_ids.iter().any(|did| {
-            graph.get_task(did).map_or(false, |dt| {
-                matches!(dt.status, Status::InProgress | Status::Done)
-            })
+            graph
+                .get_task(did)
+                .is_some_and(|dt| matches!(dt.status, Status::InProgress | Status::Done))
         });
 
         if has_active_downstream {
@@ -686,7 +672,9 @@ fn resurrect_done_tasks(
 
             eprintln!(
                 "[coordinator] Resurrection: created child task '{}' for Done task '{}' ({} message(s))",
-                child_id, task_id, triggering_msgs.len()
+                child_id,
+                task_id,
+                triggering_msgs.len()
             );
             modified = true;
         } else {
@@ -707,7 +695,8 @@ fn resurrect_done_tasks(
 
                 eprintln!(
                     "[coordinator] Resurrection: reopened Done task '{}' ({} message(s))",
-                    task_id, triggering_msgs.len()
+                    task_id,
+                    triggering_msgs.len()
                 );
                 modified = true;
             }
@@ -1130,8 +1119,14 @@ fn build_auto_assign_tasks(
             retry_count: 0,
             max_retries: None,
             failure_reason: None,
-            model: Some(config.resolve_model_for_role(workgraph::config::DispatchRole::Assigner).model),
-            provider: config.resolve_model_for_role(workgraph::config::DispatchRole::Assigner).provider,
+            model: Some(
+                config
+                    .resolve_model_for_role(workgraph::config::DispatchRole::Assigner)
+                    .model,
+            ),
+            provider: config
+                .resolve_model_for_role(workgraph::config::DispatchRole::Assigner)
+                .provider,
             verify: None,
             agent: config.agency.assigner_agent.clone(),
 
@@ -1144,8 +1139,8 @@ fn build_auto_assign_tasks(
             cycle_config: None,
             token_usage: None,
             session_id: None,
-        wait_condition: None,
-        checkpoint: None,
+            wait_condition: None,
+            checkpoint: None,
             resurrection_count: 0,
             last_resurrected_at: None,
             // Assignment tasks only need wg CLI — no file access required
@@ -1353,7 +1348,11 @@ fn build_auto_evaluate_tasks(
             retry_count: 0,
             max_retries: None,
             failure_reason: None,
-            model: Some(config.resolve_model_for_role(workgraph::config::DispatchRole::Evaluator).model),
+            model: Some(
+                config
+                    .resolve_model_for_role(workgraph::config::DispatchRole::Evaluator)
+                    .model,
+            ),
             provider: None,
             verify: None,
             agent: config.agency.evaluator_agent.clone(),
@@ -1455,7 +1454,8 @@ fn build_flip_verification_tasks(
     }
 
     let mut modified = false;
-    let verification_resolved = config.resolve_model_for_role(workgraph::config::DispatchRole::Verification);
+    let verification_resolved =
+        config.resolve_model_for_role(workgraph::config::DispatchRole::Verification);
     let verification_model = verification_resolved.model;
 
     for eval in &low_flip {
@@ -1518,7 +1518,9 @@ fn build_flip_verification_tasks(
             desc.push_str("3. Run relevant tests\n");
             desc.push_str("4. Verify artifacts exist\n\n");
         } else {
-            desc.push_str("1. Check `git log --oneline -10` for recent commits related to this task\n");
+            desc.push_str(
+                "1. Check `git log --oneline -10` for recent commits related to this task\n",
+            );
             desc.push_str("2. Check `git diff` to see if meaningful changes were made\n");
             desc.push_str("3. Run `cargo build && cargo test` to verify nothing is broken\n");
             desc.push_str("4. Verify any artifacts mentioned in the task description exist\n\n");
@@ -2163,8 +2165,7 @@ pub fn coordinator_tick(
     {
         let resurrect_modified = resurrect_done_tasks(&mut graph, dir);
         if resurrect_modified {
-            save_graph(&graph, &graph_path)
-                .context("Failed to save graph after resurrection")?;
+            save_graph(&graph, &graph_path).context("Failed to save graph after resurrection")?;
         }
     }
 
@@ -2204,13 +2205,11 @@ pub fn coordinator_tick(
     let ready_count = final_ready.len();
     drop(final_ready);
     // Resolve task agent model: CLI override > models.task_agent > models.default > agent.model
-    let effective_model = model
-        .map(String::from)
-        .unwrap_or_else(|| {
-            config
-                .resolve_model_for_role(workgraph::config::DispatchRole::TaskAgent)
-                .model
-        });
+    let effective_model = model.map(String::from).unwrap_or_else(|| {
+        config
+            .resolve_model_for_role(workgraph::config::DispatchRole::TaskAgent)
+            .model
+    });
     let spawned = spawn_agents_for_ready_tasks(
         dir,
         &graph,
@@ -2290,13 +2289,14 @@ fn process_chat_inbox(dir: &Path) {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use crate::commands::checkpoint::{self, CheckpointType};
+    use tempfile::tempdir;
     use workgraph::graph::{Node, Task, WorkGraph};
     use workgraph::parser::save_graph;
     use workgraph::stream_event::{self, StreamEvent, StreamWriter};
-    use tempfile::tempdir;
 
     fn make_agent_entry(output_file: &std::path::Path) -> workgraph::service::registry::AgentEntry {
         workgraph::service::registry::AgentEntry {
@@ -2423,7 +2423,9 @@ mod tests {
         // Create a registry with a live agent (use PID 1 which should exist)
         let mut registry = workgraph::service::registry::AgentRegistry::default();
         let agent_entry = make_agent_entry(&output_file);
-        registry.agents.insert("agent-1".to_string(), agent_entry.clone());
+        registry
+            .agents
+            .insert("agent-1".to_string(), agent_entry.clone());
 
         let service_dir = dir.join("service");
         std::fs::create_dir_all(&service_dir).unwrap();
@@ -2431,7 +2433,8 @@ mod tests {
         std::fs::write(
             &registry_path,
             serde_json::to_string_pretty(&registry).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Config with 15 turn threshold
         let config = Config::default(); // default has auto_interval_turns=15
@@ -2553,7 +2556,8 @@ mod tests {
             None,
             CheckpointType::Auto,
             false,
-        ).unwrap();
+        )
+        .unwrap();
 
         let agent_entry = make_agent_entry(&output_file);
 
@@ -2605,7 +2609,13 @@ mod tests {
             task_id: "dep-a".to_string(),
             status: Status::Done,
         };
-        assert!(evaluate_condition(&cond, &graph, Path::new("/tmp"), "main", None));
+        assert!(evaluate_condition(
+            &cond,
+            &graph,
+            Path::new("/tmp"),
+            "main",
+            None
+        ));
     }
 
     #[test]
@@ -2620,7 +2630,13 @@ mod tests {
             task_id: "dep-a".to_string(),
             status: Status::Done,
         };
-        assert!(!evaluate_condition(&cond, &graph, Path::new("/tmp"), "main", None));
+        assert!(!evaluate_condition(
+            &cond,
+            &graph,
+            Path::new("/tmp"),
+            "main",
+            None
+        ));
     }
 
     #[test]
@@ -2628,15 +2644,29 @@ mod tests {
         let graph = WorkGraph::new();
         let past = (Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
         let cond = WaitCondition::Timer { resume_after: past };
-        assert!(evaluate_condition(&cond, &graph, Path::new("/tmp"), "main", None));
+        assert!(evaluate_condition(
+            &cond,
+            &graph,
+            Path::new("/tmp"),
+            "main",
+            None
+        ));
     }
 
     #[test]
     fn test_evaluate_condition_timer_not_elapsed() {
         let graph = WorkGraph::new();
         let future = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
-        let cond = WaitCondition::Timer { resume_after: future };
-        assert!(!evaluate_condition(&cond, &graph, Path::new("/tmp"), "main", None));
+        let cond = WaitCondition::Timer {
+            resume_after: future,
+        };
+        assert!(!evaluate_condition(
+            &cond,
+            &graph,
+            Path::new("/tmp"),
+            "main",
+            None
+        ));
     }
 
     #[test]
@@ -2659,14 +2689,26 @@ mod tests {
             path: file_path.to_string_lossy().to_string(),
             mtime_at_wait: mtime,
         };
-        assert!(!evaluate_condition(&cond_same, &graph, dir.path(), "main", None));
+        assert!(!evaluate_condition(
+            &cond_same,
+            &graph,
+            dir.path(),
+            "main",
+            None
+        ));
 
         // Simulate earlier mtime_at_wait (file was modified after the stored mtime)
         let cond_earlier = WaitCondition::FileChanged {
             path: file_path.to_string_lossy().to_string(),
             mtime_at_wait: mtime - 1,
         };
-        assert!(evaluate_condition(&cond_earlier, &graph, dir.path(), "main", None));
+        assert!(evaluate_condition(
+            &cond_earlier,
+            &graph,
+            dir.path(),
+            "main",
+            None
+        ));
     }
 
     #[test]
@@ -2682,10 +2724,22 @@ mod tests {
         graph.add_node(Node::Task(dep_b));
 
         let spec = WaitSpec::All(vec![
-            WaitCondition::TaskStatus { task_id: "dep-a".to_string(), status: Status::Done },
-            WaitCondition::TaskStatus { task_id: "dep-b".to_string(), status: Status::Done },
+            WaitCondition::TaskStatus {
+                task_id: "dep-a".to_string(),
+                status: Status::Done,
+            },
+            WaitCondition::TaskStatus {
+                task_id: "dep-b".to_string(),
+                status: Status::Done,
+            },
         ]);
-        assert!(!evaluate_wait_spec(&spec, &graph, Path::new("/tmp"), "main", None));
+        assert!(!evaluate_wait_spec(
+            &spec,
+            &graph,
+            Path::new("/tmp"),
+            "main",
+            None
+        ));
     }
 
     #[test]
@@ -2701,10 +2755,22 @@ mod tests {
         graph.add_node(Node::Task(dep_b));
 
         let spec = WaitSpec::Any(vec![
-            WaitCondition::TaskStatus { task_id: "dep-a".to_string(), status: Status::Done },
-            WaitCondition::TaskStatus { task_id: "dep-b".to_string(), status: Status::Done },
+            WaitCondition::TaskStatus {
+                task_id: "dep-a".to_string(),
+                status: Status::Done,
+            },
+            WaitCondition::TaskStatus {
+                task_id: "dep-b".to_string(),
+                status: Status::Done,
+            },
         ]);
-        assert!(evaluate_wait_spec(&spec, &graph, Path::new("/tmp"), "main", None));
+        assert!(evaluate_wait_spec(
+            &spec,
+            &graph,
+            Path::new("/tmp"),
+            "main",
+            None
+        ));
     }
 
     #[test]
@@ -2743,16 +2809,18 @@ mod tests {
         let mut task_a = Task::default();
         task_a.id = "task-a".to_string();
         task_a.status = Status::Waiting;
-        task_a.wait_condition = Some(WaitSpec::All(vec![
-            WaitCondition::TaskStatus { task_id: "task-b".to_string(), status: Status::Done },
-        ]));
+        task_a.wait_condition = Some(WaitSpec::All(vec![WaitCondition::TaskStatus {
+            task_id: "task-b".to_string(),
+            status: Status::Done,
+        }]));
 
         let mut task_b = Task::default();
         task_b.id = "task-b".to_string();
         task_b.status = Status::Waiting;
-        task_b.wait_condition = Some(WaitSpec::All(vec![
-            WaitCondition::TaskStatus { task_id: "task-a".to_string(), status: Status::Done },
-        ]));
+        task_b.wait_condition = Some(WaitSpec::All(vec![WaitCondition::TaskStatus {
+            task_id: "task-a".to_string(),
+            status: Status::Done,
+        }]));
 
         graph.add_node(Node::Task(task_a));
         graph.add_node(Node::Task(task_b));
@@ -2772,12 +2840,10 @@ mod tests {
         let mut main_task = Task::default();
         main_task.id = "main".to_string();
         main_task.status = Status::Waiting;
-        main_task.wait_condition = Some(WaitSpec::All(vec![
-            WaitCondition::TaskStatus {
-                task_id: "dep-a".to_string(),
-                status: Status::Done,
-            },
-        ]));
+        main_task.wait_condition = Some(WaitSpec::All(vec![WaitCondition::TaskStatus {
+            task_id: "dep-a".to_string(),
+            status: Status::Done,
+        }]));
         main_task.checkpoint = Some("Phase 1 complete".to_string());
         main_task.assigned = Some("agent-1".to_string());
 
@@ -2790,7 +2856,10 @@ mod tests {
         let task = graph.get_task("main").unwrap();
         assert_eq!(task.status, Status::Open);
         assert!(task.wait_condition.is_none());
-        assert!(task.assigned.is_none(), "assigned should be cleared for re-dispatch");
+        assert!(
+            task.assigned.is_none(),
+            "assigned should be cleared for re-dispatch"
+        );
         assert!(task.checkpoint.is_some());
         let cp = task.checkpoint.as_ref().unwrap();
         assert!(cp.contains("Resume Context"));
@@ -2808,12 +2877,10 @@ mod tests {
         let mut main_task = Task::default();
         main_task.id = "main".to_string();
         main_task.status = Status::Waiting;
-        main_task.wait_condition = Some(WaitSpec::All(vec![
-            WaitCondition::TaskStatus {
-                task_id: "dep-a".to_string(),
-                status: Status::Done,
-            },
-        ]));
+        main_task.wait_condition = Some(WaitSpec::All(vec![WaitCondition::TaskStatus {
+            task_id: "dep-a".to_string(),
+            status: Status::Done,
+        }]));
 
         setup_wait_graph(dir.path(), vec![dep, main_task]);
 
@@ -2823,7 +2890,12 @@ mod tests {
         assert!(modified);
         let task = graph.get_task("main").unwrap();
         assert_eq!(task.status, Status::Failed);
-        assert!(task.failure_reason.as_ref().unwrap().contains("unsatisfiable"));
+        assert!(
+            task.failure_reason
+                .as_ref()
+                .unwrap()
+                .contains("unsatisfiable")
+        );
     }
 
     #[test]
@@ -2833,16 +2905,18 @@ mod tests {
         let mut task_a = Task::default();
         task_a.id = "task-a".to_string();
         task_a.status = Status::Waiting;
-        task_a.wait_condition = Some(WaitSpec::All(vec![
-            WaitCondition::TaskStatus { task_id: "task-b".to_string(), status: Status::Done },
-        ]));
+        task_a.wait_condition = Some(WaitSpec::All(vec![WaitCondition::TaskStatus {
+            task_id: "task-b".to_string(),
+            status: Status::Done,
+        }]));
 
         let mut task_b = Task::default();
         task_b.id = "task-b".to_string();
         task_b.status = Status::Waiting;
-        task_b.wait_condition = Some(WaitSpec::All(vec![
-            WaitCondition::TaskStatus { task_id: "task-a".to_string(), status: Status::Done },
-        ]));
+        task_b.wait_condition = Some(WaitSpec::All(vec![WaitCondition::TaskStatus {
+            task_id: "task-a".to_string(),
+            status: Status::Done,
+        }]));
 
         setup_wait_graph(dir.path(), vec![task_a, task_b]);
 
@@ -2871,12 +2945,10 @@ mod tests {
         main_task.status = Status::Waiting;
         main_task.session_id = Some("session-123".to_string());
         main_task.checkpoint = Some("Waiting for API schema".to_string());
-        main_task.wait_condition = Some(WaitSpec::All(vec![
-            WaitCondition::TaskStatus {
-                task_id: "dep-a".to_string(),
-                status: Status::Done,
-            },
-        ]));
+        main_task.wait_condition = Some(WaitSpec::All(vec![WaitCondition::TaskStatus {
+            task_id: "dep-a".to_string(),
+            status: Status::Done,
+        }]));
         main_task.assigned = Some("agent-1".to_string());
 
         setup_wait_graph(dir.path(), vec![dep, main_task]);
@@ -2906,12 +2978,10 @@ mod tests {
         let mut main_task = Task::default();
         main_task.id = "main".to_string();
         main_task.checkpoint = Some("Working on phase 2".to_string());
-        main_task.wait_condition = Some(WaitSpec::All(vec![
-            WaitCondition::TaskStatus {
-                task_id: "dep-a".to_string(),
-                status: Status::Done,
-            },
-        ]));
+        main_task.wait_condition = Some(WaitSpec::All(vec![WaitCondition::TaskStatus {
+            task_id: "dep-a".to_string(),
+            status: Status::Done,
+        }]));
         graph.add_node(Node::Task(main_task));
 
         let task = graph.get_task("main").unwrap();
@@ -2935,12 +3005,10 @@ mod tests {
         let mut main_task = Task::default();
         main_task.id = "main".to_string();
         main_task.status = Status::Waiting;
-        main_task.wait_condition = Some(WaitSpec::All(vec![
-            WaitCondition::TaskStatus {
-                task_id: "dep-a".to_string(),
-                status: Status::Done,
-            },
-        ]));
+        main_task.wait_condition = Some(WaitSpec::All(vec![WaitCondition::TaskStatus {
+            task_id: "dep-a".to_string(),
+            status: Status::Done,
+        }]));
 
         setup_wait_graph(dir.path(), vec![dep, main_task]);
 
@@ -3027,13 +3095,24 @@ mod tests {
         graph.add_node(Node::Task(parent));
         graph.add_node(Node::Task(child));
 
-        messages::send_message(dir.path(), "parent", "Update needed", "coordinator", "normal").unwrap();
+        messages::send_message(
+            dir.path(),
+            "parent",
+            "Update needed",
+            "coordinator",
+            "normal",
+        )
+        .unwrap();
 
         let modified = resurrect_done_tasks(&mut graph, dir.path());
 
         assert!(modified);
         let task = graph.get_task("parent").unwrap();
-        assert_eq!(task.status, Status::Open, "Should reopen (downstream not active)");
+        assert_eq!(
+            task.status,
+            Status::Open,
+            "Should reopen (downstream not active)"
+        );
     }
 
     #[test]
@@ -3058,7 +3137,14 @@ mod tests {
         graph.add_node(Node::Task(parent));
         graph.add_node(Node::Task(downstream));
 
-        messages::send_message(dir.path(), "parent", "Question about X", "agent-downstream", "normal").unwrap();
+        messages::send_message(
+            dir.path(),
+            "parent",
+            "Question about X",
+            "agent-downstream",
+            "normal",
+        )
+        .unwrap();
 
         let modified = resurrect_done_tasks(&mut graph, dir.path());
 
@@ -3071,9 +3157,23 @@ mod tests {
         // Child task created
         let child = graph.get_task("respond-to-parent").unwrap();
         assert_eq!(child.status, Status::Open);
-        assert_eq!(child.session_id, Some("sess-123".to_string()), "Session inherited");
-        assert_eq!(child.checkpoint, Some("Did some work".to_string()), "Checkpoint inherited");
-        assert!(child.description.as_deref().unwrap().contains("pending messages"));
+        assert_eq!(
+            child.session_id,
+            Some("sess-123".to_string()),
+            "Session inherited"
+        );
+        assert_eq!(
+            child.checkpoint,
+            Some("Did some work".to_string()),
+            "Checkpoint inherited"
+        );
+        assert!(
+            child
+                .description
+                .as_deref()
+                .unwrap()
+                .contains("pending messages")
+        );
     }
 
     #[test]
@@ -3182,8 +3282,17 @@ mod tests {
         let task = graph.get_task("multi").unwrap();
         assert_eq!(task.status, Status::Open);
         // Only ONE resurrection despite 3 messages
-        assert_eq!(task.resurrection_count, 1, "Should batch into one resurrection");
-        assert!(task.log.last().unwrap().message.contains("3 pending message(s)"));
+        assert_eq!(
+            task.resurrection_count, 1,
+            "Should batch into one resurrection"
+        );
+        assert!(
+            task.log
+                .last()
+                .unwrap()
+                .message
+                .contains("3 pending message(s)")
+        );
     }
 
     #[test]
@@ -3234,7 +3343,10 @@ mod tests {
 
         let modified = resurrect_done_tasks(&mut graph, dir.path());
 
-        assert!(!modified, "Should NOT resurrect tasks with resurrect:false tag");
+        assert!(
+            !modified,
+            "Should NOT resurrect tasks with resurrect:false tag"
+        );
     }
 
     #[test]

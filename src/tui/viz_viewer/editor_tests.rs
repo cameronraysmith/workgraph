@@ -9,13 +9,13 @@ mod tui_editor_tests {
     use std::collections::HashMap;
 
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     use crate::commands::viz::VizOutput;
     use crate::tui::viz_viewer::render;
     use crate::tui::viz_viewer::state::{
-        editor_text, FocusedPanel, InputMode, InspectorSubFocus, RightPanelTab, VizApp,
+        FocusedPanel, InputMode, InspectorSubFocus, RightPanelTab, VizApp, editor_text,
     };
 
     // ── Helpers ──────────────────────────────────────────────────────────
@@ -88,10 +88,8 @@ mod tui_editor_tests {
                         &mut app.chat.editor,
                     );
                 } else {
-                    app.editor_handler.on_key_event(
-                        KeyEvent::new(code, modifiers),
-                        &mut app.chat.editor,
-                    );
+                    app.editor_handler
+                        .on_key_event(KeyEvent::new(code, modifiers), &mut app.chat.editor);
                 }
             }
         }

@@ -71,8 +71,12 @@ fn run_verify_command(verify_cmd: &str, project_root: &Path) -> Result<()> {
     if status.success() {
         Ok(())
     } else {
-        let stdout = stdout_handle.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
-        let stderr = stderr_handle.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
+        let stdout = stdout_handle
+            .map(|h| h.join().unwrap_or_default())
+            .unwrap_or_default();
+        let stderr = stderr_handle
+            .map(|h| h.join().unwrap_or_default())
+            .unwrap_or_default();
         let mut combined = stderr;
         if !stdout.is_empty() {
             if !combined.is_empty() {
@@ -81,7 +85,10 @@ fn run_verify_command(verify_cmd: &str, project_root: &Path) -> Result<()> {
             combined.push_str(&stdout);
         }
         let truncated: String = combined.chars().take(500).collect();
-        let code = status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".to_string());
+        let code = status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".to_string());
         anyhow::bail!(
             "Verify command failed (exit code {}): {}\nOutput: {}",
             code,
@@ -96,7 +103,13 @@ pub fn run(dir: &Path, id: &str, converged: bool, skip_verify: bool) -> Result<(
     run_inner(dir, id, converged, skip_verify, is_agent)
 }
 
-fn run_inner(dir: &Path, id: &str, converged: bool, skip_verify: bool, is_agent: bool) -> Result<()> {
+fn run_inner(
+    dir: &Path,
+    id: &str,
+    converged: bool,
+    skip_verify: bool,
+    is_agent: bool,
+) -> Result<()> {
     let (mut graph, path) = super::load_workgraph_mut(dir)?;
 
     let task = graph.get_task_mut_or_err(id)?;

@@ -495,11 +495,8 @@ mod tests {
 
     #[tokio::test]
     async fn send_rich_works() {
-        let router = NotificationRouter::new(
-            vec![mock("email", false)],
-            vec![],
-            vec!["email".into()],
-        );
+        let router =
+            NotificationRouter::new(vec![mock("email", false)], vec![], vec!["email".into()]);
 
         let msg = RichMessage {
             plain_text: "hello".into(),
@@ -517,11 +514,18 @@ mod tests {
     #[test]
     fn available_channels_lists_all() {
         let router = NotificationRouter::new(
-            vec![mock("telegram", false), mock("email", false), mock("sms", false)],
+            vec![
+                mock("telegram", false),
+                mock("email", false),
+                mock("sms", false),
+            ],
             vec![],
             vec![],
         );
-        assert_eq!(router.available_channels(), vec!["telegram", "email", "sms"]);
+        assert_eq!(
+            router.available_channels(),
+            vec!["telegram", "email", "sms"]
+        );
     }
 
     #[test]
@@ -612,9 +616,9 @@ mod tests {
         // First channel fails → falls to second, second fails → falls to third
         let router = NotificationRouter::new(
             vec![
-                mock("telegram", true),  // fails
-                mock("sms", true),       // fails
-                mock("email", false),    // succeeds
+                mock("telegram", true), // fails
+                mock("sms", true),      // fails
+                mock("email", false),   // succeeds
             ],
             vec![RoutingRule {
                 event_type: EventType::Urgent,
@@ -715,9 +719,18 @@ mod tests {
         assert!(router.get_channel("nonexistent").is_none());
 
         // Verify channel types
-        assert_eq!(router.get_channel("telegram").unwrap().channel_type(), "telegram");
-        assert_eq!(router.get_channel("webhook").unwrap().channel_type(), "webhook");
-        assert_eq!(router.get_channel("matrix").unwrap().channel_type(), "matrix");
+        assert_eq!(
+            router.get_channel("telegram").unwrap().channel_type(),
+            "telegram"
+        );
+        assert_eq!(
+            router.get_channel("webhook").unwrap().channel_type(),
+            "webhook"
+        );
+        assert_eq!(
+            router.get_channel("matrix").unwrap().channel_type(),
+            "matrix"
+        );
     }
 
     #[test]

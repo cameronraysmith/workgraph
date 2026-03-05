@@ -18,7 +18,7 @@
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use lettre::message::{header::ContentType, Mailbox, MultiPart, SinglePart};
+use lettre::message::{Mailbox, MultiPart, SinglePart, header::ContentType};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
@@ -65,10 +65,7 @@ impl EmailConfig {
             .channels
             .get("email")
             .context("no [email] section in notify config")?;
-        let cfg: Self = val
-            .clone()
-            .try_into()
-            .context("invalid [email] config")?;
+        let cfg: Self = val.clone().try_into().context("invalid [email] config")?;
         Ok(cfg)
     }
 }
@@ -175,17 +172,17 @@ impl EmailChannel {
                     .context("failed to build email message")?
             };
 
-            let response = transport
-                .send(email)
-                .await
-                .context("SMTP send failed")?;
+            let response = transport.send(email).await.context("SMTP send failed")?;
 
             // Use the SMTP response code as part of the message id.
             message_ids.push(format!("email:{}", response.code()));
         }
 
         Ok(MessageId(
-            message_ids.first().cloned().unwrap_or_else(|| "email:sent".to_string()),
+            message_ids
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "email:sent".to_string()),
         ))
     }
 }
@@ -250,7 +247,10 @@ impl NotificationChannel for EmailChannel {
         }
 
         // Build an HTML body with action buttons rendered as styled links.
-        let mut html = format!("<p>{}</p>\n<p><strong>Actions:</strong></p>\n<ul>\n", html_escape(message));
+        let mut html = format!(
+            "<p>{}</p>\n<p><strong>Actions:</strong></p>\n<ul>\n",
+            html_escape(message)
+        );
         for action in actions {
             let style = match action.style {
                 ActionStyle::Primary => "color: green; font-weight: bold",

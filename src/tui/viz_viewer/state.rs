@@ -418,7 +418,7 @@ impl LayoutMode {
 
     /// Convert to a config string.
     #[allow(dead_code)]
-    pub fn to_config_str(&self) -> &'static str {
+    pub fn to_config_str(self) -> &'static str {
         match self {
             Self::ThirdInspector => "1/3",
             Self::HalfInspector => "1/2",
@@ -443,7 +443,10 @@ impl LayoutMode {
     pub fn has_inspector(&self) -> bool {
         matches!(
             self,
-            Self::ThirdInspector | Self::HalfInspector | Self::TwoThirdsInspector | Self::FullInspector
+            Self::ThirdInspector
+                | Self::HalfInspector
+                | Self::TwoThirdsInspector
+                | Self::FullInspector
         )
     }
 
@@ -1501,7 +1504,8 @@ impl VizApp {
             right_panel_visible: true,
             focused_panel: FocusedPanel::Graph,
             right_panel_tab: RightPanelTab::Chat,
-            right_panel_percent: LayoutMode::from_config_str(&config.tui.default_inspector_size).panel_percent(),
+            right_panel_percent: LayoutMode::from_config_str(&config.tui.default_inspector_size)
+                .panel_percent(),
             hud_size: HudSize::Normal,
             layout_mode: LayoutMode::from_config_str(&config.tui.default_inspector_size),
 
@@ -1511,7 +1515,9 @@ impl VizApp {
             chat_input_dismissed: false,
             inspector_sub_focus: InspectorSubFocus::ChatHistory,
             task_form: None,
-            text_prompt: TextPromptState { editor: new_emacs_editor() },
+            text_prompt: TextPromptState {
+                editor: new_emacs_editor(),
+            },
             chat: ChatState::default(),
             agent_monitor: AgentMonitorState::default(),
             agent_streams: HashMap::new(),
@@ -2882,15 +2888,9 @@ impl VizApp {
                     format_tokens(cache_total)
                 ));
             } else {
-                lines.push(format!(
-                    "  Input:  {}",
-                    format_tokens(usage.input_tokens)
-                ));
+                lines.push(format!("  Input:  {}", format_tokens(usage.input_tokens)));
             }
-            lines.push(format!(
-                "  Output: {}",
-                format_tokens(usage.output_tokens)
-            ));
+            lines.push(format!("  Output: {}", format_tokens(usage.output_tokens)));
             if usage.cache_read_input_tokens > 0 || usage.cache_creation_input_tokens > 0 {
                 lines.push(format!(
                     "  Cache read:  {}",
@@ -3125,15 +3125,9 @@ impl VizApp {
                     format_tokens(cache_total)
                 ));
             } else {
-                lines.push(format!(
-                    "  Input:  {}",
-                    format_tokens(usage.input_tokens)
-                ));
+                lines.push(format!("  Input:  {}", format_tokens(usage.input_tokens)));
             }
-            lines.push(format!(
-                "  Output: {}",
-                format_tokens(usage.output_tokens)
-            ));
+            lines.push(format!("  Output: {}", format_tokens(usage.output_tokens)));
             if usage.cache_read_input_tokens > 0 || usage.cache_creation_input_tokens > 0 {
                 lines.push(format!(
                     "  Cache read:  {}",
@@ -3757,7 +3751,9 @@ impl VizApp {
             chat_input_dismissed: false,
             inspector_sub_focus: InspectorSubFocus::ChatHistory,
             task_form: None,
-            text_prompt: TextPromptState { editor: new_emacs_editor() },
+            text_prompt: TextPromptState {
+                editor: new_emacs_editor(),
+            },
             chat: ChatState::default(),
             agent_monitor: AgentMonitorState::default(),
             agent_streams: HashMap::new(),
@@ -3829,7 +3825,9 @@ impl VizApp {
                 self.focused_panel = FocusedPanel::Graph;
                 return;
             }
-            LayoutMode::ThirdInspector | LayoutMode::HalfInspector | LayoutMode::TwoThirdsInspector => {}
+            LayoutMode::ThirdInspector
+            | LayoutMode::HalfInspector
+            | LayoutMode::TwoThirdsInspector => {}
         }
         self.focused_panel = match self.focused_panel {
             FocusedPanel::Graph => {
@@ -3877,7 +3875,9 @@ impl VizApp {
     fn apply_layout_mode(&mut self, mode: LayoutMode) {
         self.layout_mode = mode;
         match mode {
-            LayoutMode::ThirdInspector | LayoutMode::HalfInspector | LayoutMode::TwoThirdsInspector => {
+            LayoutMode::ThirdInspector
+            | LayoutMode::HalfInspector
+            | LayoutMode::TwoThirdsInspector => {
                 self.right_panel_visible = true;
                 self.right_panel_percent = mode.panel_percent();
             }

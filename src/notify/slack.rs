@@ -40,10 +40,7 @@ impl SlackConfig {
             .channels
             .get("slack")
             .context("no [slack] section in notify config")?;
-        let cfg: Self = val
-            .clone()
-            .try_into()
-            .context("invalid [slack] config")?;
+        let cfg: Self = val.clone().try_into().context("invalid [slack] config")?;
         Ok(cfg)
     }
 }
@@ -128,11 +125,7 @@ impl SlackChannel {
     }
 
     /// Call a Slack Web API method with a JSON body.
-    async fn api_call(
-        &self,
-        method: &str,
-        body: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
+    async fn api_call(&self, method: &str, body: &serde_json::Value) -> Result<serde_json::Value> {
         let url = format!("https://slack.com/api/{method}");
         let resp = self
             .client
@@ -167,10 +160,7 @@ impl SlackChannel {
 
     /// Extract the message timestamp (ts) from a chat.postMessage response.
     fn extract_ts(json: &serde_json::Value) -> MessageId {
-        let ts = json
-            .get("ts")
-            .and_then(|t| t.as_str())
-            .unwrap_or("0");
+        let ts = json.get("ts").and_then(|t| t.as_str()).unwrap_or("0");
         MessageId(ts.to_string())
     }
 }
@@ -195,10 +185,7 @@ impl NotificationChannel for SlackChannel {
         let channel = self.resolve_channel(target);
 
         // Use markdown for Block Kit if available, otherwise plain text.
-        let text = message
-            .markdown
-            .as_deref()
-            .unwrap_or(&message.plain_text);
+        let text = message.markdown.as_deref().unwrap_or(&message.plain_text);
 
         let blocks = serde_json::json!([section_block(text)]);
 
@@ -289,10 +276,7 @@ impl NotificationChannel for SlackChannel {
                     continue;
                 }
 
-                let _wss_url = json
-                    .get("url")
-                    .and_then(|u| u.as_str())
-                    .unwrap_or("");
+                let _wss_url = json.get("url").and_then(|u| u.as_str()).unwrap_or("");
 
                 // NOTE: Full WebSocket handling requires tokio-tungstenite or similar.
                 // For now, we log the connection URL. A full implementation would:

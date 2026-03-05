@@ -89,8 +89,8 @@ fn default_urgent_timeout() -> u64 {
 impl NotifyConfig {
     /// Load from an explicit path.
     pub fn load_from(path: &Path) -> Result<Self> {
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("reading {}", path.display()))?;
+        let content =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let config: Self =
             toml::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
         Ok(config)
@@ -99,10 +99,10 @@ impl NotifyConfig {
     /// Load from the default location (`~/.config/workgraph/notify.toml`).
     /// Returns `Ok(None)` if the file does not exist.
     pub fn load_default() -> Result<Option<Self>> {
-        if let Some(path) = default_config_path() {
-            if path.exists() {
-                return Ok(Some(Self::load_from(&path)?));
-            }
+        if let Some(path) = default_config_path()
+            && path.exists()
+        {
+            return Ok(Some(Self::load_from(&path)?));
         }
         Ok(None)
     }
@@ -171,7 +171,10 @@ impl NotifyConfig {
         if self.routing.default.is_empty() {
             lines.push("Default channels: (none)".to_string());
         } else {
-            lines.push(format!("Default channels: {}", self.routing.default.join(", ")));
+            lines.push(format!(
+                "Default channels: {}",
+                self.routing.default.join(", ")
+            ));
         }
 
         if !self.routing.urgent.is_empty() {
@@ -191,7 +194,10 @@ impl NotifyConfig {
         }
 
         if !self.routing.digest.is_empty() {
-            lines.push(format!("Digest channels: {}", self.routing.digest.join(", ")));
+            lines.push(format!(
+                "Digest channels: {}",
+                self.routing.digest.join(", ")
+            ));
         }
 
         let configured: Vec<&String> = self.channels.keys().collect();
@@ -284,13 +290,25 @@ to = ["user@example.com"]
         let rules = config.to_routing_rules();
         assert_eq!(rules.len(), 2);
 
-        let urgent_rule = rules.iter().find(|r| r.event_type == EventType::Urgent).unwrap();
+        let urgent_rule = rules
+            .iter()
+            .find(|r| r.event_type == EventType::Urgent)
+            .unwrap();
         assert_eq!(urgent_rule.channels, vec!["telegram", "sms"]);
-        assert_eq!(urgent_rule.escalation_timeout, Some(Duration::from_secs(1800)));
+        assert_eq!(
+            urgent_rule.escalation_timeout,
+            Some(Duration::from_secs(1800))
+        );
 
-        let approval_rule = rules.iter().find(|r| r.event_type == EventType::Approval).unwrap();
+        let approval_rule = rules
+            .iter()
+            .find(|r| r.event_type == EventType::Approval)
+            .unwrap();
         assert_eq!(approval_rule.channels, vec!["telegram"]);
-        assert_eq!(approval_rule.escalation_timeout, Some(Duration::from_secs(900)));
+        assert_eq!(
+            approval_rule.escalation_timeout,
+            Some(Duration::from_secs(900))
+        );
     }
 
     #[test]

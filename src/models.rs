@@ -109,7 +109,12 @@ impl ModelRegistry {
                 cost_per_1m_input: 5.0,
                 cost_per_1m_output: 25.0,
                 context_window: 1_000_000,
-                capabilities: vec!["coding".into(), "analysis".into(), "creative".into(), "reasoning".into()],
+                capabilities: vec![
+                    "coding".into(),
+                    "analysis".into(),
+                    "creative".into(),
+                    "reasoning".into(),
+                ],
                 tier: ModelTier::Frontier,
             },
             ModelEntry {
@@ -163,7 +168,12 @@ impl ModelRegistry {
                 cost_per_1m_input: 1.25,
                 cost_per_1m_output: 10.0,
                 context_window: 1_000_000,
-                capabilities: vec!["coding".into(), "analysis".into(), "creative".into(), "reasoning".into()],
+                capabilities: vec![
+                    "coding".into(),
+                    "analysis".into(),
+                    "creative".into(),
+                    "reasoning".into(),
+                ],
                 tier: ModelTier::Mid,
             },
             ModelEntry {
@@ -253,11 +263,9 @@ impl ModelRegistry {
     pub fn save(&self, workgraph_dir: &Path) -> Result<()> {
         let path = workgraph_dir.join("models.yaml");
 
-        let content = serde_yaml::to_string(self)
-            .context("Failed to serialize model registry")?;
+        let content = serde_yaml::to_string(self).context("Failed to serialize model registry")?;
 
-        fs::write(&path, content)
-            .with_context(|| format!("Failed to write {}", path.display()))?;
+        fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))?;
 
         Ok(())
     }
@@ -269,7 +277,9 @@ impl ModelRegistry {
 
     /// Get the default model entry
     pub fn get_default(&self) -> Option<&ModelEntry> {
-        self.default_model.as_ref().and_then(|id| self.models.get(id))
+        self.default_model
+            .as_ref()
+            .and_then(|id| self.models.get(id))
     }
 
     /// Set the default model, returning an error if the model isn't in the registry
@@ -293,7 +303,7 @@ impl ModelRegistry {
     pub fn list(&self, tier: Option<&ModelTier>) -> Vec<&ModelEntry> {
         self.models
             .values()
-            .filter(|m| tier.map_or(true, |t| &m.tier == t))
+            .filter(|m| tier.is_none_or(|t| &m.tier == t))
             .collect()
     }
 
@@ -370,7 +380,10 @@ mod tests {
 
     #[test]
     fn test_tier_roundtrip() {
-        assert_eq!("frontier".parse::<ModelTier>().unwrap(), ModelTier::Frontier);
+        assert_eq!(
+            "frontier".parse::<ModelTier>().unwrap(),
+            ModelTier::Frontier
+        );
         assert_eq!("mid".parse::<ModelTier>().unwrap(), ModelTier::Mid);
         assert_eq!("budget".parse::<ModelTier>().unwrap(), ModelTier::Budget);
         assert!("unknown".parse::<ModelTier>().is_err());
@@ -469,9 +482,21 @@ mod tests {
     fn test_model_pricing_sanity() {
         let reg = ModelRegistry::with_defaults();
         for model in reg.models.values() {
-            assert!(model.cost_per_1m_input >= 0.0, "Negative input cost for {}", model.id);
-            assert!(model.cost_per_1m_output >= 0.0, "Negative output cost for {}", model.id);
-            assert!(model.context_window > 0, "Zero context window for {}", model.id);
+            assert!(
+                model.cost_per_1m_input >= 0.0,
+                "Negative input cost for {}",
+                model.id
+            );
+            assert!(
+                model.cost_per_1m_output >= 0.0,
+                "Negative output cost for {}",
+                model.id
+            );
+            assert!(
+                model.context_window > 0,
+                "Zero context window for {}",
+                model.id
+            );
         }
     }
 }

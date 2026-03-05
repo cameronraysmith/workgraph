@@ -43,10 +43,7 @@ impl DiscordConfig {
             .channels
             .get("discord")
             .context("no [discord] section in notify config")?;
-        let cfg: Self = val
-            .clone()
-            .try_into()
-            .context("invalid [discord] config")?;
+        let cfg: Self = val.clone().try_into().context("invalid [discord] config")?;
         Ok(cfg)
     }
 }
@@ -57,10 +54,7 @@ impl DiscordConfig {
 
 /// Build a Discord embed object from a RichMessage.
 fn build_embed(message: &RichMessage) -> serde_json::Value {
-    let description = message
-        .markdown
-        .as_deref()
-        .unwrap_or(&message.plain_text);
+    let description = message.markdown.as_deref().unwrap_or(&message.plain_text);
 
     serde_json::json!({
         "description": description,
@@ -123,11 +117,7 @@ impl DiscordChannel {
     }
 
     /// Send a POST request to the Discord API.
-    async fn api_post(
-        &self,
-        path: &str,
-        body: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
+    async fn api_post(&self, path: &str, body: &serde_json::Value) -> Result<serde_json::Value> {
         let url = format!("{DISCORD_API_BASE}{path}");
         let resp = self
             .client
@@ -140,7 +130,10 @@ impl DiscordChannel {
             .context("Discord API request failed")?;
 
         let status = resp.status();
-        let text = resp.text().await.context("failed to read Discord API response")?;
+        let text = resp
+            .text()
+            .await
+            .context("failed to read Discord API response")?;
 
         if !status.is_success() {
             anyhow::bail!("Discord API error ({}): {}", status, text);
@@ -158,10 +151,7 @@ impl DiscordChannel {
 
     /// Extract the message ID from a Create Message response.
     fn extract_message_id(json: &serde_json::Value) -> MessageId {
-        let id = json
-            .get("id")
-            .and_then(|i| i.as_str())
-            .unwrap_or("0");
+        let id = json.get("id").and_then(|i| i.as_str()).unwrap_or("0");
         MessageId(id.to_string())
     }
 }

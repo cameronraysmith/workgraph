@@ -304,8 +304,8 @@ pub fn run(
         session_id: None,
         wait_condition: None,
         checkpoint: None,
-            resurrection_count: 0,
-            last_resurrected_at: None,
+        resurrection_count: 0,
+        last_resurrected_at: None,
     };
 
     // Add task to graph
@@ -367,7 +367,10 @@ pub fn run(
 
     if paused {
         println!("Added task (draft): {} ({})", title, task_id);
-        println!("  Task is paused (draft mode). When ready, run: wg publish {}", task_id);
+        println!(
+            "  Task is paused (draft mode). When ready, run: wg publish {}",
+            task_id
+        );
     } else {
         println!("Added task: {} ({})", title, task_id);
     }
@@ -556,8 +559,8 @@ fn add_task_directly(
         session_id: None,
         wait_condition: None,
         checkpoint: None,
-            resurrection_count: 0,
-            last_resurrected_at: None,
+        resurrection_count: 0,
+        last_resurrected_at: None,
     };
 
     graph.add_node(Node::Task(task));

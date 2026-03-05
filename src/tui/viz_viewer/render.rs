@@ -273,11 +273,7 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
 
     // Text prompt overlay
     if let InputMode::TextPrompt(ref action) = app.input_mode {
-        app.last_text_prompt_area = draw_text_prompt(
-            frame,
-            action,
-            &mut app.text_prompt.editor,
-        );
+        app.last_text_prompt_area = draw_text_prompt(frame, action, &mut app.text_prompt.editor);
     } else {
         app.last_text_prompt_area = Rect::default();
     }
@@ -1412,8 +1408,7 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
                     // Format: ┌─ ToolName ────
                     // "┌─ " = 7 bytes (┌=3 + ─=3 + space=1).
                     let after_prefix = lt.get(7..).unwrap_or("");
-                    let name_end = after_prefix.find(|c: char| c == '─' || c == ' ')
-                        .unwrap_or(after_prefix.len());
+                    let name_end = after_prefix.find(['─', ' ']).unwrap_or(after_prefix.len());
                     let tool_name = after_prefix[..name_end].trim();
                     let rest_start = 7 + name_end; // byte offset into lt
                     let rest = lt.get(rest_start..).unwrap_or("");
@@ -1457,7 +1452,7 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
                     }
                 } else {
                     // Normal line — standard wrapping.
-                    out.extend(wrap_line_spans(&[line.clone()], text_width));
+                    out.extend(wrap_line_spans(std::slice::from_ref(line), text_width));
                 }
             }
             out
@@ -1590,29 +1585,128 @@ fn draw_chat_input(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     let is_editing = app.input_mode == InputMode::ChatInput;
     let has_text = !super::state::editor_is_empty(&app.chat.editor);
     app.last_chat_input_area = area;
-    let border_color = if is_editing { Color::Magenta } else { Color::DarkGray };
-    let prompt_color = if is_editing { Color::LightMagenta } else { Color::DarkGray };
+    let border_color = if is_editing {
+        Color::Magenta
+    } else {
+        Color::DarkGray
+    };
+    let prompt_color = if is_editing {
+        Color::LightMagenta
+    } else {
+        Color::DarkGray
+    };
     if is_editing || has_text {
-        let sep = Line::from(Span::styled("─".repeat(area.width as usize), Style::default().fg(border_color).add_modifier(if is_editing { Modifier::BOLD } else { Modifier::empty() })));
-        if area.height >= 2 { frame.render_widget(Paragraph::new(sep), Rect { x: area.x, y: area.y, width: area.width, height: 1 }); }
+        let sep = Line::from(Span::styled(
+            "─".repeat(area.width as usize),
+            Style::default()
+                .fg(border_color)
+                .add_modifier(if is_editing {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        ));
+        if area.height >= 2 {
+            frame.render_widget(
+                Paragraph::new(sep),
+                Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: area.width,
+                    height: 1,
+                },
+            );
+        }
         let input_y = if area.height >= 2 { area.y + 1 } else { area.y };
-        let input_h = if area.height >= 2 { area.height - 1 } else { area.height };
+        let input_h = if area.height >= 2 {
+            area.height - 1
+        } else {
+            area.height
+        };
         let prefix_len: u16 = 2;
         if input_h > 0 {
-            frame.render_widget(Paragraph::new(Line::from(Span::styled("> ", Style::default().fg(prompt_color).add_modifier(if is_editing { Modifier::BOLD } else { Modifier::empty() })))), Rect { x: area.x, y: input_y, width: prefix_len, height: 1 });
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "> ",
+                    Style::default()
+                        .fg(prompt_color)
+                        .add_modifier(if is_editing {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
+                ))),
+                Rect {
+                    x: area.x,
+                    y: input_y,
+                    width: prefix_len,
+                    height: 1,
+                },
+            );
         }
-        let editor_area = Rect { x: area.x + prefix_len, y: input_y, width: area.width.saturating_sub(prefix_len), height: input_h };
-        let text_color = if is_editing { Color::Reset } else { Color::DarkGray };
-        let theme = EditorTheme::default().hide_status_line().base(Style::default().fg(text_color)).cursor_style(if is_editing { Style::default().fg(Color::Black).bg(Color::White) } else { Style::default().fg(text_color) });
-        frame.render_widget(EditorView::new(&mut app.chat.editor).wrap(true).theme(theme), editor_area);
+        let editor_area = Rect {
+            x: area.x + prefix_len,
+            y: input_y,
+            width: area.width.saturating_sub(prefix_len),
+            height: input_h,
+        };
+        let text_color = if is_editing {
+            Color::Reset
+        } else {
+            Color::DarkGray
+        };
+        let theme = EditorTheme::default()
+            .hide_status_line()
+            .base(Style::default().fg(text_color))
+            .cursor_style(if is_editing {
+                Style::default().fg(Color::Black).bg(Color::White)
+            } else {
+                Style::default().fg(text_color)
+            });
+        frame.render_widget(
+            EditorView::new(&mut app.chat.editor)
+                .wrap(true)
+                .theme(theme),
+            editor_area,
+        );
         if !app.chat.pending_attachments.is_empty() {
-            let att_text: String = app.chat.pending_attachments.iter().map(|a| format!("[{}]", a.filename)).collect::<Vec<_>>().join(" ");
+            let att_text: String = app
+                .chat
+                .pending_attachments
+                .iter()
+                .map(|a| format!("[{}]", a.filename))
+                .collect::<Vec<_>>()
+                .join(" ");
             let att_y = (input_y + input_h).min(area.y + area.height.saturating_sub(1));
-            frame.render_widget(Paragraph::new(Line::from(Span::styled(format!(" \u{1F4CE} {}", att_text), Style::default().fg(Color::Green)))), Rect { x: area.x, y: att_y, width: area.width, height: 1 });
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    format!(" \u{1F4CE} {}", att_text),
+                    Style::default().fg(Color::Green),
+                ))),
+                Rect {
+                    x: area.x,
+                    y: att_y,
+                    width: area.width,
+                    height: 1,
+                },
+            );
         }
     } else {
-        let hint_text = if app.chat.pending_attachments.is_empty() { " c/Enter: type  \u{2191}\u{2193}: scroll".to_string() } else { format!(" c/Enter: type  \u{2191}\u{2193}: scroll  {} attached", app.chat.pending_attachments.len()) };
-        frame.render_widget(Paragraph::new(Line::from(Span::styled(hint_text, Style::default().fg(Color::DarkGray)))), area);
+        let hint_text = if app.chat.pending_attachments.is_empty() {
+            " c/Enter: type  \u{2191}\u{2193}: scroll".to_string()
+        } else {
+            format!(
+                " c/Enter: type  \u{2191}\u{2193}: scroll  {} attached",
+                app.chat.pending_attachments.len()
+            )
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                hint_text,
+                Style::default().fg(Color::DarkGray),
+            ))),
+            area,
+        );
     }
 }
 
@@ -1646,7 +1740,6 @@ fn count_visual_lines(input: &str, usable_width: usize) -> usize {
     }
     count
 }
-
 
 /// Draw the Log tab content (panel 2) — reverse chronological activity log.
 fn draw_log_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
@@ -2177,23 +2270,98 @@ fn draw_message_input(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     use edtui::{EditorTheme, EditorView};
     let is_editing = app.input_mode == InputMode::MessageInput;
     let has_text = !super::state::editor_is_empty(&app.messages_panel.editor);
-    let border_color = if is_editing { Color::Magenta } else { Color::DarkGray };
-    let prompt_color = if is_editing { Color::LightMagenta } else { Color::DarkGray };
+    let border_color = if is_editing {
+        Color::Magenta
+    } else {
+        Color::DarkGray
+    };
+    let prompt_color = if is_editing {
+        Color::LightMagenta
+    } else {
+        Color::DarkGray
+    };
     if is_editing || has_text {
-        let sep = Line::from(Span::styled("─".repeat(area.width as usize), Style::default().fg(border_color).add_modifier(if is_editing { Modifier::BOLD } else { Modifier::empty() })));
-        if area.height >= 2 { frame.render_widget(Paragraph::new(sep), Rect { x: area.x, y: area.y, width: area.width, height: 1 }); }
+        let sep = Line::from(Span::styled(
+            "─".repeat(area.width as usize),
+            Style::default()
+                .fg(border_color)
+                .add_modifier(if is_editing {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        ));
+        if area.height >= 2 {
+            frame.render_widget(
+                Paragraph::new(sep),
+                Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: area.width,
+                    height: 1,
+                },
+            );
+        }
         let input_y = if area.height >= 2 { area.y + 1 } else { area.y };
-        let input_h = if area.height >= 2 { area.height - 1 } else { area.height };
+        let input_h = if area.height >= 2 {
+            area.height - 1
+        } else {
+            area.height
+        };
         let prefix_len: u16 = 2;
         if input_h > 0 {
-            frame.render_widget(Paragraph::new(Line::from(Span::styled("> ", Style::default().fg(prompt_color).add_modifier(if is_editing { Modifier::BOLD } else { Modifier::empty() })))), Rect { x: area.x, y: input_y, width: prefix_len, height: 1 });
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "> ",
+                    Style::default()
+                        .fg(prompt_color)
+                        .add_modifier(if is_editing {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
+                ))),
+                Rect {
+                    x: area.x,
+                    y: input_y,
+                    width: prefix_len,
+                    height: 1,
+                },
+            );
         }
-        let editor_area = Rect { x: area.x + prefix_len, y: input_y, width: area.width.saturating_sub(prefix_len), height: input_h };
-        let text_color = if is_editing { Color::Reset } else { Color::DarkGray };
-        let theme = EditorTheme::default().hide_status_line().base(Style::default().fg(text_color)).cursor_style(if is_editing { Style::default().fg(Color::Black).bg(Color::White) } else { Style::default().fg(text_color) });
-        frame.render_widget(EditorView::new(&mut app.messages_panel.editor).wrap(true).theme(theme), editor_area);
+        let editor_area = Rect {
+            x: area.x + prefix_len,
+            y: input_y,
+            width: area.width.saturating_sub(prefix_len),
+            height: input_h,
+        };
+        let text_color = if is_editing {
+            Color::Reset
+        } else {
+            Color::DarkGray
+        };
+        let theme = EditorTheme::default()
+            .hide_status_line()
+            .base(Style::default().fg(text_color))
+            .cursor_style(if is_editing {
+                Style::default().fg(Color::Black).bg(Color::White)
+            } else {
+                Style::default().fg(text_color)
+            });
+        frame.render_widget(
+            EditorView::new(&mut app.messages_panel.editor)
+                .wrap(true)
+                .theme(theme),
+            editor_area,
+        );
     } else {
-        frame.render_widget(Paragraph::new(Line::from(Span::styled(" Enter: compose  \u{2191}\u{2193}: scroll", Style::default().fg(Color::DarkGray)))), area);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                " Enter: compose  \u{2191}\u{2193}: scroll",
+                Style::default().fg(Color::DarkGray),
+            ))),
+            area,
+        );
     }
 }
 
@@ -2531,16 +2699,11 @@ fn draw_agents_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
                     if let Some(ref usage) = phase.token_usage {
                         let cache_total =
                             usage.cache_read_input_tokens + usage.cache_creation_input_tokens;
-                        let mut tok_parts = vec![format!(
-                            "→{}",
-                            format_tokens(usage.input_tokens)
-                        )];
+                        let mut tok_parts = vec![format!("→{}", format_tokens(usage.input_tokens))];
                         if cache_total > 0 {
-                            tok_parts
-                                .push(format!("+{} cached", format_tokens(cache_total)));
+                            tok_parts.push(format!("+{} cached", format_tokens(cache_total)));
                         }
-                        tok_parts
-                            .push(format!("←{}", format_tokens(usage.output_tokens)));
+                        tok_parts.push(format!("←{}", format_tokens(usage.output_tokens)));
                         if usage.cost_usd > 0.0 {
                             tok_parts.push(format!("${:.4}", usage.cost_usd));
                         }
@@ -2903,20 +3066,38 @@ fn draw_text_prompt(
     };
     let size = frame.area();
     if is_multiline {
-        let width = (size.width * 3 / 4).max(50).min(size.width.saturating_sub(4));
+        let width = (size.width * 3 / 4)
+            .max(50)
+            .min(size.width.saturating_sub(4));
         let height = (size.height / 2).max(10).min(size.height.saturating_sub(4));
         let x = (size.width.saturating_sub(width)) / 2;
         let y = (size.height.saturating_sub(height)) / 2;
         let area = Rect::new(x, y, width, height);
         frame.render_widget(Clear, area);
-        let block = Block::default().title(format!(" {} ", title)).borders(Borders::ALL).border_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        let block = Block::default()
+            .title(format!(" {} ", title))
+            .borders(Borders::ALL)
+            .border_style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            );
         let inner = block.inner(area);
         frame.render_widget(block, area);
         let edit_height = inner.height.saturating_sub(1);
         let edit_area = Rect::new(inner.x, inner.y, inner.width, edit_height);
-        let theme = EditorTheme::default().hide_status_line().base(Style::default().fg(Color::White)).cursor_style(Style::default().fg(Color::Black).bg(Color::Yellow));
+        let theme = EditorTheme::default()
+            .hide_status_line()
+            .base(Style::default().fg(Color::White))
+            .cursor_style(Style::default().fg(Color::Black).bg(Color::Yellow));
         frame.render_widget(EditorView::new(editor).wrap(true).theme(theme), edit_area);
-        frame.render_widget(Paragraph::new(vec![Line::from(Span::styled("Ctrl+Enter: submit  Esc: cancel", Style::default().fg(Color::DarkGray)))]), Rect::new(inner.x, inner.y + edit_height, inner.width, 1));
+        frame.render_widget(
+            Paragraph::new(vec![Line::from(Span::styled(
+                "Ctrl+Enter: submit  Esc: cancel",
+                Style::default().fg(Color::DarkGray),
+            ))]),
+            Rect::new(inner.x, inner.y + edit_height, inner.width, 1),
+        );
         area
     } else {
         let width = 50.min(size.width.saturating_sub(4));
@@ -2925,15 +3106,37 @@ fn draw_text_prompt(
         let y = (size.height.saturating_sub(height)) / 2;
         let area = Rect::new(x, y, width, height);
         frame.render_widget(Clear, area);
-        let block = Block::default().title(format!(" {} ", title)).borders(Borders::ALL).border_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        let block = Block::default()
+            .title(format!(" {} ", title))
+            .borders(Borders::ALL)
+            .border_style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            );
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        frame.render_widget(Paragraph::new(Line::from(Span::styled("> ", Style::default().fg(Color::Yellow)))), Rect::new(inner.x, inner.y, 2, 1));
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "> ",
+                Style::default().fg(Color::Yellow),
+            ))),
+            Rect::new(inner.x, inner.y, 2, 1),
+        );
         let editor_area = Rect::new(inner.x + 2, inner.y, inner.width.saturating_sub(2), 1);
-        let theme = EditorTheme::default().hide_status_line().base(Style::default().fg(Color::White)).cursor_style(Style::default().fg(Color::Black).bg(Color::Yellow));
+        let theme = EditorTheme::default()
+            .hide_status_line()
+            .base(Style::default().fg(Color::White))
+            .cursor_style(Style::default().fg(Color::Black).bg(Color::Yellow));
         frame.render_widget(EditorView::new(editor).theme(theme), editor_area);
         if inner.height >= 3 {
-            frame.render_widget(Paragraph::new(vec![Line::from(Span::styled("Enter: submit  Esc: cancel", Style::default().fg(Color::DarkGray)))]), Rect::new(inner.x, inner.y + 2, inner.width, 1));
+            frame.render_widget(
+                Paragraph::new(vec![Line::from(Span::styled(
+                    "Enter: submit  Esc: cancel",
+                    Style::default().fg(Color::DarkGray),
+                ))]),
+                Rect::new(inner.x, inner.y + 2, inner.width, 1),
+            );
         }
         area
     }
@@ -3304,7 +3507,11 @@ fn action_hints_parts(app: &VizApp) -> (&str, &str, Color, Vec<(&str, &str)>) {
         ),
         InputMode::TextPrompt(action) => {
             let keys = if matches!(action, TextPromptAction::EditDescription(_)) {
-                vec![("Ctrl-Enter", "submit"), ("Enter", "newline"), ("Esc", "cancel")]
+                vec![
+                    ("Ctrl-Enter", "submit"),
+                    ("Enter", "newline"),
+                    ("Esc", "cancel"),
+                ]
             } else {
                 vec![("Enter", "submit"), ("Esc", "cancel")]
             };
@@ -4090,7 +4297,6 @@ fn draw_add_endpoint_form(frame: &mut Frame, app: &VizApp, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-#[cfg(test)]
 #[cfg(test)]
 mod tests {
     use super::*;

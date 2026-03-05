@@ -366,7 +366,7 @@ fn test_agent_create_list_show_rm() {
     let json_output = wg_ok(&wg_dir, &["--json", "agent", "list"]);
     let parsed: serde_json::Value = serde_json::from_str(&json_output).unwrap();
     let agents = parsed.as_array().unwrap();
-    assert!(agents.len() >= 1, "Expected at least 1 agent in list");
+    assert!(!agents.is_empty(), "Expected at least 1 agent in list");
     let our_agent = agents
         .iter()
         .find(|a| a["name"] == "Integration Test Agent")
@@ -1017,7 +1017,7 @@ fn test_agency_pull_push_roundtrip() {
     // Project A: has a role
     let proj_a_dir = tmp.path().join("project-a").join(".workgraph");
     fs::create_dir_all(&proj_a_dir).unwrap();
-    save_graph(&WorkGraph::new(), &proj_a_dir.join("graph.jsonl")).unwrap();
+    save_graph(&WorkGraph::new(), proj_a_dir.join("graph.jsonl")).unwrap();
     wg_ok(&proj_a_dir, &["agency", "init"]);
 
     write_yaml(
@@ -1043,7 +1043,7 @@ lineage:
     // Project B: initially empty
     let proj_b_dir = tmp.path().join("project-b").join(".workgraph");
     fs::create_dir_all(&proj_b_dir).unwrap();
-    save_graph(&WorkGraph::new(), &proj_b_dir.join("graph.jsonl")).unwrap();
+    save_graph(&WorkGraph::new(), proj_b_dir.join("graph.jsonl")).unwrap();
     wg_ok(&proj_b_dir, &["agency", "init"]);
 
     // Push from A to a shared store
@@ -1128,7 +1128,7 @@ fn test_resources_basic_utilization() {
     };
     graph.add_node(Node::Task(done_task));
 
-    save_graph(&graph, &wg_dir.join("graph.jsonl")).unwrap();
+    save_graph(&graph, wg_dir.join("graph.jsonl")).unwrap();
 
     let output = wg_ok(&wg_dir, &["resources"]);
     assert!(
@@ -1168,7 +1168,7 @@ fn test_resources_over_budget_alert() {
     };
     graph.add_node(Node::Task(task));
 
-    save_graph(&graph, &wg_dir.join("graph.jsonl")).unwrap();
+    save_graph(&graph, wg_dir.join("graph.jsonl")).unwrap();
 
     let output = wg_ok(&wg_dir, &["resources"]);
     assert!(
@@ -1207,7 +1207,7 @@ fn test_resources_json_output() {
     };
     graph.add_node(Node::Task(task));
 
-    save_graph(&graph, &wg_dir.join("graph.jsonl")).unwrap();
+    save_graph(&graph, wg_dir.join("graph.jsonl")).unwrap();
 
     let output = wg_ok(&wg_dir, &["--json", "resources"]);
     let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();

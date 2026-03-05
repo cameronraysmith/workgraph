@@ -37,10 +37,7 @@ fn parse_condition(s: &str, graph: &workgraph::graph::WorkGraph) -> Result<WaitC
 
         // Validate the referenced task exists
         if graph.get_task(task_id).is_none() {
-            anyhow::bail!(
-                "Task '{}' referenced in condition does not exist",
-                task_id
-            );
+            anyhow::bail!("Task '{}' referenced in condition does not exist", task_id);
         }
 
         let status = match status_str {
@@ -61,8 +58,9 @@ fn parse_condition(s: &str, graph: &workgraph::graph::WorkGraph) -> Result<WaitC
     }
 
     if let Some(rest) = s.strip_prefix("timer:") {
-        let secs = parse_delay(rest)
-            .ok_or_else(|| anyhow::anyhow!("Invalid timer duration '{}'. Use e.g. 5m, 2h, 30s", rest))?;
+        let secs = parse_delay(rest).ok_or_else(|| {
+            anyhow::anyhow!("Invalid timer duration '{}'. Use e.g. 5m, 2h, 30s", rest)
+        })?;
         let resume_after = Utc::now() + chrono::Duration::seconds(secs as i64);
         return Ok(WaitCondition::Timer {
             resume_after: resume_after.to_rfc3339(),
@@ -76,7 +74,11 @@ fn parse_condition(s: &str, graph: &workgraph::graph::WorkGraph) -> Result<WaitC
         }
         let mtime = std::fs::metadata(path)
             .and_then(|m| m.modified())
-            .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
+            .map(|t| {
+                t.duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            })
             .unwrap_or(0);
         return Ok(WaitCondition::FileChanged {
             path: path.to_string(),
@@ -142,7 +144,8 @@ pub fn run(dir: &Path, id: &str, until: &str, checkpoint: Option<&str>) -> Resul
     let wait_spec = parse_wait_spec(until, &graph)?;
 
     // Now mutate
-    let task = graph.get_task_mut(id)
+    let task = graph
+        .get_task_mut(id)
         .ok_or_else(|| anyhow::anyhow!("Task '{}' not found", id))?;
 
     task.status = Status::Waiting;
@@ -159,23 +162,23 @@ pub fn run(dir: &Path, id: &str, until: &str, checkpoint: Option<&str>) -> Resul
     });
 
     // Update agent status to Parked if there's an assigned agent
-    if let Some(ref assigned) = task.assigned.clone() {
-        if let Ok(mut registry) = AgentRegistry::load_locked(dir) {
-            if let Some(agent) = registry.registry.get_agent_mut(assigned) {
+    if let Some(ref assigned) = task.assigned.clone()
+        && let Ok(mut registry) = AgentRegistry::load_locked(dir)
+    {
+        if let Some(agent) = registry.registry.get_agent_mut(assigned) {
+            agent.status = AgentStatus::Parked;
+            agent.completed_at = Some(Utc::now().to_rfc3339());
+        }
+        // Also try to find by task_id if assigned is not an agent registry key
+        for agent in registry.registry.agents.values_mut() {
+            if agent.task_id == id && agent.is_alive() {
                 agent.status = AgentStatus::Parked;
-                agent.completed_at = Some(Utc::now().to_rfc3339());
-            }
-            // Also try to find by task_id if assigned is not an agent registry key
-            for agent in registry.registry.agents.values_mut() {
-                if agent.task_id == id && agent.is_alive() {
-                    agent.status = AgentStatus::Parked;
-                    if agent.completed_at.is_none() {
-                        agent.completed_at = Some(Utc::now().to_rfc3339());
-                    }
+                if agent.completed_at.is_none() {
+                    agent.completed_at = Some(Utc::now().to_rfc3339());
                 }
             }
-            let _ = registry.save();
         }
+        let _ = registry.save();
     }
 
     save_graph(&graph, &path).context("Failed to save graph")?;
@@ -191,7 +194,7 @@ pub fn run(dir: &Path, id: &str, until: &str, checkpoint: Option<&str>) -> Resul
 mod tests {
     use super::*;
     use tempfile::tempdir;
-    use workgraph::graph::{Status, WaitCondition, WaitSpec, WorkGraph};
+    use workgraph::graph::{Status, WaitCondition, WaitSpec};
     use workgraph::parser::load_graph;
     use workgraph::test_helpers::{make_task_with_status as make_task, setup_workgraph};
 
@@ -210,7 +213,12 @@ mod tests {
 
         setup_workgraph(dir_path, vec![dep, main_task]);
 
-        let result = run(dir_path, "main", "task:dep-a=done", Some("Phase 1 complete"));
+        let result = run(
+            dir_path,
+            "main",
+            "task:dep-a=done",
+            Some("Phase 1 complete"),
+        );
         assert!(result.is_ok());
 
         let path = graph_path(dir_path);
@@ -260,10 +268,7 @@ mod tests {
 
         let result = run(dir_path, "main", "task:nonexistent=done", None);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("does not exist"));
+        assert!(result.unwrap_err().to_string().contains("does not exist"));
     }
 
     #[test]
@@ -411,7 +416,12 @@ mod tests {
 
         let result = run(dir_path, "main", "invalid-condition", None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Unknown condition"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unknown condition")
+        );
     }
 
     #[test]
@@ -464,7 +474,10 @@ mod tests {
 
         if let Some(WaitSpec::All(conditions)) = &task.wait_condition {
             match &conditions[0] {
-                WaitCondition::FileChanged { path, mtime_at_wait } => {
+                WaitCondition::FileChanged {
+                    path,
+                    mtime_at_wait,
+                } => {
                     assert!(path.contains("watched.txt"));
                     assert!(*mtime_at_wait > 0);
                 }

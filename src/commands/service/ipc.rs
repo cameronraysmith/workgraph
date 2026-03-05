@@ -716,8 +716,8 @@ fn handle_add_task(
         session_id: None,
         wait_condition: None,
         checkpoint: None,
-            resurrection_count: 0,
-            last_resurrected_at: None,
+        resurrection_count: 0,
+        last_resurrected_at: None,
         exec_mode: None,
     };
 
