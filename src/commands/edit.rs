@@ -341,17 +341,28 @@ pub fn run(
     // This prevents the race where a task gets assigned before its real
     // dependencies are wired (e.g., `wg add` then `wg edit --add-after`).
     if !add_after.is_empty() && changed {
-        let assign_task_id = format!("assign-{}", task_id);
-        if let Some(assign_task) = graph.get_task_mut(&assign_task_id) {
-            match assign_task.status {
-                workgraph::graph::Status::Open | workgraph::graph::Status::InProgress => {
-                    assign_task.status = workgraph::graph::Status::Abandoned;
-                    println!(
-                        "Abandoned assignment task '{}' (dependencies changed)",
-                        assign_task_id
-                    );
+        // Check dot-prefix first, fall back to legacy prefix
+        let assign_task_id = format!(".assign-{}", task_id);
+        let legacy_assign_id = format!("assign-{}", task_id);
+        let found_id = if graph.get_task(&assign_task_id).is_some() {
+            Some(assign_task_id)
+        } else if graph.get_task(&legacy_assign_id).is_some() {
+            Some(legacy_assign_id)
+        } else {
+            None
+        };
+        if let Some(ref aid) = found_id {
+            if let Some(assign_task) = graph.get_task_mut(aid) {
+                match assign_task.status {
+                    workgraph::graph::Status::Open | workgraph::graph::Status::InProgress => {
+                        assign_task.status = workgraph::graph::Status::Abandoned;
+                        println!(
+                            "Abandoned assignment task '{}' (dependencies changed)",
+                            aid
+                        );
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 

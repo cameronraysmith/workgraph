@@ -36,7 +36,7 @@ fn record_assigner_evaluation(
         None => return, // No assigner agent configured
     };
 
-    let assign_task_id = format!("assign-{}", task_id);
+    let assign_task_id = format!(".assign-{}", task_id);
     let eval = agency::Evaluation {
         id: format!("eval-assign-{}", task_id),
         task_id: assign_task_id,
@@ -491,7 +491,7 @@ mod tests {
                     .unwrap()
                     .to_str()
                     .unwrap()
-                    .starts_with("eval-assign-t1-")
+                    .starts_with("eval-.assign-t1-")
             })
             .collect();
         assert_eq!(
@@ -503,7 +503,7 @@ mod tests {
 
         // Load and verify the evaluation contents
         let eval = agency::load_evaluation(&eval_files[0].path()).unwrap();
-        assert_eq!(eval.task_id, "assign-t1");
+        assert_eq!(eval.task_id, ".assign-t1");
         assert_eq!(
             eval.agent_id, assigner_id,
             "Evaluation should be recorded against the assigner agent"
@@ -531,7 +531,7 @@ mod tests {
             1,
             "Assigner agent should have exactly 1 evaluation"
         );
-        assert_eq!(assigner.performance.evaluations[0].task_id, "assign-t1");
+        assert_eq!(assigner.performance.evaluations[0].task_id, ".assign-t1");
 
         // The actor agent should NOT have any evaluation from this assignment
         let actor = agency::find_agent_by_prefix(&agents_dir, &actor_id).unwrap();
@@ -759,7 +759,7 @@ mod tests {
                     .unwrap()
                     .to_str()
                     .unwrap()
-                    .starts_with("eval-assign-t1-")
+                    .starts_with("eval-.assign-t1-")
             })
             .collect();
         assert_eq!(

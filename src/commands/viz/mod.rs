@@ -94,6 +94,7 @@ impl std::fmt::Display for LayoutMode {
 }
 
 /// Options for the viz command
+#[derive(Clone)]
 pub struct VizOptions {
     pub all: bool,
     pub status: Option<String>,
@@ -135,9 +136,8 @@ impl Default for VizOptions {
 
 /// Returns true if the task is an auto-generated internal task (assignment or evaluation).
 fn is_internal_task(task: &Task) -> bool {
-    task.tags
-        .iter()
-        .any(|t| t == "assignment" || t == "evaluation")
+    workgraph::graph::is_system_task(&task.id)
+        || task.tags.iter().any(|t| t == "assignment" || t == "evaluation")
 }
 
 /// Determine the phase annotation for a parent task based on its related internal tasks.
@@ -145,11 +145,25 @@ fn is_internal_task(task: &Task) -> bool {
 /// - If an assignment task exists and is not done → "[assigning]"
 /// - If an evaluation task exists and is not done → "[evaluating]"
 fn compute_phase_annotation(internal_task: &Task) -> &'static str {
-    if internal_task.tags.iter().any(|t| t == "assignment") {
+    let id = &internal_task.id;
+    if id.starts_with(".assign-") || id.starts_with("assign-") {
         "[assigning]"
+    } else if id.starts_with(".verify-") || id.starts_with("verify-") {
+        "[verifying]"
     } else {
         "[evaluating]"
     }
+}
+
+/// Extract the parent task ID from a system task ID.
+fn system_task_parent_id(id: &str) -> Option<String> {
+    for prefix in &[".assign-", ".evaluate-", ".verify-flip-", ".respond-to-",
+                     "assign-", "evaluate-", "verify-flip-", "respond-to-"] {
+        if let Some(rest) = id.strip_prefix(prefix) {
+            return Some(rest.to_string());
+        }
+    }
+    None
 }
 
 /// Filter out internal tasks and compute phase annotations for their parent tasks.
@@ -165,27 +179,13 @@ pub(crate) fn filter_internal_tasks<'a>(
     let mut annotations: HashMap<String, String> = HashMap::new();
     let mut internal_ids: HashSet<&str> = HashSet::new();
 
-    // First pass: identify internal tasks and compute annotations
     for task in &tasks {
         if !is_internal_task(task) {
             continue;
         }
         internal_ids.insert(task.id.as_str());
 
-        // Determine the parent task ID.
-        // For assign-X: the parent is X (assign task has no after from parent,
-        //   but parent has after assign-X)
-        // For evaluate-X: the parent is X (evaluate task is after X)
-        let parent_id = if task.tags.iter().any(|t| t == "assignment") {
-            // assign-{parent_id}: strip the prefix
-            task.id.strip_prefix("assign-").map(|s| s.to_string())
-        } else {
-            // evaluate-{parent_id}: strip the prefix
-            task.id.strip_prefix("evaluate-").map(|s| s.to_string())
-        };
-
-        if let Some(pid) = parent_id {
-            // Only annotate if the internal task is not yet done
+        if let Some(pid) = system_task_parent_id(&task.id) {
             if task.status == Status::InProgress {
                 let annotation = compute_phase_annotation(task);
                 annotations.insert(pid, annotation.to_string());
@@ -501,14 +501,8 @@ pub fn generate_viz_output_from_graph(
         if !is_internal_task(task) {
             continue;
         }
-        let (is_assign, parent_id) = if task.tags.iter().any(|t| t == "assignment") {
-            (true, task.id.strip_prefix("assign-").map(|s| s.to_string()))
-        } else {
-            (
-                false,
-                task.id.strip_prefix("evaluate-").map(|s| s.to_string()),
-            )
-        };
+        let is_assign = task.id.starts_with(".assign-") || task.id.starts_with("assign-");
+        let parent_id = system_task_parent_id(&task.id);
         let Some(pid) = parent_id else { continue };
         let usage = task
             .token_usage

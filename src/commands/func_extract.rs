@@ -14,16 +14,12 @@ use workgraph::provenance;
 /// Check whether a task is coordinator-generated infrastructure noise
 /// (evaluation tasks, assignment tasks) that should be excluded from extraction.
 fn is_coordinator_noise(task: &Task) -> bool {
-    // Filter evaluate-* tasks (coordinator-generated evaluations)
-    if task.id.starts_with("evaluate-") {
+    // System tasks (dot-prefixed) are always coordinator noise
+    if workgraph::graph::is_system_task(&task.id) {
         return true;
     }
-    // Filter assign-* tasks (coordinator-generated agent assignment tasks)
-    if task.id.starts_with("assign-") {
-        return true;
-    }
-    // Filter by evaluation tag
-    if task.tags.iter().any(|t| t == "evaluation") {
+    // Legacy prefixes (pre-dot-prefix era)
+    if task.id.starts_with("evaluate-") || task.id.starts_with("assign-") {
         return true;
     }
     false
@@ -2437,6 +2433,7 @@ mod tests {
 
     #[test]
     fn test_is_coordinator_noise() {
+        // Legacy prefixes still detected
         let eval_task = Task {
             id: "evaluate-func-impl".to_string(),
             title: "Evaluate func-impl".to_string(),
@@ -2453,14 +2450,22 @@ mod tests {
         };
         assert!(is_coordinator_noise(&assign_task));
 
-        let tagged_task = Task {
-            id: "some-task".to_string(),
-            title: "Some task".to_string(),
+        // New dot-prefix system tasks
+        let dot_eval = Task {
+            id: ".evaluate-func-impl".to_string(),
+            title: "Evaluate func-impl".to_string(),
             status: Status::Done,
-            tags: vec!["evaluation".to_string()],
             ..Task::default()
         };
-        assert!(is_coordinator_noise(&tagged_task));
+        assert!(is_coordinator_noise(&dot_eval));
+
+        let dot_assign = Task {
+            id: ".assign-func-impl".to_string(),
+            title: "Assign func-impl".to_string(),
+            status: Status::Done,
+            ..Task::default()
+        };
+        assert!(is_coordinator_noise(&dot_assign));
 
         let normal_task = Task {
             id: "impl-feature".to_string(),
