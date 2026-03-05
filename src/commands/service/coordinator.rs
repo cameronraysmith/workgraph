@@ -706,13 +706,13 @@ fn resurrect_done_tasks(graph: &mut workgraph::graph::WorkGraph, dir: &Path) -> 
     modified
 }
 
-/// Auto-assign: build assignment subgraph for unassigned ready tasks.
+/// Auto-assign: run lightweight LLM assignment for unassigned ready tasks.
 ///
-/// Per the agency design (§4, §10), when auto_assign is enabled and a ready
-/// task has no agent field, the coordinator creates a blocking assignment task
-/// `assign-{task-id}` BEFORE spawning any agents.  The assigner agent is then
-/// spawned on the assignment task, inspects the agency via wg CLI, and calls
-/// `wg assign <task-id> <agent-hash>` followed by `wg done assign-{task-id}`.
+/// Uses a single `run_lightweight_llm_call()` to select the best agent for each
+/// task (replaces the old multi-turn Claude Code session approach). The LLM
+/// receives the full agent catalog and task context, and returns a JSON verdict
+/// with agent_hash, exec_mode, and context_scope. A `.assign-*` task is created
+/// (marked Done) for audit trail only — no blocking edge or agent spawn needed.
 ///
 /// Returns `true` if the graph was modified.
 fn build_auto_assign_tasks(
@@ -889,215 +889,109 @@ fn build_auto_assign_tasks(
             None
         };
 
-        // Resolve assigner agent identity (if configured via assigner_agent hash)
-        let assigner_identity = config
-            .agency
-            .assigner_agent
-            .as_ref()
-            .and_then(|agent_hash| {
-                let agents_dir = agency_dir.join("cache/agents");
-                let agent_path = agents_dir.join(format!("{}.yaml", agent_hash));
-                let agent = load_agent(&agent_path).ok()?;
-                let roles_dir = agency_dir.join("cache/roles");
-                let role_path = roles_dir.join(format!("{}.yaml", agent.role_id));
-                let role = load_role(&role_path).ok()?;
-                let tradeoffs_dir = agency_dir.join("primitives/tradeoffs");
-                let tradeoff_path = tradeoffs_dir.join(format!("{}.yaml", agent.tradeoff_id));
-                let tradeoff = load_tradeoff(&tradeoff_path).ok()?;
-                let workgraph_root = dir;
-                let resolved_skills = resolve_all_components(&role, workgraph_root, &agency_dir);
-                let outcome = resolve_outcome(&role.outcome_id, &agency_dir);
-                Some(render_identity_prompt_rich(
-                    &role,
-                    &tradeoff,
-                    &resolved_skills,
-                    outcome.as_ref(),
-                ))
+        // Load all agents for the lightweight LLM assignment call
+        let agents_dir = agency_dir.join("cache/agents");
+        let all_agents = agency::load_all_agents_or_warn(&agents_dir);
+        let roles_dir = agency_dir.join("cache/roles");
+        let tradeoffs_dir = agency_dir.join("primitives/tradeoffs");
+
+        // Build a temporary Task with the gathered data for the prompt builder
+        let task_snapshot = Task {
+            id: task_id.clone(),
+            title: task_title.clone(),
+            description: task_desc.clone(),
+            skills: task_skills.clone(),
+            tags: task_tags.clone(),
+            after: task_after.clone(),
+            context_scope: task_context_scope.clone(),
+            ..Default::default()
+        };
+
+        // Run lightweight LLM call for assignment (replaces full Claude Code session)
+        let verdict = match super::assignment::run_lightweight_assignment(
+            config,
+            &task_snapshot,
+            &all_agents,
+            &roles_dir,
+            &tradeoffs_dir,
+            &mode_context,
+            underspec_warning.as_deref(),
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!(
+                    "[coordinator] Lightweight assignment failed for '{}': {}, will retry next tick",
+                    task_id, e
+                );
+                continue;
+            }
+        };
+
+        // Resolve the agent hash from the verdict
+        let resolved_agent =
+            match agency::find_agent_by_prefix(&agents_dir, &verdict.agent_hash) {
+                Ok(agent) => agent,
+                Err(e) => {
+                    eprintln!(
+                        "[coordinator] Assignment verdict agent '{}' not found for '{}': {}",
+                        verdict.agent_hash, task_id, e
+                    );
+                    continue;
+                }
+            };
+
+        // Apply assignment to the original task
+        if let Some(task) = graph.get_task_mut(&task_id) {
+            task.agent = Some(resolved_agent.id.clone());
+            if let Some(ref mode) = verdict.exec_mode {
+                match mode.as_str() {
+                    "shell" | "bare" | "light" | "full" => {
+                        task.exec_mode = Some(mode.clone());
+                    }
+                    _ => {} // invalid, keep default
+                }
+            }
+            if let Some(ref scope) = verdict.context_scope {
+                match scope.as_str() {
+                    "clean" | "task" | "graph" | "full" => {
+                        // Only set if not already pre-set
+                        if task.context_scope.is_none() {
+                            task.context_scope = Some(scope.clone());
+                        }
+                    }
+                    _ => {} // invalid, keep default
+                }
+            }
+            task.log.push(LogEntry {
+                timestamp: Utc::now().to_rfc3339(),
+                actor: Some("coordinator".to_string()),
+                message: format!(
+                    "Lightweight assignment: agent={} ({}), exec_mode={}, context_scope={}, reason={}",
+                    resolved_agent.name,
+                    agency::short_hash(&resolved_agent.id),
+                    verdict.exec_mode.as_deref().unwrap_or("(default)"),
+                    verdict.context_scope.as_deref().unwrap_or("(default)"),
+                    verdict.reason,
+                ),
             });
-
-        // Build description for the assigner with the original task's context
-        let mut desc = String::new();
-        // Prepend agent identity when composed assigner is available
-        if let Some(ref identity) = assigner_identity {
-            desc.push_str(identity);
-            desc.push_str("\n\n");
-        }
-        desc.push_str(&format!(
-            "Assign an agent to task '{}'.\n\n## Original Task\n**Title:** {}\n",
-            task_id, task_title,
-        ));
-        if let Some(ref d) = task_desc {
-            desc.push_str(&format!("**Description:** {}\n", d));
-        }
-        if !task_skills.is_empty() {
-            desc.push_str(&format!("**Skills:** {}\n", task_skills.join(", ")));
-        }
-        if !task_tags.is_empty() {
-            desc.push_str(&format!("**Tags:** {}\n", task_tags.join(", ")));
-        }
-        if !task_after.is_empty() {
-            desc.push_str(&format!(
-                "**Dependencies ({}):** {}\n",
-                task_after.len(),
-                task_after.join(", ")
-            ));
-        }
-        if let Some(ref scope) = task_context_scope {
-            desc.push_str(&format!("**Context scope (pre-set):** {}\n", scope));
-        }
-        if let Some(ref warning) = underspec_warning {
-            desc.push_str(warning);
         }
 
-        // Include run mode context so the assigner knows which path to follow
-        desc.push_str(&format!("\n{}\n", mode_context));
-
-        desc.push_str(&format!(
-            "\n## Instructions\n\n\
-             Use the assignment mode context above to guide your decision.\n\n\
-             ### Step 1: Gather Information\n\n\
-             Run these commands to understand the available agents and their track records:\n\
-             ```\n\
-             wg agent list --json\n\
-             wg role list --json\n\
-             wg tradeoff list --json\n\
-             ```\n\n\
-             For agents with evaluation history, drill into performance details:\n\
-             ```\n\
-             wg agent performance <agent-hash> --json\n\
-             ```\n\n\
-             ### Step 2: Follow Assignment Path\n\n\
-             The mode context above specifies which assignment path to follow:\n\n\
-             - **Performance (cache-first)**: Pick the highest-scoring cached agent \
-             whose skills match the task. Do NOT vary composition dimensions — \
-             deterministic selection only. If no cached agents meet the threshold, \
-             fall back to best-guess role+tradeoff matching.\n\n\
-             - **Learning (structured experiment)**: The experiment specification above \
-             tells you which composition dimension to vary. Compose a new agent by \
-             applying the experiment (e.g., swap a role component) using UCB1-selected \
-             primitives. Use `wg agent create` if a matching agent doesn't exist yet.\n\n\
-             - **Forced Exploration**: Try novel or unconventional agent compositions. \
-             Combine roles and tradeoffs that haven't been paired before. Maximise \
-             diversity of signal.\n\n\
-             ### Step 3: Match Agent to Task\n\n\
-             Compare each agent's capabilities to the task requirements:\n\n\
-             1. **Role fit**: The agent's role skills should overlap with the task's \
-             required skills. A Programmer (code-writing, testing, debugging) fits \
-             implementation tasks; a Reviewer (code-review, security-audit) fits review \
-             tasks; an Architect (system-design, dependency-analysis) fits design tasks; \
-             a Documenter (technical-writing) fits documentation tasks.\n\n\
-             2. **Tradeoff fit**: The agent's operational parameters should match the \
-             task's nature. A Careful agent suits tasks where correctness is critical. \
-             A Fast agent suits urgent, low-risk tasks. A Thorough agent suits complex \
-             tasks requiring deep analysis.\n\n\
-             3. **Capabilities**: Check the agent's `capabilities` list for specific \
-             technology or domain tags that match the task (e.g., \"rust\", \"python\", \
-             \"kubernetes\").\n\n\
-             4. **Tag→Skill affinity**: When the task has tags, use them as additional \
-             signals for agent selection. Common affinities:\n\
-             - Tags `research`, `exploration`, `analysis` → prefer agents with research/analysis skills\n\
-             - Tags `review`, `audit`, `code-review` → prefer Reviewer role agents\n\
-             - Tags `implementation`, `coding`, `feature` → prefer Programmer role agents\n\
-             - Tags `docs`, `documentation`, `writing` → prefer Documenter role agents\n\
-             - Tags `design`, `architecture`, `planning` → prefer Architect role agents\n\
-             - Tags `integration`, `synthesis` → prefer agents with integration skills\n\
-             Tags supplement skills — when a task has explicit skills, those take priority. \
-             When skills are absent, tags provide the best signal for role matching.\n\n\
-             ### Step 4: Use Performance Data\n\n\
-             Each agent has a `performance` record with `task_count`, `avg_score` \
-             (0.0–1.0), and individual evaluation entries. Each evaluation has \
-             dimension scores: `correctness` (40% weight), `completeness` (30%), \
-             `efficiency` (15%), `style_adherence` (15%).\n\n\
-             - **Prefer agents with higher avg_score** on similar tasks (check \
-             evaluation `task_id` and `context_id` to see what kinds of work they've \
-             done before).\n\
-             - **Weight recent evaluations more** — an agent's latest scores are more \
-             predictive than older ones.\n\
-             - **Consider dimension strengths**: If the task demands correctness above \
-             all else, prefer agents who score highest on `correctness` even if their \
-             overall average is slightly lower.\n\n\
-             ### Step 5: Handle Cold Start\n\n\
-             When agents have 0 evaluations (new agency, or new agents), you cannot \
-             rely on performance data. In this case:\n\n\
-             - **Match on role and tradeoff** — this is the primary signal. Pick the \
-             agent whose role skills best cover the task requirements.\n\
-             - **Spread work across untested agents** to build evaluation data. If \
-             multiple agents have 0 evaluations and similar role fit, prefer whichever \
-             has completed fewer tasks (lower `task_count`) so the agency gathers \
-             diverse signal.\n\
-             - **Default to Careful tradeoff** for high-stakes tasks and Fast \
-             tradeoff for routine work when there's no data to differentiate.\n\n\
-             ### Step 6: Assign\n\n\
-             Once you've chosen an agent, run:\n\
-             ```\n\
-             wg assign {} <agent-hash>\n\
-             wg done {}\n\
-             ```\n\n\
-             If no suitable agent exists for this task, report why:\n\
-             ```\n\
-             wg fail {} --reason \"No agent with matching skills for: <explanation>\"\n\
-             ```\n\n\
-             ### Step 6b: Set Context Scope\n\n\
-             After assigning the agent, determine the appropriate context scope for \
-             the task. The context scope controls how much workgraph context the \
-             spawned agent receives in its prompt.\n\n\
-             - **clean**: Pure computation, translation, summarization, writing tasks \
-             where the agent needs no workgraph interaction. The task description is \
-             self-contained input, the output is the deliverable.\n\
-               Signals: task has no `after` dependencies with artifacts to inspect, \
-             task skills include \"writing\", \"translation\", or \"computation\", task \
-             description doesn't reference other tasks.\n\n\
-             - **task** (default): Standard implementation, bug fixes, code changes, \
-             test writing. The agent needs `wg` CLI for logging and completion.\n\
-               Signals: most tasks. If unsure, use this.\n\n\
-             - **graph**: Integration tasks, review tasks spanning multiple components, \
-             tasks that join outputs from multiple parallel workers.\n\
-               Signals: task has 3+ dependencies (`after` edges), task title/description \
-             mentions \"integrate\", \"merge\", \"review across\", \"combine\", \"synthesize\", \
-             \"harmonize\", or \"coordinate\". Task tags include \"integration\" or \"review\".\n\n\
-             - **full**: Meta-tasks about workgraph itself, workflow design, debugging \
-             coordination failures, writing specs about the orchestration system.\n\
-               Signals: task description references workgraph internals, coordinator, \
-             agency system, or \"workflow\". Task tags include \"meta\" or \"system\".\n\n\
-             Set the scope (skip if `task` is appropriate, or if a scope is already pre-set \
-             on the task):\n\
-             ```\n\
-             wg edit {} --context-scope <scope>\n\
-             ```\n\n\
-             ### Step 6c: Set Execution Weight\n\n\
-             After assigning the agent, determine the appropriate execution weight \
-             (`exec_mode`) for the task. This controls what tools the spawned agent \
-             has access to, directly affecting cost and speed.\n\n\
-             - **shell**: No LLM. Task has an `exec` command that runs directly. \
-             For: CI checks, test runs, git operations, simple scripts.\n\
-               Signals: task.exec is set, task description says \"run\", \"check\", \"verify status\".\n\n\
-             - **bare**: LLM with wg CLI only. No file access. \
-             For: synthesis, triage, summarization, assignment, abstract reasoning, critique.\n\
-               Signals: task doesn't need to read/write files, task is about decision-making \
-             or text generation.\n\n\
-             - **light**: LLM with read-only file access (Read, Glob, Grep). \
-             For: research, code review, exploration, analysis, documentation review.\n\
-               Signals: task needs to read code but not modify it, task is tagged \"research\" \
-             or \"review\".\n\n\
-             - **full** (default): Full Claude Code session with all tools. \
-             For: implementation, debugging, refactoring, test writing, any task that modifies files.\n\
-               Signals: task creates or modifies code/files.\n\n\
-             Set the exec_mode (skip if `full` is appropriate):\n\
-             ```\n\
-             wg edit {} --exec-mode <mode>\n\
-             ```",
-            task_id, task_id, assign_task_id, assign_task_id, task_id,
-        ));
-
-        // Create the assignment task (blocks the original)
+        // Create .assign-* task marked Done for audit trail (no blocking edge needed)
+        let now = Utc::now().to_rfc3339();
         let assign_task = Task {
             id: assign_task_id.clone(),
             title: format!("Assign agent for: {}", task_title),
-            description: Some(desc),
-            status: Status::Open,
+            description: Some(format!(
+                "Lightweight assignment: {} ({}) → '{}'\nReason: {}",
+                resolved_agent.name,
+                agency::short_hash(&resolved_agent.id),
+                task_id,
+                verdict.reason,
+            )),
+            status: Status::Done,
             assigned: None,
             estimate: None,
-            before: vec![task_id.clone()],
+            before: vec![],
             after: vec![],
             requires: vec![],
             tags: vec!["assignment".to_string(), "agency".to_string()],
@@ -1107,10 +1001,17 @@ fn build_auto_assign_tasks(
             artifacts: vec![],
             exec: None,
             not_before: None,
-            created_at: Some(Utc::now().to_rfc3339()),
-            started_at: None,
-            completed_at: None,
-            log: vec![],
+            created_at: Some(now.clone()),
+            started_at: Some(now.clone()),
+            completed_at: Some(now),
+            log: vec![LogEntry {
+                timestamp: Utc::now().to_rfc3339(),
+                actor: Some("coordinator".to_string()),
+                message: format!(
+                    "Completed via lightweight LLM call (path: {:?})",
+                    assignment_path,
+                ),
+            }],
             retry_count: 0,
             max_retries: None,
             failure_reason: None,
@@ -1124,7 +1025,6 @@ fn build_auto_assign_tasks(
                 .provider,
             verify: None,
             agent: config.agency.assigner_agent.clone(),
-
             loop_iteration: 0,
             cycle_failure_restarts: 0,
             ready_after: None,
@@ -1138,37 +1038,24 @@ fn build_auto_assign_tasks(
             checkpoint: None,
             resurrection_count: 0,
             last_resurrected_at: None,
-            // Assignment tasks only need wg CLI — no file access required
             exec_mode: Some("bare".to_string()),
         };
 
         graph.add_node(Node::Task(assign_task));
 
-        // Add the assignment task as a blocker on the original task
-        if let Some(t) = graph.get_task_mut(&task_id)
-            && !t.after.contains(&assign_task_id)
-        {
-            t.after.push(assign_task_id.clone());
-        }
-
-        // Persist preliminary TaskAssignmentRecord with the chosen mode.
-        // agent_id will be "pending" until `wg assign` fills it in.
+        // Persist TaskAssignmentRecord with actual agent info
         let assignment_mode = match assignment_path {
             AssignmentPath::Performance => {
-                // Check if there's a cached agent above threshold
                 match find_cached_agent(&agency_dir, config.agency.performance_threshold) {
                     Some((_, score)) => AssignmentMode::CacheHit { cache_score: score },
                     None => AssignmentMode::CacheMiss,
                 }
             }
-            AssignmentPath::Learning => {
-                // experiment is always Some for Learning path
-                AssignmentMode::Learning(
-                    experiment
-                        .clone()
-                        .expect("experiment required for Learning path"),
-                )
-            }
+            AssignmentPath::Learning => AssignmentMode::Learning(
+                experiment
+                    .clone()
+                    .expect("experiment required for Learning path"),
+            ),
             AssignmentPath::ForcedExploration => AssignmentMode::ForcedExploration(
                 experiment
                     .clone()
@@ -1178,8 +1065,8 @@ fn build_auto_assign_tasks(
 
         let record = TaskAssignmentRecord {
             task_id: task_id.clone(),
-            agent_id: "pending".to_string(),
-            composition_id: "pending".to_string(),
+            agent_id: resolved_agent.id.clone(),
+            composition_id: resolved_agent.id.clone(),
             timestamp: Utc::now().to_rfc3339(),
             run_mode_value: config.agency.run_mode,
             mode: assignment_mode,
@@ -1194,8 +1081,11 @@ fn build_auto_assign_tasks(
         }
 
         eprintln!(
-            "[coordinator] Created assignment task '{}' blocking '{}'",
-            assign_task_id, task_id,
+            "[coordinator] Lightweight assignment for '{}': {} ({}) [path={:?}]",
+            task_id,
+            resolved_agent.name,
+            agency::short_hash(&resolved_agent.id),
+            assignment_path,
         );
         modified = true;
     }
@@ -1359,7 +1249,8 @@ fn build_auto_evaluate_tasks(
             visibility: "internal".to_string(),
             context_scope: None,
             cycle_config: None,
-            exec_mode: None,
+            // Evaluation uses inline lightweight LLM call — no file access needed
+            exec_mode: Some("bare".to_string()),
             token_usage: None,
             session_id: None,
             wait_condition: None,
@@ -1561,7 +1452,9 @@ fn build_flip_verification_tasks(
             visibility: "internal".to_string(),
             context_scope: None,
             cycle_config: None,
-            exec_mode: None,
+            // Verification needs read-only file access (run tests, check git, verify artifacts)
+            // but does not modify source files — "light" is appropriate.
+            exec_mode: Some("light".to_string()),
             token_usage: None,
             session_id: None,
             wait_condition: None,

@@ -16,6 +16,7 @@
 //!   interval = 30        # Coordinator tick interval (standalone command)
 //!   executor = "claude"  # Executor for spawned agents
 
+mod assignment;
 mod coordinator;
 pub(crate) mod coordinator_agent;
 pub mod ipc;

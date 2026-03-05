@@ -293,30 +293,17 @@ pub fn run(
         return Ok(());
     }
 
-    // Step 6: Spawn a Claude agent with the evaluator prompt (--print for non-interactive)
+    // Step 6: Run lightweight LLM call for evaluation (replaces claude --print)
     println!("Evaluating task '{}' with model '{}'...", task_id, model);
 
-    let output = Command::new("claude")
-        .env_remove("CLAUDE_CODE_ENTRYPOINT")
-        .env_remove("CLAUDECODE")
-        .arg("--model")
-        .arg(&model)
-        .arg("--print")
-        .arg("--dangerously-skip-permissions")
-        .arg(&prompt)
-        .output()
-        .context("Failed to run claude CLI — is it installed and in PATH?")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!(
-            "Claude evaluator failed (exit code {:?}):\n{}",
-            output.status.code(),
-            stderr
-        );
-    }
-
-    let raw_output = String::from_utf8_lossy(&output.stdout);
+    let timeout_secs = config.agency.triage_timeout.unwrap_or(60);
+    let raw_output = workgraph::service::llm::run_lightweight_llm_call(
+        &config,
+        workgraph::config::DispatchRole::Evaluator,
+        &prompt,
+        timeout_secs,
+    )
+    .context("Evaluation LLM call failed")?;
 
     // Step 7: Parse the JSON output from the evaluator
     let eval_json =
@@ -473,7 +460,7 @@ pub fn run(
                     task_id,
                     chrono::Utc::now().to_rfc3339().replace(':', "-")
                 ),
-                task_id: format!("evaluate-{}", task_id),
+                task_id: format!(".evaluate-{}", task_id),
                 agent_id: eval_agent.id.clone(),
                 role_id: eval_agent.role_id.clone(),
                 tradeoff_id: eval_agent.tradeoff_id.clone(),
@@ -639,27 +626,14 @@ pub fn run_flip(
         inference_model
     );
 
-    let inference_output = Command::new("claude")
-        .env_remove("CLAUDE_CODE_ENTRYPOINT")
-        .env_remove("CLAUDECODE")
-        .arg("--model")
-        .arg(&inference_model)
-        .arg("--print")
-        .arg("--dangerously-skip-permissions")
-        .arg(&inference_prompt)
-        .output()
-        .context("Failed to run claude CLI for FLIP inference")?;
-
-    if !inference_output.status.success() {
-        let stderr = String::from_utf8_lossy(&inference_output.stderr);
-        bail!(
-            "FLIP inference evaluator failed (exit code {:?}):\n{}",
-            inference_output.status.code(),
-            stderr
-        );
-    }
-
-    let raw_inference = String::from_utf8_lossy(&inference_output.stdout);
+    let flip_timeout = config.agency.triage_timeout.unwrap_or(60);
+    let raw_inference = workgraph::service::llm::run_lightweight_llm_call(
+        &config,
+        workgraph::config::DispatchRole::FlipInference,
+        &inference_prompt,
+        flip_timeout,
+    )
+    .context("FLIP inference LLM call failed")?;
     let inference_json = extract_json(&raw_inference)
         .context("Failed to extract JSON from FLIP inference output")?;
 
@@ -685,27 +659,13 @@ pub fn run_flip(
         comparison_model
     );
 
-    let comparison_output = Command::new("claude")
-        .env_remove("CLAUDE_CODE_ENTRYPOINT")
-        .env_remove("CLAUDECODE")
-        .arg("--model")
-        .arg(&comparison_model)
-        .arg("--print")
-        .arg("--dangerously-skip-permissions")
-        .arg(&comparison_prompt)
-        .output()
-        .context("Failed to run claude CLI for FLIP comparison")?;
-
-    if !comparison_output.status.success() {
-        let stderr = String::from_utf8_lossy(&comparison_output.stderr);
-        bail!(
-            "FLIP comparison evaluator failed (exit code {:?}):\n{}",
-            comparison_output.status.code(),
-            stderr
-        );
-    }
-
-    let raw_comparison = String::from_utf8_lossy(&comparison_output.stdout);
+    let raw_comparison = workgraph::service::llm::run_lightweight_llm_call(
+        &config,
+        workgraph::config::DispatchRole::FlipComparison,
+        &comparison_prompt,
+        flip_timeout,
+    )
+    .context("FLIP comparison LLM call failed")?;
     let comparison_json = extract_json(&raw_comparison)
         .context("Failed to extract JSON from FLIP comparison output")?;
 
