@@ -7,6 +7,7 @@
 //! - Agent registry for tracking running agents
 
 pub mod executor;
+pub mod llm;
 pub mod registry;
 
 pub use executor::{

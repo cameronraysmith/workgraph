@@ -5,7 +5,6 @@ use chrono::Utc;
 use std::fs;
 use std::io::{Read as IoRead, Seek, SeekFrom};
 use std::path::Path;
-use std::process;
 
 use workgraph::agency;
 use workgraph::config::Config;
@@ -403,34 +402,16 @@ Be conservative: only use "done" if the output clearly shows the task was finish
 fn run_triage(config: &Config, task: &Task, output_file: &str) -> Result<TriageVerdict> {
     let max_log_bytes = config.agency.triage_max_log_bytes.unwrap_or(50_000);
     let timeout_secs = config.agency.triage_timeout.unwrap_or(30);
-    let resolved = config.resolve_model_for_role(workgraph::config::DispatchRole::Triage);
-    let model = resolved.model;
-
     let log_content = read_truncated_log(output_file, max_log_bytes);
     let prompt = build_triage_prompt(task, &log_content);
 
-    // Use `timeout` to wrap the claude call
-    let output = process::Command::new("timeout")
-        .arg(format!("{}s", timeout_secs))
-        .arg("claude")
-        .arg("--model")
-        .arg(model)
-        .arg("--print")
-        .arg("--dangerously-skip-permissions")
-        .arg(&prompt)
-        .output()
-        .context("Failed to run claude CLI for triage")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "Triage claude call failed (exit {:?}): {}",
-            output.status.code(),
-            stderr.chars().take(200).collect::<String>()
-        );
-    }
-
-    let raw = String::from_utf8_lossy(&output.stdout);
+    let raw = workgraph::service::llm::run_lightweight_llm_call(
+        config,
+        workgraph::config::DispatchRole::Triage,
+        &prompt,
+        timeout_secs,
+    )
+    .context("Triage LLM call failed")?;
 
     // Parse JSON verdict from output
     let json_str = extract_triage_json(&raw)

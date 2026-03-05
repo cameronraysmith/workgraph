@@ -2052,10 +2052,6 @@ fn generate_checkpoint_summary(
     output_file: &str,
     task_id: &str,
 ) -> Result<String> {
-    use std::process;
-
-    let resolved_triage = config.resolve_model_for_role(workgraph::config::DispatchRole::Triage);
-    let model = resolved_triage.model;
     let timeout_secs = config.agency.triage_timeout.unwrap_or(30);
 
     // Read last 20KB of output for summary context
@@ -2075,29 +2071,13 @@ Focus on: files modified, features implemented, tests written, current status.
 Respond with ONLY the summary text, no JSON or formatting."#
     );
 
-    let output = process::Command::new("timeout")
-        .arg(format!("{}s", timeout_secs))
-        .arg("claude")
-        .arg("--model")
-        .arg(model)
-        .arg("--print")
-        .arg("--dangerously-skip-permissions")
-        .arg(&prompt)
-        .output()
-        .context("Failed to run claude CLI for checkpoint summary")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "Checkpoint summary call failed: {}",
-            stderr.chars().take(200).collect::<String>()
-        );
-    }
-
-    let summary = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if summary.is_empty() {
-        anyhow::bail!("Empty checkpoint summary from LLM");
-    }
+    let summary = workgraph::service::llm::run_lightweight_llm_call(
+        config,
+        workgraph::config::DispatchRole::Triage,
+        &prompt,
+        timeout_secs,
+    )
+    .context("Checkpoint summary LLM call failed")?;
 
     Ok(summary)
 }
