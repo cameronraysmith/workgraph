@@ -21,6 +21,7 @@ mod coordinator;
 pub(crate) mod coordinator_agent;
 pub mod ipc;
 mod triage;
+pub(crate) mod worktree;
 pub(crate) mod zero_output;
 
 pub use ipc::{IpcRequest, IpcResponse};
@@ -1211,6 +1212,20 @@ pub fn run_daemon(
         Ok(_) => {} // No entries to aggregate
         Err(e) => {
             logger.warn(&format!("Failed to aggregate usage stats: {}", e));
+        }
+    }
+
+    // Clean up orphaned worktrees from a previous service run
+    match worktree::cleanup_orphaned_worktrees(&dir) {
+        Ok(count) if count > 0 => {
+            logger.info(&format!(
+                "Cleaned up {} orphaned worktree(s) on startup",
+                count
+            ));
+        }
+        Ok(_) => {} // No orphaned worktrees
+        Err(e) => {
+            logger.warn(&format!("Failed to clean up orphaned worktrees: {}", e));
         }
     }
 
