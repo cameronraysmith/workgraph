@@ -234,7 +234,7 @@ When the coordinator spawns an agent for a task:
 
 1. **Claim**: The task is claimed (status → `in-progress`)
 2. **Model resolution**: task.model > executor.model > coordinator.model/CLI --model
-3. **Identity injection**: If the task has an `agent` field, the agent's role and motivation are loaded from `.workgraph/agency/` and rendered into an identity prompt section
+3. **Identity injection**: If the task has an `agent` field, the agent's role and tradeoff are loaded from `.workgraph/agency/` and rendered into an identity prompt section
 4. **Context scope resolution**: The task's `context_scope` determines how much context is assembled into the prompt:
    - `clean` — task description only (no dependency context)
    - `task` — task description + direct predecessor artifacts/logs (default)
