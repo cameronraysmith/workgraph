@@ -1173,13 +1173,6 @@ fn draw_back_edge_arcs(
     }
 
     for band in &bands {
-        let band_max_width = lines[band.top..=band.bottom.min(lines.len() - 1)]
-            .iter()
-            .map(|l| visible_len(l))
-            .max()
-            .unwrap_or(0);
-        let band_margin_start = band_max_width + 2;
-
         // Build node_set for this band's columns (using band-local indices)
         let node_set: HashSet<(usize, usize)> = band
             .col_indices
@@ -1193,9 +1186,26 @@ fn draw_back_edge_arcs(
             })
             .collect();
 
+        let mut col_x_positions: Vec<usize> = Vec::new();
         for (local_idx, &col_idx) in band.col_indices.iter().enumerate() {
             let column = &columns[col_idx];
-            let col_x = band_margin_start + local_idx * col_stride;
+
+            // Compute column position from the widest line in this column's
+            // span (not the entire band). This keeps arcs compact when they
+            // don't need to route around wider content on other lines.
+            let span_max_width = (column.top..=column.bottom.min(lines.len() - 1))
+                .map(|l| visible_len(&lines[l]))
+                .max()
+                .unwrap_or(0);
+            let mut col_x = span_max_width + 2;
+            // Ensure col_stride spacing from any earlier column that overlaps vertically
+            for (prev_local, &prev_ci) in band.col_indices[..local_idx].iter().enumerate() {
+                let prev_col = &columns[prev_ci];
+                if column.top <= prev_col.bottom && column.bottom >= prev_col.top {
+                    col_x = col_x.max(col_x_positions[prev_local] + col_stride);
+                }
+            }
+            col_x_positions.push(col_x);
 
             for line_idx in column.top..=column.bottom {
                 if line_idx >= lines.len() {
