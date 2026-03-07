@@ -320,6 +320,8 @@ pub struct ScopeContext {
     pub claude_md_content: String,
     /// Queued messages for this task (task+ scope)
     pub queued_messages: String,
+    /// Context from a previous agent attempt (injected on retry)
+    pub previous_attempt_context: String,
 }
 
 /// Build a scope-aware prompt for built-in executors.
@@ -383,6 +385,11 @@ pub fn build_prompt(vars: &TemplateVars, scope: ContextScope, ctx: &ScopeContext
         vars.task_context
     ));
 
+
+    // All scopes: previous attempt context (injected on retry)
+    if !ctx.previous_attempt_context.is_empty() {
+        parts.push(ctx.previous_attempt_context.clone());
+    }
     // Task+ scope: queued messages
     if scope >= ContextScope::Task && !ctx.queued_messages.is_empty() {
         parts.push(ctx.queued_messages.clone());
@@ -1882,6 +1889,7 @@ args = ["--custom-flag"]
             full_graph_summary: "## Full Graph Summary\n\n- task-a [done]".to_string(),
             claude_md_content: "Always use bun.".to_string(),
             queued_messages: String::new(),
+            previous_attempt_context: String::new(),
         };
         let prompt = build_prompt(&vars, ContextScope::Full, &ctx);
 

@@ -1219,6 +1219,10 @@ pub enum Commands {
         /// Equivalent to --set-provider but uses key=value syntax.
         #[arg(long = "role-provider", value_name = "ROLE=PROVIDER")]
         role_provider: Option<String>,
+
+        /// Max tokens of previous-attempt context to inject on retry (default: 2000, 0 = disabled)
+        #[arg(long, name = "retry-context-tokens")]
+        retry_context_tokens: Option<u32>,
     },
 
     /// Detect and clean up dead agents

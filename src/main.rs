@@ -1458,6 +1458,7 @@ fn main() -> Result<()> {
             set_provider,
             role_model,
             role_provider,
+            retry_context_tokens,
         } => {
             // Derive scope from --global/--local flags
             let scope = if global {
@@ -1572,7 +1573,8 @@ fn main() -> Result<()> {
                     && flip_verification_model.is_none()
                     && chat_history.is_none()
                     && chat_history_max.is_none()
-                    && tui_counters.is_none())
+                    && tui_counters.is_none()
+                    && retry_context_tokens.is_none())
             {
                 commands::config_cmd::show(&workgraph_dir, scope, cli.json)
             } else {
@@ -1616,6 +1618,7 @@ fn main() -> Result<()> {
                     chat_history,
                     chat_history_max,
                     tui_counters.as_deref(),
+                    retry_context_tokens,
                 )
             }
         }

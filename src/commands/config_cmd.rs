@@ -238,6 +238,7 @@ pub fn update(
     chat_history: Option<bool>,
     chat_history_max: Option<usize>,
     tui_counters: Option<&str>,
+    retry_context_tokens: Option<u32>,
 ) -> Result<()> {
     let mut config = match scope {
         ConfigScope::Global => Config::load_global()?.unwrap_or_default(),
@@ -501,6 +502,13 @@ pub fn update(
         }
         config.tui.counters = counters.to_string();
         println!("Set tui.counters = \"{}\"", counters);
+        changed = true;
+    }
+
+    // Checkpoint settings
+    if let Some(tokens) = retry_context_tokens {
+        config.checkpoint.retry_context_tokens = tokens;
+        println!("Set checkpoint.retry_context_tokens = {}", tokens);
         changed = true;
     }
 
@@ -972,6 +980,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(result.is_ok());
 
@@ -996,6 +1005,7 @@ mod tests {
             Some(60),
             None,
             Some("shell"),
+            None,
             None,
             None,
             None,
@@ -1076,6 +1086,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(result.is_ok());
 
@@ -1109,6 +1120,7 @@ mod tests {
             Some("creator-hash"),
             Some("haiku"),
             Some("Retire below 0.3 after 10 evals"),
+            None,
             None,
             None,
             None,

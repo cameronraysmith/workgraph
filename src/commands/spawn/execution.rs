@@ -14,7 +14,8 @@ use workgraph::service::executor::{ExecutorRegistry, PromptTemplate, TemplateVar
 use workgraph::service::registry::AgentRegistry;
 
 use super::context::{
-    build_scope_context, build_task_context, resolve_task_exec_mode, resolve_task_scope,
+    build_previous_attempt_context, build_scope_context, build_task_context,
+    resolve_task_exec_mode, resolve_task_scope,
 };
 use super::worktree;
 use super::{
@@ -101,7 +102,14 @@ pub(crate) fn spawn_agent_inner(
     let task_context = build_task_context(&graph, task);
 
     // Build scope context for prompt assembly
-    let scope_ctx = build_scope_context(&graph, task, scope, &config, dir);
+    let mut scope_ctx = build_scope_context(&graph, task, scope, &config, dir);
+
+    // Inject previous attempt context on retry
+    if task.retry_count > 0 {
+        let max_tokens = config.checkpoint.retry_context_tokens;
+        scope_ctx.previous_attempt_context =
+            build_previous_attempt_context(task, dir, max_tokens);
+    }
 
     // Create template variables
     let mut vars = TemplateVars::from_task(task, Some(&task_context), Some(dir));
