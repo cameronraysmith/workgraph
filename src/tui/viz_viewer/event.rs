@@ -664,12 +664,16 @@ fn handle_graph_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
         }
 
         // Cycle inspector size: 1/3 → 1/2 → 2/3 → full → off
-        KeyCode::Char('=') | KeyCode::BackTab | KeyCode::Char('i') => {
+        KeyCode::Char('=') | KeyCode::BackTab => {
             app.cycle_layout_mode();
         }
-        // Cycle inspector size in reverse: off → full → 2/3 → 1/2 → 1/3
+        // Grow viz pane by ~5%
+        KeyCode::Char('i') => {
+            app.grow_viz_pane();
+        }
+        // Shrink viz pane by ~5%
         KeyCode::Char('I') => {
-            app.cycle_layout_mode_reverse();
+            app.shrink_viz_pane();
         }
 
         // Navigate between matches
@@ -684,14 +688,12 @@ fn handle_graph_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
             app.toggle_panel_focus();
         }
 
-        // Alt+Left/Right: cycle tabs
+        // Alt+Left/Right: cycle inspector views with slide animation
         KeyCode::Left if modifiers.contains(KeyModifiers::ALT) => {
-            app.right_panel_visible = true;
-            app.right_panel_tab = app.right_panel_tab.prev();
+            app.cycle_inspector_view_backward();
         }
         KeyCode::Right if modifiers.contains(KeyModifiers::ALT) => {
-            app.right_panel_visible = true;
-            app.right_panel_tab = app.right_panel_tab.next();
+            app.cycle_inspector_view_forward();
         }
 
         // HUD panel scroll (Shift + Up/Down/PgUp/PgDn)
@@ -891,10 +893,9 @@ fn handle_right_panel_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
                     app.kill_focused_agent();
                 }
                 KeyCode::Char('\\') => app.toggle_right_panel(),
-                KeyCode::Char('=') | KeyCode::BackTab | KeyCode::Char('i') => {
-                    app.cycle_layout_mode()
-                }
-                KeyCode::Char('I') => app.cycle_layout_mode_reverse(),
+                KeyCode::Char('=') | KeyCode::BackTab => app.cycle_layout_mode(),
+                KeyCode::Char('i') => app.grow_viz_pane(),
+                KeyCode::Char('I') => app.shrink_viz_pane(),
                 KeyCode::Esc => {
                     app.focused_panel = FocusedPanel::Graph;
                 }
@@ -930,11 +931,15 @@ fn handle_right_panel_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
         }
 
         // Cycle inspector size: 1/3 → 1/2 → 2/3 → full → off
-        KeyCode::Char('=') | KeyCode::BackTab | KeyCode::Char('i') => {
+        KeyCode::Char('=') | KeyCode::BackTab => {
             app.cycle_layout_mode();
         }
+        // Grow/shrink viz pane by ~5%
+        KeyCode::Char('i') => {
+            app.grow_viz_pane();
+        }
         KeyCode::Char('I') => {
-            app.cycle_layout_mode_reverse();
+            app.shrink_viz_pane();
         }
 
         // Esc: go back to graph focus
@@ -958,12 +963,12 @@ fn handle_right_panel_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
             app.toggle_panel_focus();
         }
 
-        // Alt+Left/Right: cycle tabs (same as bare Left/Right)
+        // Alt+Left/Right: cycle inspector views with slide animation
         KeyCode::Left if modifiers.contains(KeyModifiers::ALT) => {
-            app.right_panel_tab = app.right_panel_tab.prev();
+            app.cycle_inspector_view_backward();
         }
         KeyCode::Right if modifiers.contains(KeyModifiers::ALT) => {
-            app.right_panel_tab = app.right_panel_tab.next();
+            app.cycle_inspector_view_forward();
         }
 
         // Left/Right cycle tabs

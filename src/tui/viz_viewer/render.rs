@@ -1202,6 +1202,39 @@ fn draw_right_panel(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     // Tab bar
     draw_tab_bar(frame, app.right_panel_tab, tab_area);
 
+    // Apply slide animation offset to the content area.
+    let content_area = if let Some(ref anim) = app.slide_animation {
+        if anim.is_done() {
+            app.slide_animation = None;
+            content_area
+        } else {
+            let offset = anim.x_offset(content_area.width);
+            let abs_offset = offset.unsigned_abs().min(content_area.width);
+            if offset > 0 {
+                // Forward: content slides in from the right
+                Rect {
+                    x: content_area.x + abs_offset,
+                    width: content_area.width.saturating_sub(abs_offset),
+                    ..content_area
+                }
+            } else if offset < 0 {
+                // Backward: content slides in from the left — reduce visible width from right
+                Rect {
+                    width: content_area.width.saturating_sub(abs_offset),
+                    ..content_area
+                }
+            } else {
+                content_area
+            }
+        }
+    } else {
+        content_area
+    };
+
+    if content_area.width < 4 {
+        return;
+    }
+
     // Tab content
     match app.right_panel_tab {
         RightPanelTab::Chat => {
@@ -3946,9 +3979,9 @@ fn action_hints_parts(app: &VizApp) -> (&str, &str, Color, Vec<(&str, &str)>) {
                     ("/", "search"),
                     ("a", "add"),
                     ("D", "done"),
-                    ("i/I", "inspector size"),
+                    ("i/I", "resize pane"),
                     ("?", "help"),
-                    ("Alt←→", "tabs"),
+                    ("Alt←→", "cycle views"),
                 ],
             ),
             FocusedPanel::RightPanel => {
@@ -3996,9 +4029,9 @@ fn action_hints_parts(app: &VizApp) -> (&str, &str, Color, Vec<(&str, &str)>) {
                 }
                 // Common hints for all right-panel tabs.
                 hints.push(("Tab", "graph"));
-                hints.push(("i/I", "inspector"));
+                hints.push(("i/I", "resize pane"));
                 hints.push(("?", "help"));
-                hints.push(("Alt←→", "tabs"));
+                hints.push(("Alt←→", "cycle views"));
                 (tab_label, "NAV", Color::Rgb(120, 120, 120), hints)
             }
         },
@@ -4283,10 +4316,10 @@ fn draw_help_overlay(frame: &mut Frame) {
         heading("Panels"),
         binding("Tab", "Switch focus: Graph ↔ Right Panel"),
         binding("Alt-↑/↓", "Switch focus: Graph ↔ Right Panel"),
-        binding("Alt-←/→", "Cycle tabs (prev / next)"),
+        binding("Alt-←/→", "Cycle inspector views (with slide animation)"),
         binding("\\", "Toggle right panel visible"),
-        binding("i", "Cycle inspector size (1/3→1/2→2/3→full→off)"),
-        binding("I", "Cycle inspector size (reverse)"),
+        binding("i", "Grow viz pane (~5% per press, wraps)"),
+        binding("I", "Shrink viz pane (~5% per press, wraps)"),
         binding("=", "Cycle layout: split/panel/graph"),
         binding("0-7", "Switch tab: Chat/.../Files/Coord"),
         binding("R", "Toggle raw JSON in Detail tab"),
