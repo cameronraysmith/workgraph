@@ -187,8 +187,8 @@ pub(crate) fn filter_internal_tasks<'a>(
         }
         internal_ids.insert(task.id.as_str());
 
-        if let Some(pid) = system_task_parent_id(&task.id) {
-            if task.status == Status::InProgress {
+        if let Some(pid) = system_task_parent_id(&task.id)
+            && task.status == Status::InProgress {
                 let annotation = compute_phase_annotation(task);
                 annotations
                     .entry(pid)
@@ -198,7 +198,6 @@ pub(crate) fn filter_internal_tasks<'a>(
                     })
                     .or_insert_with(|| annotation.to_string());
             }
-        }
     }
 
     // Second pass: filter out internal tasks and fix edges

@@ -52,10 +52,7 @@ fn build_agent_catalog(
             let role_skills = role
                 .as_ref()
                 .map(|r| {
-                    r.component_ids
-                        .iter()
-                        .map(|c| c.clone())
-                        .collect::<Vec<_>>()
+                    r.component_ids.to_vec()
                 })
                 .unwrap_or_default();
             AgentEntry {

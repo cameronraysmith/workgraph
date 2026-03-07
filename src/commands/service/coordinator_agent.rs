@@ -1340,17 +1340,17 @@ const COORDINATOR_EVAL_DIMENSIONS: &[(&str, f64)] = &[
 fn should_evaluate_turn(turn_number: u32, eval_frequency: &str) -> bool {
     match eval_frequency {
         "every" => true,
-        "every_5" => turn_number % 5 == 0,
-        "every_10" => turn_number % 10 == 0,
+        "every_5" => turn_number.is_multiple_of(5),
+        "every_10" => turn_number.is_multiple_of(10),
         "sample_20pct" => {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             turn_number.hash(&mut hasher);
             chrono::Utc::now().timestamp_nanos_opt().hash(&mut hasher);
-            hasher.finish() % 5 == 0
+            hasher.finish().is_multiple_of(5)
         }
         "none" => false,
-        _ => turn_number % 5 == 0, // default to every_5
+        _ => turn_number.is_multiple_of(5), // default to every_5
     }
 }
 

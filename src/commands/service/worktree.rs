@@ -118,8 +118,8 @@ fn find_branch_for_worktree(project_root: &Path, worktree_path: &Path) -> Option
         if let Some(path) = line.strip_prefix("worktree ") {
             current_path = Some(path);
         } else if let Some(branch_ref) = line.strip_prefix("branch ") {
-            if let Some(cp) = current_path {
-                if cp == worktree_str.as_ref() {
+            if let Some(cp) = current_path
+                && cp == worktree_str.as_ref() {
                     // Convert refs/heads/wg/agent-X/task-Y to wg/agent-X/task-Y
                     return Some(
                         branch_ref
@@ -128,7 +128,6 @@ fn find_branch_for_worktree(project_root: &Path, worktree_path: &Path) -> Option
                             .to_string(),
                     );
                 }
-            }
         } else if line.is_empty() {
             current_path = None;
         }
@@ -211,6 +210,7 @@ pub fn cleanup_orphaned_worktrees(dir: &Path) -> Result<usize> {
 /// Prune worktrees that are older than `max_age_secs`.
 /// Called periodically from the triage loop. Only removes worktrees
 /// whose agents are no longer alive.
+#[allow(dead_code)]
 pub fn prune_stale_worktrees(dir: &Path, max_age_secs: u64) -> Result<usize> {
     let project_root = dir
         .parent()

@@ -316,9 +316,9 @@ pub(crate) fn cleanup_dead_agents(dir: &Path, graph_path: &Path) -> Result<Vec<S
         };
 
         let metadata_path = agent_dir.join("metadata.json");
-        if let Ok(metadata_str) = fs::read_to_string(&metadata_path) {
-            if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&metadata_str) {
-                if let (Some(wt_path_str), Some(wt_branch)) = (
+        if let Ok(metadata_str) = fs::read_to_string(&metadata_path)
+            && let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&metadata_str)
+                && let (Some(wt_path_str), Some(wt_branch)) = (
                     metadata.get("worktree_path").and_then(|v| v.as_str()),
                     metadata.get("worktree_branch").and_then(|v| v.as_str()),
                 ) {
@@ -336,8 +336,6 @@ pub(crate) fn cleanup_dead_agents(dir: &Path, graph_path: &Path) -> Result<Vec<S
                         );
                     }
                 }
-            }
-        }
     }
 
     Ok(dead.into_iter().map(|(id, _, _, _, _)| id).collect())

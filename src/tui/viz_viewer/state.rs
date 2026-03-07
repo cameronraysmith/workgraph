@@ -5069,19 +5069,16 @@ impl VizApp {
         let mut stuck = Vec::new();
         if let Ok(graph) = workgraph::parser::load_graph(&graph_path) {
             for task in graph.tasks() {
-                if task.status == workgraph::graph::Status::InProgress {
-                    if let Some(ref agent_id) = task.agent {
-                        if let Some(agent) = registry.agents.get(agent_id) {
-                            if !crate::commands::is_process_alive(agent.pid) {
+                if task.status == workgraph::graph::Status::InProgress
+                    && let Some(ref agent_id) = task.agent
+                        && let Some(agent) = registry.agents.get(agent_id)
+                            && !crate::commands::is_process_alive(agent.pid) {
                                 stuck.push(StuckTask {
                                     task_id: task.id.clone(),
                                     task_title: task.title.clone(),
                                     agent_id: agent_id.clone(),
                                 });
                             }
-                        }
-                    }
-                }
             }
         }
         self.service_health.stuck_tasks = stuck;
@@ -5105,13 +5102,11 @@ impl VizApp {
         // Determine health level
         let stuck_count = self.service_health.stuck_tasks.len();
         let count_label = format!("{}/{}", alive, coord.max_agents);
-        if coord.paused {
-            self.service_health.level = ServiceHealthLevel::Yellow;
-        } else if uptime_secs.is_some_and(|s| s < 30) {
-            self.service_health.level = ServiceHealthLevel::Yellow;
-        } else if stuck_count > 0 {
-            self.service_health.level = ServiceHealthLevel::Yellow;
-        } else if !self.service_health.recent_errors.is_empty() {
+        if coord.paused
+            || uptime_secs.is_some_and(|s| s < 30)
+            || stuck_count > 0
+            || !self.service_health.recent_errors.is_empty()
+        {
             self.service_health.level = ServiceHealthLevel::Yellow;
         } else {
             self.service_health.level = ServiceHealthLevel::Green;

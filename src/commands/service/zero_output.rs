@@ -90,13 +90,11 @@ impl ZeroOutputState {
 
     pub fn load(dir: &Path) -> Self {
         let path = Self::state_path(dir);
-        if path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(state) = serde_json::from_str(&content) {
+        if path.exists()
+            && let Ok(content) = std::fs::read_to_string(&path)
+                && let Ok(state) = serde_json::from_str(&content) {
                     return state;
                 }
-            }
-        }
         Self::default()
     }
 
@@ -154,11 +152,10 @@ impl ZeroOutputState {
 
     /// Check if global spawning is paused due to backoff.
     pub fn is_spawn_paused(&self) -> bool {
-        if let Some(ref backoff) = self.global_backoff {
-            if let Ok(resume) = backoff.resume_after.parse::<DateTime<Utc>>() {
+        if let Some(ref backoff) = self.global_backoff
+            && let Ok(resume) = backoff.resume_after.parse::<DateTime<Utc>>() {
                 return Utc::now() < resume;
             }
-        }
         false
     }
 
@@ -414,11 +411,10 @@ pub fn sweep_zero_output_agents(dir: &Path) -> ZeroOutputSweepResult {
             });
         }
 
-        if graph_modified {
-            if let Err(e) = save_graph(&graph, &graph_path) {
+        if graph_modified
+            && let Err(e) = save_graph(&graph, &graph_path) {
                 eprintln!("[zero-output] Failed to save graph: {}", e);
             }
-        }
     }
 
     state.save(dir);

@@ -345,8 +345,8 @@ pub fn run(
         } else {
             None
         };
-        if let Some(ref aid) = found_id {
-            if let Some(assign_task) = graph.get_task_mut(aid) {
+        if let Some(ref aid) = found_id
+            && let Some(assign_task) = graph.get_task_mut(aid) {
                 match assign_task.status {
                     workgraph::graph::Status::Open | workgraph::graph::Status::InProgress => {
                         assign_task.status = workgraph::graph::Status::Abandoned;
@@ -358,7 +358,6 @@ pub fn run(
                     _ => {}
                 }
             }
-        }
 
         // Clear the agent field so the task gets re-assigned when actually ready
         let task = graph.get_task_mut_or_err(task_id)?;

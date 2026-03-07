@@ -327,13 +327,12 @@ fn handle_service_control_panel_key(app: &mut VizApp, code: KeyCode) {
         KeyCode::Char('p') | KeyCode::Char('P') => { app.service_health.panel_focus = ControlPanelFocus::PauseResume; app.execute_service_action(); }
         KeyCode::Char('K') => { app.service_health.panel_focus = ControlPanelFocus::PanicKill; app.service_health.panic_confirm = true; }
         KeyCode::Char('u') | KeyCode::Char('U') => {
-            if let ControlPanelFocus::StuckAgent(idx) = app.service_health.panel_focus {
-                if let Some(st) = app.service_health.stuck_tasks.get(idx) {
+            if let ControlPanelFocus::StuckAgent(idx) = app.service_health.panel_focus
+                && let Some(st) = app.service_health.stuck_tasks.get(idx) {
                     let tid = st.task_id.clone();
                     app.exec_command(vec!["unclaim".to_string(), tid.clone()], CommandEffect::RefreshAndNotify(format!("Unclaimed {}", tid)));
                     app.set_service_feedback(format!("Unclaimed {}", tid));
                 }
-            }
         }
         _ => {}
     }

@@ -482,22 +482,19 @@ pub(crate) fn build_previous_attempt_context(
 
     // Priority 1: Look for checkpoint summary from the previous agent
     let checkpoint_context = find_checkpoint_for_task(task, workgraph_dir);
-    if let Some(summary) = checkpoint_context {
-        if !summary.is_empty() {
+    if let Some(summary) = checkpoint_context
+        && !summary.is_empty() {
             return format_previous_context(&archive_timestamp, &summary, max_bytes);
         }
-    }
 
     // Priority 2: Truncated output.log from the archive
     let output_path = latest_archive.join("output.txt");
-    if output_path.exists() {
-        if let Ok(content) = fs::read_to_string(&output_path) {
-            if !content.trim().is_empty() {
+    if output_path.exists()
+        && let Ok(content) = fs::read_to_string(&output_path)
+            && !content.trim().is_empty() {
                 let tail = truncate_to_tail(&content, max_bytes);
                 return format_previous_context(&archive_timestamp, &tail, max_bytes);
             }
-        }
-    }
 
     // Priority 3: Task log entries
     if !task.log.is_empty() {
@@ -531,11 +528,10 @@ fn find_checkpoint_for_task(
 ) -> Option<String> {
     let mut prev_agents: Vec<String> = Vec::new();
     for entry in &task.log {
-        if let Some(ref actor) = entry.actor {
-            if actor.starts_with("agent-") && !prev_agents.contains(actor) {
+        if let Some(ref actor) = entry.actor
+            && actor.starts_with("agent-") && !prev_agents.contains(actor) {
                 prev_agents.push(actor.clone());
             }
-        }
     }
 
     for agent_id in prev_agents.iter().rev() {

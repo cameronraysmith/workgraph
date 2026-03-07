@@ -2047,9 +2047,7 @@ pub(super) fn word_wrap_segments(line: &str, width: usize) -> Vec<(usize, usize)
             if pos < n {
                 let curr_is_ws = chars[pos - 1].is_whitespace();
                 let next_is_ws = chars[pos].is_whitespace();
-                if !curr_is_ws && next_is_ws {
-                    last_break = Some(pos);
-                } else if curr_is_ws && !next_is_ws {
+                if (!curr_is_ws && next_is_ws) || (curr_is_ws && !next_is_ws) {
                     last_break = Some(pos);
                 }
             }
@@ -4476,7 +4474,7 @@ fn draw_service_health_badge(frame: &mut Frame, app: &mut VizApp, area: Rect) {
 
     let badge = Paragraph::new(Line::from(vec![
         Span::styled(
-            format!(" \u{25CF}"),
+            " \u{25CF}".to_string(),
             Style::default().fg(dot_color).bg(bg_color),
         ),
         Span::styled(
@@ -4726,12 +4724,11 @@ fn draw_service_control_panel(frame: &mut Frame, app: &VizApp) {
     lines.push(Line::from(""));
     lines.push(control_panel_line("Kill All Dead Agents", "[Enter]", *focus == ControlPanelFocus::KillAllDead, Color::Yellow));
     lines.push(control_panel_line("Retry Failed Evals", "[Enter]", *focus == ControlPanelFocus::RetryFailedEvals, Color::Cyan));
-    if let Some((ref msg, ref at)) = health.feedback {
-        if at.elapsed() < std::time::Duration::from_secs(5) {
+    if let Some((ref msg, ref at)) = health.feedback
+        && at.elapsed() < std::time::Duration::from_secs(5) {
             lines.push(Line::from(""));
             lines.push(Line::from(vec![Span::styled("  ", dim_style), Span::styled(msg.as_str(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))]));
         }
-    }
     if health.panic_confirm {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![

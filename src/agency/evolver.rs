@@ -133,15 +133,14 @@ pub fn should_trigger_evolution(
     let new_evals = current_eval_count.saturating_sub(state.last_eval_count);
 
     // Check minimum interval
-    if let Some(ref last_ts) = state.last_evolution_at {
-        if let Ok(last_time) = last_ts.parse::<DateTime<Utc>>() {
+    if let Some(ref last_ts) = state.last_evolution_at
+        && let Ok(last_time) = last_ts.parse::<DateTime<Utc>>() {
             let elapsed = Utc::now().signed_duration_since(last_time);
             if elapsed.num_seconds() < config.evolution_interval as i64 {
                 // Interval not met — only allow reactive trigger
                 return check_reactive_trigger(agency_dir, config, new_evals);
             }
         }
-    }
 
     // Check threshold trigger
     if new_evals >= config.evolution_threshold {

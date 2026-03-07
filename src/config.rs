@@ -517,6 +517,7 @@ impl DispatchRole {
 /// - Full: all tools (implementation/debugging)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ExecMode {
     /// No LLM — run `task.exec` command directly via bash
     Shell,
@@ -525,14 +526,10 @@ pub enum ExecMode {
     /// LLM with read-only file tools: `Bash(wg:*),Read,Glob,Grep,WebFetch,WebSearch`
     Light,
     /// Full Claude Code session with all tools
+    #[default]
     Full,
 }
 
-impl Default for ExecMode {
-    fn default() -> Self {
-        Self::Full
-    }
-}
 
 impl std::fmt::Display for ExecMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

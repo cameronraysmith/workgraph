@@ -63,11 +63,9 @@ pub fn run(dir: &Path, json: bool) -> Result<()> {
                 let elapsed = (end.with_timezone(&chrono::Utc) - start).num_seconds().max(0);
                 cumulative_secs += elapsed;
             }
-        } else {
-            if let Ok(hb) = chrono::DateTime::parse_from_rfc3339(&agent.last_heartbeat) {
-                let elapsed = (hb.with_timezone(&chrono::Utc) - start).num_seconds().max(0);
-                cumulative_secs += elapsed;
-            }
+        } else if let Ok(hb) = chrono::DateTime::parse_from_rfc3339(&agent.last_heartbeat) {
+            let elapsed = (hb.with_timezone(&chrono::Utc) - start).num_seconds().max(0);
+            cumulative_secs += elapsed;
         }
     }
 
@@ -90,24 +88,22 @@ pub fn run(dir: &Path, json: bool) -> Result<()> {
 
         // Service uptime
         match service_uptime_secs {
-            Some(secs) => println!("  {} Service uptime:     {}", "\u{2191}", fmt_duration(secs)),
-            None => println!("  {} Service uptime:     (not running)", "\u{2191}"),
+            Some(secs) => println!("  \u{2191} Service uptime:     {}", fmt_duration(secs)),
+            None => println!("  \u{2191} Service uptime:     (not running)"),
         }
 
         // Cumulative walltime
         println!(
-            "  {} Cumulative walltime: {} ({} agents total)",
-            "\u{03A3}", fmt_duration(cumulative_secs), total_agents,
+            "  \u{03A3} Cumulative walltime: {} ({} agents total)", fmt_duration(cumulative_secs), total_agents,
         );
 
         // Active agent time
         if active_count > 0 {
             println!(
-                "  {} Active agent time:   {} ({} agents)",
-                "\u{26A1}", fmt_duration(active_secs), active_count,
+                "  \u{26A1} Active agent time:   {} ({} agents)", fmt_duration(active_secs), active_count,
             );
         } else {
-            println!("  {} Active agent time:   (no active agents)", "\u{26A1}");
+            println!("  \u{26A1} Active agent time:   (no active agents)");
         }
     }
 

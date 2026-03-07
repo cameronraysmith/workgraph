@@ -273,9 +273,9 @@ fn build_evaluation_digest(workgraph_dir: &Path) -> String {
     let mut entries = Vec::new();
     if let Ok(dir) = fs::read_dir(&eval_dir) {
         for entry in dir.flatten() {
-            if entry.path().extension().is_some_and(|e| e == "json") {
-                if let Ok(content) = fs::read_to_string(entry.path()) {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+            if entry.path().extension().is_some_and(|e| e == "json")
+                && let Ok(content) = fs::read_to_string(entry.path())
+                    && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
                         let task = val.get("task_id").and_then(|v| v.as_str()).unwrap_or("?");
                         let score = val.get("score").and_then(|v| v.as_f64());
                         let verdict = val.get("verdict").and_then(|v| v.as_str());
@@ -286,8 +286,6 @@ fn build_evaluation_digest(workgraph_dir: &Path) -> String {
                         };
                         entries.push(line);
                     }
-                }
-            }
         }
     }
 

@@ -477,6 +477,7 @@ pub(crate) fn spawn_agent_inner(
 }
 
 /// Build the inner command string for the executor.
+#[allow(clippy::too_many_arguments)]
 fn build_inner_command(
     settings: &workgraph::service::executor::ExecutorSettings,
     exec_mode: &str,
