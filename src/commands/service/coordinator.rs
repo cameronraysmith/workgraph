@@ -1729,7 +1729,8 @@ fn spawn_agents_for_ready_tasks(
     dir: &Path,
     graph: &workgraph::graph::WorkGraph,
     executor: &str,
-    model: Option<&str>,
+    config: &Config,
+    default_model: Option<&str>,
     slots_available: usize,
     auto_assign: bool,
 ) -> usize {
@@ -1808,13 +1809,22 @@ fn spawn_agents_for_ready_tasks(
                 .unwrap_or_else(|| executor.to_string())
         };
 
-        // Pass coordinator model to spawn; spawn resolves the full hierarchy:
-        // task.model > executor.model > coordinator.model > 'default'
+        // Resolve model per-task: .assign-* tasks use the Assigner role model,
+        // all other tasks use the default (TaskAgent) model.
+        let task_model = if task.id.starts_with(".assign-") {
+            Some(
+                config
+                    .resolve_model_for_role(workgraph::config::DispatchRole::Assigner)
+                    .model,
+            )
+        } else {
+            default_model.map(String::from)
+        };
         eprintln!(
             "[coordinator] Spawning agent for: {} - {} (executor: {})",
             task.id, task.title, effective_executor
         );
-        match spawn::spawn_agent(dir, &task.id, &effective_executor, None, model) {
+        match spawn::spawn_agent(dir, &task.id, &effective_executor, None, task_model.as_deref()) {
             Ok((agent_id, pid)) => {
                 eprintln!("[coordinator] Spawned {} (PID {})", agent_id, pid);
                 spawned += 1;
@@ -2144,6 +2154,7 @@ pub fn coordinator_tick(
         dir,
         &graph,
         executor,
+        &config,
         Some(effective_model.as_str()),
         slots_available,
         config.agency.auto_assign,
@@ -3304,10 +3315,12 @@ mod tests {
         graph.add_node(Node::Task(task));
         save_graph(&graph, &wg_dir.join("graph.jsonl")).unwrap();
 
+        let config = Config::load_or_default(wg_dir);
         let result = spawn_agents_for_ready_tasks(
             wg_dir,
             &graph,
             "shell",
+            &config,
             None,
             10,
             true, // auto_assign = true
