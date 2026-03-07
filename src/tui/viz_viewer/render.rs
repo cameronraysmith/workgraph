@@ -1109,7 +1109,9 @@ fn draw_scrollbar(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         .content_height
         .saturating_sub(app.scroll.viewport_height);
     let mut state = ScrollbarState::new(max_scroll).position(app.scroll.offset_y);
-    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .thumb_style(Style::default().fg(Color::White))
+        .track_style(Style::default().fg(Color::DarkGray));
     frame.render_stateful_widget(scrollbar, area, &mut state);
 }
 
@@ -1130,7 +1132,9 @@ fn draw_panel_scrollbar(
     app.last_panel_scrollbar_area = sb_area;
 
     let mut state = ScrollbarState::new(max_scroll).position(position);
-    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .thumb_style(Style::default().fg(Color::White))
+        .track_style(Style::default().fg(Color::DarkGray));
     frame.render_stateful_widget(scrollbar, area, &mut state);
 }
 
@@ -1153,7 +1157,9 @@ fn draw_horizontal_scrollbar(
     };
     let max_offset = content_width.saturating_sub(viewport_width);
     let mut state = ScrollbarState::new(max_offset).position(offset_x);
-    let scrollbar = Scrollbar::new(ScrollbarOrientation::HorizontalBottom);
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::HorizontalBottom)
+        .thumb_style(Style::default().fg(Color::White))
+        .track_style(Style::default().fg(Color::DarkGray));
     frame.render_stateful_widget(scrollbar, scrollbar_area, &mut state);
     scrollbar_area
 }
