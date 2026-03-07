@@ -21,6 +21,7 @@ mod coordinator;
 pub(crate) mod coordinator_agent;
 pub mod ipc;
 mod triage;
+pub(crate) mod zero_output;
 
 pub use ipc::{IpcRequest, IpcResponse};
 
@@ -1442,10 +1443,8 @@ pub fn run_daemon(
                     coord_state.agents_spawned = result.agents_spawned;
                     coord_state.save(&dir);
 
-                    // Record agent spawn events in the event log
-                    if result.agents_spawned > 0 {
-                        record_tick_events(&dir, &event_log, &logger);
-                    }
+                    // Record tick events (spawns, completions, failures, zero-output kills)
+                    record_tick_events(&dir, &event_log, &logger);
 
                     logger.info(&format!(
                         "Coordinator tick #{} complete: agents_alive={}, tasks_ready={}, spawned={}",

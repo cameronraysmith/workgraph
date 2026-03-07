@@ -1116,6 +1116,10 @@ fn right_panel_scroll_up(app: &mut VizApp, amount: usize) {
         RightPanelTab::CoordLog => {
             app.coord_log_scroll_up(amount);
         }
+        RightPanelTab::Firehose => {
+            app.firehose.auto_tail = false;
+            app.firehose.scroll = app.firehose.scroll.saturating_sub(amount);
+        }
     }
 }
 
@@ -1154,6 +1158,13 @@ fn right_panel_scroll_down(app: &mut VizApp, amount: usize) {
         RightPanelTab::CoordLog => {
             app.coord_log_scroll_down(amount);
         }
+        RightPanelTab::Firehose => {
+            app.firehose.scroll += amount;
+            let max = app.firehose.total_rendered_lines.saturating_sub(app.firehose.viewport_height);
+            if app.firehose.scroll >= max {
+                app.firehose.auto_tail = true;
+            }
+        }
     }
 }
 
@@ -1186,6 +1197,10 @@ fn right_panel_scroll_to_top(app: &mut VizApp) {
         RightPanelTab::CoordLog => {
             app.coord_log_scroll_to_top();
         }
+        RightPanelTab::Firehose => {
+            app.firehose.auto_tail = false;
+            app.firehose.scroll = 0;
+        }
     }
 }
 
@@ -1217,6 +1232,10 @@ fn right_panel_scroll_to_bottom(app: &mut VizApp) {
         RightPanelTab::Files => {}
         RightPanelTab::CoordLog => {
             app.coord_log_scroll_to_bottom();
+        }
+        RightPanelTab::Firehose => {
+            app.firehose.auto_tail = true;
+            app.firehose.scroll = usize::MAX;
         }
     }
 }
@@ -1785,6 +1804,17 @@ fn vscrollbar_jump_panel(app: &mut VizApp, row: u16) {
             }
             app.coord_log.scroll = jump(max_scroll);
         }
+        RightPanelTab::Firehose => {
+            let total = app.firehose.total_rendered_lines;
+            let viewport = app.firehose.viewport_height;
+            let max_scroll = total.saturating_sub(viewport);
+            if max_scroll == 0 {
+                return;
+            }
+            let new_scroll = jump(max_scroll);
+            app.firehose.scroll = new_scroll;
+            app.firehose.auto_tail = new_scroll >= max_scroll;
+        }
         _ => {}
     }
 }
@@ -2162,6 +2192,7 @@ fn handle_files_key(app: &mut VizApp, code: KeyCode) {
 fn tab_at_column(col: u16) -> Option<RightPanelTab> {
     let labels = [
         "0:Chat", "1:Detail", "2:Log", "3:Msg", "4:Agency", "5:Config", "6:Files", "7:Coord",
+        "8:Fire",
     ];
     let mut pos: u16 = 0;
     for (i, label) in labels.iter().enumerate() {

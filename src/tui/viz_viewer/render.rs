@@ -80,6 +80,10 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
     if app.right_panel_tab == RightPanelTab::Files && app.file_browser.is_none() {
         app.file_browser = Some(super::file_browser::FileBrowser::new(&app.workgraph_dir));
     }
+    // Lazy-load firehose data on first switch to Firehose tab.
+    if app.right_panel_tab == RightPanelTab::Firehose && app.firehose.lines.is_empty() {
+        app.update_firehose();
+    }
 
     // Phase 1: Compute viewport dimensions from layout (needed for deferred centering).
     match app.layout_mode {
@@ -1261,6 +1265,9 @@ fn draw_right_panel(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         RightPanelTab::CoordLog => {
             draw_coord_log_tab(frame, app, content_area);
         }
+        RightPanelTab::Firehose => {
+            draw_firehose_tab(frame, app, content_area);
+        }
     }
 }
 
@@ -2383,6 +2390,140 @@ fn draw_coord_log_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
             total_lines.saturating_sub(viewport_h),
             scroll,
         );
+    }
+}
+
+/// Agent color palette for the firehose view.
+const FIREHOSE_COLORS: [Color; 8] = [
+    Color::Cyan,
+    Color::Green,
+    Color::Yellow,
+    Color::Magenta,
+    Color::Blue,
+    Color::LightRed,
+    Color::LightCyan,
+    Color::LightGreen,
+];
+
+/// Draw the Firehose tab content (panel 8) — merged stream of all agent output.
+fn draw_firehose_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
+    if app.firehose.lines.is_empty() {
+        let active_count = app
+            .agent_monitor
+            .agents
+            .iter()
+            .filter(|a| matches!(a.status, AgentStatus::Working))
+            .count();
+        let msg = Paragraph::new(vec![
+            Line::from(Span::styled(
+                "Firehose — All Agents",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                if active_count == 0 {
+                    "No active agents streaming output.".to_string()
+                } else {
+                    format!("{active_count} active agent(s), waiting for output...")
+                },
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]);
+        frame.render_widget(msg, area);
+        return;
+    }
+
+    let viewport_h = area.height.saturating_sub(1) as usize; // 1 line for header
+    let width = area.width as usize;
+    if viewport_h == 0 || width < 4 {
+        return;
+    }
+
+    // Header line: active agent count + total lines.
+    let active_count = app
+        .agent_monitor
+        .agents
+        .iter()
+        .filter(|a| matches!(a.status, AgentStatus::Working))
+        .count();
+    let header = Line::from(vec![
+        Span::styled(
+            "Firehose",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  {active_count} active  {} lines", app.firehose.lines.len()),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+
+    let header_area = Rect {
+        height: 1,
+        ..area
+    };
+    let content_area = Rect {
+        y: area.y + 1,
+        height: area.height.saturating_sub(1),
+        ..area
+    };
+
+    frame.render_widget(Paragraph::new(vec![header]), header_area);
+
+    // Build rendered lines with color-coded prefix.
+    let mut rendered: Vec<Line> = Vec::with_capacity(app.firehose.lines.len());
+    for fl in &app.firehose.lines {
+        let color = FIREHOSE_COLORS[fl.color_idx % FIREHOSE_COLORS.len()];
+        let short_agent = if fl.agent_id.len() > 10 {
+            &fl.agent_id[fl.agent_id.len().saturating_sub(8)..]
+        } else {
+            &fl.agent_id
+        };
+        let short_task = if fl.task_id.len() > 20 {
+            &fl.task_id[..fl.task_id.floor_char_boundary(20)]
+        } else {
+            &fl.task_id
+        };
+        let prefix = format!("[{short_agent} {short_task}] ");
+        let text_budget = width.saturating_sub(prefix.len());
+        let display_text = if fl.text.len() > text_budget && text_budget > 3 {
+            format!(
+                "{}…",
+                &fl.text[..fl.text.floor_char_boundary(text_budget.saturating_sub(1))]
+            )
+        } else {
+            fl.text.clone()
+        };
+        rendered.push(Line::from(vec![
+            Span::styled(
+                prefix,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(display_text),
+        ]));
+    }
+
+    let total_lines = rendered.len();
+    app.firehose.total_rendered_lines = total_lines;
+    app.firehose.viewport_height = viewport_h;
+
+    // Clamp scroll.
+    let max_scroll = total_lines.saturating_sub(viewport_h);
+    let scroll = app.firehose.scroll.min(max_scroll);
+    app.firehose.scroll = scroll;
+
+    let end = (scroll + viewport_h).min(total_lines);
+    let visible: Vec<Line> = rendered[scroll..end].to_vec();
+
+    let paragraph = Paragraph::new(visible);
+    frame.render_widget(paragraph, content_area);
+
+    // Scrollbar.
+    if total_lines > viewport_h && app.panel_scrollbar_visible() {
+        draw_panel_scrollbar(frame, app, content_area, max_scroll, scroll);
     }
 }
 
@@ -3995,6 +4136,7 @@ fn action_hints_parts(app: &VizApp) -> (&str, &str, Color, Vec<(&str, &str)>) {
                     RightPanelTab::Config => "5:Config",
                     RightPanelTab::Files => "6:Files",
                     RightPanelTab::CoordLog => "7:Coord",
+                    RightPanelTab::Firehose => "8:Fire",
                 };
                 let mut hints: Vec<(&str, &str)> = Vec::new();
                 match tab {
@@ -4007,7 +4149,10 @@ fn action_hints_parts(app: &VizApp) -> (&str, &str, Color, Vec<(&str, &str)>) {
                         hints.push(("PgUp/Dn", "page"));
                         hints.push(("Enter", "toggle"));
                     }
-                    RightPanelTab::Log | RightPanelTab::CoordLog | RightPanelTab::Agency => {
+                    RightPanelTab::Log
+                    | RightPanelTab::CoordLog
+                    | RightPanelTab::Agency
+                    | RightPanelTab::Firehose => {
                         hints.push(("↑↓", "scroll"));
                         hints.push(("PgUp/Dn", "page"));
                         hints.push(("Home/End", "jump"));

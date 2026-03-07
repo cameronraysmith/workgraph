@@ -92,6 +92,20 @@ pub enum Event {
         task_id: String,
         reason: String,
     },
+    /// A zero-output agent was detected and killed.
+    ZeroOutputKill {
+        agent_id: String,
+        task_id: String,
+        age_secs: u64,
+    },
+    /// A task hit the per-task zero-output circuit breaker.
+    ZeroOutputCircuitBreak { task_id: String, attempts: u32 },
+    /// Global API-down detected: majority of agents have zero output.
+    GlobalApiOutage {
+        zero_count: usize,
+        total_count: usize,
+        backoff_secs: u64,
+    },
 }
 
 impl std::fmt::Display for Event {
@@ -138,6 +152,35 @@ impl std::fmt::Display for Event {
                 reason,
             } => {
                 write!(f, "agent {} failed on {}: {}", agent_id, task_id, reason)
+            }
+            Event::ZeroOutputKill {
+                agent_id,
+                task_id,
+                age_secs,
+            } => {
+                write!(
+                    f,
+                    "zero-output agent {} killed on {} (alive {}s with no output)",
+                    agent_id, task_id, age_secs
+                )
+            }
+            Event::ZeroOutputCircuitBreak { task_id, attempts } => {
+                write!(
+                    f,
+                    "task {} circuit-broken after {} zero-output attempts",
+                    task_id, attempts
+                )
+            }
+            Event::GlobalApiOutage {
+                zero_count,
+                total_count,
+                backoff_secs,
+            } => {
+                write!(
+                    f,
+                    "GLOBAL API OUTAGE: {}/{} agents zero-output, backoff {}s",
+                    zero_count, total_count, backoff_secs
+                )
             }
         }
     }

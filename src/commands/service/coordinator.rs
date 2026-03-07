@@ -2212,6 +2212,28 @@ pub fn coordinator_tick(
         Err(early_result) => return Ok(early_result),
     };
 
+    // Phase 1.3: Zero-output agent detection — kill agents that have been alive
+    // for 5+ minutes with zero bytes in stream files (API call never returned).
+    {
+        let sweep = super::zero_output::sweep_zero_output_agents(dir);
+        if !sweep.killed.is_empty() {
+            eprintln!(
+                "[coordinator] Zero-output sweep: killed {} agent(s)",
+                sweep.killed.len()
+            );
+        }
+        if !sweep.circuit_broken_tasks.is_empty() {
+            eprintln!(
+                "[coordinator] Zero-output circuit breaker: {} task(s) failed: {:?}",
+                sweep.circuit_broken_tasks.len(),
+                sweep.circuit_broken_tasks
+            );
+        }
+        if sweep.global_outage_detected {
+            eprintln!("[coordinator] Zero-output: global API outage detected, spawn paused");
+        }
+    }
+
     // Phase 1.5: Auto-checkpoint alive agents if thresholds are met
     auto_checkpoint_agents(dir, &config);
 
@@ -2307,6 +2329,19 @@ pub fn coordinator_tick(
     // Phase 5: Check for ready tasks (after agency phases may have created new ones)
     if let Some(early_result) = check_ready_or_return(&graph, alive_count, dir) {
         return Ok(early_result);
+    }
+
+    // Phase 5.5: Check if spawning is paused due to global API-down backoff.
+    if super::zero_output::should_pause_spawning(dir) {
+        eprintln!("[coordinator] Spawning paused: global zero-output backoff active");
+        let cycle_analysis = graph.compute_cycle_analysis();
+        let final_ready = ready_tasks_with_peers_cycle_aware(&graph, dir, &cycle_analysis);
+        let ready_count = final_ready.len();
+        return Ok(TickResult {
+            agents_alive: alive_count,
+            tasks_ready: ready_count,
+            agents_spawned: 0,
+        });
     }
 
     // Phase 6: Spawn agents on ready tasks
