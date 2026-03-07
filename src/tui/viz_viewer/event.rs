@@ -125,6 +125,23 @@ fn handle_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
         return;
     }
 
+    // Service health detail popup intercepts keys when open
+    if app.service_health.detail_open {
+        match code {
+            KeyCode::Esc | KeyCode::Char('q') => app.service_health.detail_open = false,
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.service_health.detail_scroll =
+                    app.service_health.detail_scroll.saturating_add(1);
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.service_health.detail_scroll =
+                    app.service_health.detail_scroll.saturating_sub(1);
+            }
+            _ => {}
+        }
+        return;
+    }
+
     // Dispatch based on input mode
     match &app.input_mode {
         InputMode::Search => handle_search_input(app, code, modifiers),
@@ -1328,6 +1345,13 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
             }
         }
         MouseEventKind::Down(MouseButton::Left) => {
+            // Service health badge click
+            let in_service_badge = app.last_service_badge_area.width > 0
+                && app.last_service_badge_area.contains(pos);
+            if in_service_badge {
+                app.toggle_service_health_detail();
+                return;
+            }
             if in_graph_vscrollbar {
                 // Click on graph vertical scrollbar: start drag and jump.
                 app.focused_panel = FocusedPanel::Graph;

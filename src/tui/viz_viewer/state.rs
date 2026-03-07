@@ -880,6 +880,122 @@ pub struct AgentMonitorEntry {
     pub completed_at: Option<String>,
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// Service health indicator
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// Health level for the service daemon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServiceHealthLevel {
+    /// Service running normally, no stuck tasks.
+    Green,
+    /// Degraded: paused, starting up (<30s uptime), or has stuck tasks.
+    Yellow,
+    /// Down or errored: socket unreachable or process dead.
+    Red,
+}
+
+/// A task that is in-progress but whose assigned agent PID is dead.
+#[derive(Clone, Debug)]
+pub struct StuckTask {
+    pub task_id: String,
+    pub task_title: String,
+    pub agent_id: String,
+}
+
+/// State for the service health badge in the status bar.
+pub struct ServiceHealthState {
+    /// Current health level (drives badge color).
+    pub level: ServiceHealthLevel,
+    /// Short label shown in the badge (e.g. "OK", "PAUSED", "DOWN").
+    pub label: String,
+    /// Service PID (if running).
+    pub pid: Option<u32>,
+    /// Human-readable uptime string.
+    pub uptime: Option<String>,
+    /// Socket path.
+    pub socket_path: Option<String>,
+    /// Agents alive / max.
+    pub agents_alive: usize,
+    pub agents_max: usize,
+    /// Total agents ever spawned.
+    pub agents_total: usize,
+    /// Whether coordinator is paused.
+    pub paused: bool,
+    /// Stuck tasks (in-progress with dead agent PID).
+    pub stuck_tasks: Vec<StuckTask>,
+    /// Recent errors from daemon log (last 5 lines containing ERROR/WARN).
+    pub recent_errors: Vec<String>,
+    /// Last poll time.
+    pub last_poll: Instant,
+    /// Whether the detail popup is open.
+    pub detail_open: bool,
+    /// Scroll offset within the detail popup.
+    pub detail_scroll: usize,
+    /// Uptime in seconds (for <30s starting detection).
+    pub uptime_secs: Option<u64>,
+}
+
+impl Default for ServiceHealthState {
+    fn default() -> Self {
+        Self {
+            level: ServiceHealthLevel::Red,
+            label: "DOWN".to_string(),
+            pid: None,
+            uptime: None,
+            socket_path: None,
+            agents_alive: 0,
+            agents_max: 0,
+            agents_total: 0,
+            paused: false,
+            stuck_tasks: Vec::new(),
+            recent_errors: Vec::new(),
+            last_poll: Instant::now(),
+            detail_open: false,
+            detail_scroll: 0,
+            uptime_secs: None,
+        }
+    }
+}
+
+
+
+
+
+// Time counters
+pub struct TimeCounters {
+    pub service_uptime_secs: Option<u64>,
+    pub cumulative_secs: u64,
+    pub active_secs: u64,
+    pub active_agent_count: usize,
+    pub session_start: Instant,
+    pub last_refresh: Instant,
+    pub show_uptime: bool,
+    pub show_cumulative: bool,
+    pub show_active: bool,
+    pub show_session: bool,
+}
+impl TimeCounters {
+    pub fn new(config_counters: &str) -> Self {
+        let parts: Vec<&str> = config_counters.split(',').map(|s| s.trim()).collect();
+        Self {
+            service_uptime_secs: None, cumulative_secs: 0, active_secs: 0, active_agent_count: 0,
+            session_start: Instant::now(),
+            last_refresh: Instant::now() - std::time::Duration::from_secs(60),
+            show_uptime: parts.contains(&"uptime"), show_cumulative: parts.contains(&"cumulative"),
+            show_active: parts.contains(&"active"), show_session: parts.contains(&"session"),
+        }
+    }
+    pub fn any_enabled(&self) -> bool {
+        self.show_uptime || self.show_cumulative || self.show_active || self.show_session
+    }
+}
+pub fn format_duration_compact(secs: u64) -> String {
+    if secs < 60 { format!("{}s", secs) }
+    else if secs < 3600 { format!("{}m", secs / 60) }
+    else { let h = secs / 3600; let m = (secs % 3600) / 60; if m > 0 { format!("{}h{}m", h, m) } else { format!("{}h", h) } }
+}
+
 /// Live JSONL stream state for a single agent.
 pub struct AgentStreamInfo {
     /// File position (byte offset) — resume reading from here.
@@ -1475,6 +1591,14 @@ pub struct VizApp {
     /// Per-agent JSONL stream state for live activity feed.
     pub agent_streams: HashMap<String, AgentStreamInfo>,
 
+    // ── Service health indicator ──
+    pub service_health: ServiceHealthState,
+    /// Hit-test area for the service health badge (set each frame by renderer).
+    pub last_service_badge_area: Rect,
+
+    // Time counters
+    pub time_counters: TimeCounters,
+
     // ── Firehose state (panel 8) ──
     pub firehose: FirehoseState,
 
@@ -1693,6 +1817,9 @@ impl VizApp {
             chat: ChatState::default(),
             agent_monitor: AgentMonitorState::default(),
             agent_streams: HashMap::new(),
+            service_health: ServiceHealthState::default(),
+            last_service_badge_area: Rect::default(),
+            time_counters: TimeCounters::new(&config.tui.counters),
             firehose: FirehoseState::default(),
             agency_lifecycle: None,
             log_pane: LogPaneState::default(),
@@ -1733,6 +1860,8 @@ impl VizApp {
         app.load_stats();
         app.load_agent_monitor();
         app.check_coordinator_status();
+        app.update_service_health();
+        app.update_time_counters();
         app.load_chat_history();
         app
     }
@@ -2739,6 +2868,14 @@ impl VizApp {
         if self.chat.awaiting_response || self.right_panel_tab == RightPanelTab::Chat {
             self.check_coordinator_status();
             self.poll_chat_messages();
+        }
+
+        // Poll service health every ~5 seconds.
+        if self.service_health.last_poll.elapsed() >= std::time::Duration::from_secs(5) {
+            self.update_service_health();
+        }
+        if self.time_counters.last_refresh.elapsed() >= std::time::Duration::from_secs(10) {
+            self.update_time_counters();
         }
 
         self.last_refresh = Instant::now();
@@ -3956,6 +4093,9 @@ impl VizApp {
             chat: ChatState::default(),
             agent_monitor: AgentMonitorState::default(),
             agent_streams: HashMap::new(),
+            service_health: ServiceHealthState::default(),
+            last_service_badge_area: Rect::default(),
+            time_counters: TimeCounters::new("uptime,cumulative,active"),
             firehose: FirehoseState::default(),
             agency_lifecycle: None,
             log_pane: LogPaneState::default(),
@@ -4793,6 +4933,169 @@ impl VizApp {
             .ok()
             .flatten()
             .is_some_and(|s| is_service_alive(s.pid));
+    }
+
+    /// Poll service health: read state files to determine health level,
+    /// stuck tasks, and recent errors.
+    pub fn update_service_health(&mut self) {
+        use crate::commands::service::{
+            CoordinatorState, ServiceState, is_service_alive, log_file_path,
+        };
+
+        let dir = &self.workgraph_dir;
+
+        // 1. Load service state
+        let state = ServiceState::load(dir).ok().flatten();
+        let Some(state) = state else {
+            self.service_health.level = ServiceHealthLevel::Red;
+            self.service_health.label = "DOWN".to_string();
+            self.service_health.pid = None;
+            self.service_health.uptime = None;
+            self.service_health.socket_path = None;
+            self.service_health.uptime_secs = None;
+            self.service_health.agents_alive = 0;
+            self.service_health.agents_total = 0;
+            self.service_health.paused = false;
+            self.service_health.stuck_tasks.clear();
+            self.service_health.recent_errors.clear();
+            self.service_health.last_poll = Instant::now();
+            return;
+        };
+
+        // 2. Check if PID is alive
+        if !is_service_alive(state.pid) {
+            self.service_health.level = ServiceHealthLevel::Red;
+            self.service_health.label = "DOWN".to_string();
+            self.service_health.pid = Some(state.pid);
+            self.service_health.socket_path = Some(state.socket_path);
+            self.service_health.uptime = None;
+            self.service_health.uptime_secs = None;
+            self.service_health.last_poll = Instant::now();
+            return;
+        }
+
+        // Service is alive — gather details
+        self.service_health.pid = Some(state.pid);
+        self.service_health.socket_path = Some(state.socket_path);
+
+        // Compute uptime
+        let uptime_secs = chrono::DateTime::parse_from_rfc3339(&state.started_at)
+            .ok()
+            .map(|started| {
+                let now = chrono::Utc::now();
+                (now - started.with_timezone(&chrono::Utc)).num_seconds().max(0) as u64
+            });
+        self.service_health.uptime_secs = uptime_secs;
+        self.service_health.uptime = uptime_secs.map(|s| {
+            if s < 60 {
+                format!("{}s", s)
+            } else if s < 3600 {
+                format!("{}m{}s", s / 60, s % 60)
+            } else {
+                format!("{}h{}m", s / 3600, (s % 3600) / 60)
+            }
+        });
+
+        // Load coordinator state
+        let coord = CoordinatorState::load_or_default(dir);
+        self.service_health.paused = coord.paused;
+        self.service_health.agents_max = coord.max_agents;
+
+        // Load agent registry for alive count and stuck task detection
+        let registry = workgraph::AgentRegistry::load_or_warn(dir);
+        let alive = registry.active_count();
+        self.service_health.agents_alive = alive;
+        self.service_health.agents_total = registry.agents.len();
+
+        // Detect stuck tasks: in-progress tasks whose agent PID is dead
+        let graph_path = dir.join("graph.jsonl");
+        let mut stuck = Vec::new();
+        if let Ok(graph) = workgraph::parser::load_graph(&graph_path) {
+            for task in graph.tasks() {
+                if task.status == workgraph::graph::Status::InProgress {
+                    if let Some(ref agent_id) = task.agent {
+                        if let Some(agent) = registry.agents.get(agent_id) {
+                            if !crate::commands::is_process_alive(agent.pid) {
+                                stuck.push(StuckTask {
+                                    task_id: task.id.clone(),
+                                    task_title: task.title.clone(),
+                                    agent_id: agent_id.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.service_health.stuck_tasks = stuck;
+
+        // Read recent errors from daemon log (last 5 ERROR/WARN lines)
+        let log_path = log_file_path(dir);
+        let mut recent_errors = Vec::new();
+        if let Ok(content) = std::fs::read_to_string(&log_path) {
+            for line in content.lines().rev() {
+                if line.contains("ERROR") || line.contains("WARN") {
+                    recent_errors.push(line.to_string());
+                    if recent_errors.len() >= 5 {
+                        break;
+                    }
+                }
+            }
+            recent_errors.reverse();
+        }
+        self.service_health.recent_errors = recent_errors;
+
+        // Determine health level
+        let stuck_count = self.service_health.stuck_tasks.len();
+        if coord.paused {
+            self.service_health.level = ServiceHealthLevel::Yellow;
+            self.service_health.label = "PAUSED".to_string();
+        } else if uptime_secs.is_some_and(|s| s < 30) {
+            self.service_health.level = ServiceHealthLevel::Yellow;
+            self.service_health.label = "STARTING".to_string();
+        } else if stuck_count > 0 {
+            self.service_health.level = ServiceHealthLevel::Yellow;
+            self.service_health.label = format!("OK ({} stuck)", stuck_count);
+        } else if !self.service_health.recent_errors.is_empty() {
+            self.service_health.level = ServiceHealthLevel::Yellow;
+            self.service_health.label = "DEGRADED".to_string();
+        } else {
+            self.service_health.level = ServiceHealthLevel::Green;
+            self.service_health.label = format!("{}/{}", alive, coord.max_agents);
+        }
+
+        self.service_health.last_poll = Instant::now();
+    }
+
+
+
+    pub fn update_time_counters(&mut self) {
+        if !self.time_counters.any_enabled() { return; }
+        self.time_counters.service_uptime_secs = self.service_health.uptime_secs;
+        let registry = workgraph::AgentRegistry::load_or_warn(&self.workgraph_dir);
+        let now = chrono::Utc::now();
+        let (mut cumulative, mut active, mut active_count) = (0i64, 0i64, 0usize);
+        for agent in registry.agents.values() {
+            let start = chrono::DateTime::parse_from_rfc3339(&agent.started_at).ok().map(|dt| dt.with_timezone(&chrono::Utc));
+            let Some(start) = start else { continue };
+            if agent.is_alive() {
+                let e = (now - start).num_seconds().max(0); cumulative += e; active += e; active_count += 1;
+            } else if let Some(ref end_str) = agent.completed_at {
+                if let Ok(end) = chrono::DateTime::parse_from_rfc3339(end_str) { cumulative += (end.with_timezone(&chrono::Utc) - start).num_seconds().max(0); }
+            } else if let Ok(hb) = chrono::DateTime::parse_from_rfc3339(&agent.last_heartbeat) {
+                cumulative += (hb.with_timezone(&chrono::Utc) - start).num_seconds().max(0);
+            }
+        }
+        self.time_counters.cumulative_secs = cumulative as u64;
+        self.time_counters.active_secs = active as u64;
+        self.time_counters.active_agent_count = active_count;
+        self.time_counters.last_refresh = Instant::now();
+    }
+
+    /// Toggle the service health detail popup.
+    pub fn toggle_service_health_detail(&mut self) {
+        self.service_health.detail_open = !self.service_health.detail_open;
+        self.service_health.detail_scroll = 0;
     }
 
     /// Load chat history on startup.
@@ -7931,5 +8234,114 @@ mod firehose_tests {
         let ca = app.firehose.lines.iter().find(|l| l.agent_id == "agent-a").unwrap().color_idx;
         let cb = app.firehose.lines.iter().find(|l| l.agent_id == "agent-b").unwrap().color_idx;
         assert_ne!(ca, cb);
+    }
+}
+
+#[cfg(test)]
+mod service_health_tests {
+    use super::*;
+
+    #[test]
+    fn default_is_red_down() {
+        let health = ServiceHealthState::default();
+        assert_eq!(health.level, ServiceHealthLevel::Red);
+        assert_eq!(health.label, "DOWN");
+        assert!(health.pid.is_none());
+        assert!(!health.detail_open);
+        assert!(health.stuck_tasks.is_empty());
+        assert!(health.recent_errors.is_empty());
+    }
+
+    #[test]
+    fn level_equality() {
+        assert_eq!(ServiceHealthLevel::Green, ServiceHealthLevel::Green);
+        assert_ne!(ServiceHealthLevel::Green, ServiceHealthLevel::Yellow);
+        assert_ne!(ServiceHealthLevel::Yellow, ServiceHealthLevel::Red);
+    }
+
+    #[test]
+    fn stuck_task_fields() {
+        let stuck = StuckTask {
+            task_id: "build-ui".to_string(),
+            task_title: "Build the UI component".to_string(),
+            agent_id: "agent-42".to_string(),
+        };
+        assert_eq!(stuck.task_id, "build-ui");
+        assert_eq!(stuck.task_title, "Build the UI component");
+        assert_eq!(stuck.agent_id, "agent-42");
+    }
+
+    #[test]
+    fn toggle_detail() {
+        let mut health = ServiceHealthState::default();
+        assert!(!health.detail_open);
+        health.detail_open = !health.detail_open;
+        assert!(health.detail_open);
+        health.detail_open = !health.detail_open;
+        assert!(!health.detail_open);
+    }
+
+    #[test]
+    fn uptime_format_logic() {
+        let fmt = |s: u64| -> String {
+            if s < 60 { format!("{}s", s) }
+            else if s < 3600 { format!("{}m{}s", s / 60, s % 60) }
+            else { format!("{}h{}m", s / 3600, (s % 3600) / 60) }
+        };
+        assert_eq!(fmt(0), "0s");
+        assert_eq!(fmt(29), "29s");
+        assert_eq!(fmt(60), "1m0s");
+        assert_eq!(fmt(90), "1m30s");
+        assert_eq!(fmt(3600), "1h0m");
+        assert_eq!(fmt(3661), "1h1m");
+    }
+
+    #[test]
+    fn yellow_paused() {
+        let mut h = ServiceHealthState::default();
+        h.paused = true;
+        h.level = ServiceHealthLevel::Yellow;
+        h.label = "PAUSED".to_string();
+        assert_eq!(h.level, ServiceHealthLevel::Yellow);
+        assert_eq!(h.label, "PAUSED");
+    }
+
+    #[test]
+    fn yellow_stuck_tasks() {
+        let mut h = ServiceHealthState::default();
+        h.stuck_tasks = vec![
+            StuckTask { task_id: "t1".into(), task_title: "T1".into(), agent_id: "a1".into() },
+            StuckTask { task_id: "t2".into(), task_title: "T2".into(), agent_id: "a2".into() },
+        ];
+        h.level = ServiceHealthLevel::Yellow;
+        h.label = format!("OK ({} stuck)", h.stuck_tasks.len());
+        assert_eq!(h.label, "OK (2 stuck)");
+    }
+
+    #[test]
+    fn green_state() {
+        let mut h = ServiceHealthState::default();
+        h.level = ServiceHealthLevel::Green;
+        h.agents_alive = 3;
+        h.agents_max = 6;
+        h.label = format!("{}/{}", h.agents_alive, h.agents_max);
+        assert_eq!(h.label, "3/6");
+    }
+
+    #[test]
+    fn detail_scroll_bounds() {
+        let mut h = ServiceHealthState::default();
+        h.detail_scroll = h.detail_scroll.saturating_add(3);
+        assert_eq!(h.detail_scroll, 3);
+        h.detail_scroll = h.detail_scroll.saturating_sub(100);
+        assert_eq!(h.detail_scroll, 0);
+    }
+
+    #[test]
+    fn no_service_state_file_is_red() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(temp.path().join("service")).unwrap();
+        use crate::commands::service::ServiceState;
+        assert!(ServiceState::load(temp.path()).ok().flatten().is_none());
     }
 }

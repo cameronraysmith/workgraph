@@ -4313,61 +4313,25 @@ fn draw_status_bar(frame: &mut Frame, app: &VizApp, area: Rect) {
         render_token_breakdown(&mut spans, usage, label);
     }
 
-    // Time counters (compact display)
+    // Time counters
     {
         let tc = &app.time_counters;
-        let mut counter_parts: Vec<Span> = Vec::new();
-
+        let mut cp: Vec<Span> = Vec::new();
         if tc.show_uptime {
-            let uptime_str = match tc.service_uptime_secs {
-                Some(s) => format!("\u{2191}{}", format_duration_compact(s)),
-                None => "\u{2191}-".to_string(),
-            };
-            counter_parts.push(Span::styled(
-                uptime_str,
-                Style::default().fg(Color::Cyan),
-            ));
+            cp.push(Span::styled(match tc.service_uptime_secs { Some(s) => format!("\u{2191}{}", format_duration_compact(s)), None => "\u{2191}-".into() }, Style::default().fg(Color::Cyan)));
         }
-
         if tc.show_cumulative {
-            let cum_str = format!("\u{03A3}{}", format_duration_compact(tc.cumulative_secs));
-            counter_parts.push(Span::styled(
-                cum_str,
-                Style::default().fg(Color::Magenta),
-            ));
+            cp.push(Span::styled(format!("\u{03A3}{}", format_duration_compact(tc.cumulative_secs)), Style::default().fg(Color::Magenta)));
         }
-
         if tc.show_active && tc.active_agent_count > 0 {
-            let active_str = format!(
-                "\u{26A1}{}({})",
-                format_duration_compact(tc.active_secs),
-                tc.active_agent_count,
-            );
-            counter_parts.push(Span::styled(
-                active_str,
-                Style::default().fg(Color::Green),
-            ));
+            cp.push(Span::styled(format!("\u{26A1}{}({})", format_duration_compact(tc.active_secs), tc.active_agent_count), Style::default().fg(Color::Green)));
         }
-
         if tc.show_session {
-            let session_str = format!(
-                "\u{25F7}{}",
-                format_duration_compact(tc.session_start.elapsed().as_secs()),
-            );
-            counter_parts.push(Span::styled(
-                session_str,
-                Style::default().fg(Color::DarkGray),
-            ));
+            cp.push(Span::styled(format!("\u{25F7}{}", format_duration_compact(tc.session_start.elapsed().as_secs())), Style::default().fg(Color::DarkGray)));
         }
-
-        if !counter_parts.is_empty() {
+        if !cp.is_empty() {
             spans.push(Span::styled("| ", Style::default().fg(Color::DarkGray)));
-            for (i, part) in counter_parts.into_iter().enumerate() {
-                if i > 0 {
-                    spans.push(Span::styled(" ", Style::default()));
-                }
-                spans.push(part);
-            }
+            for (i, p) in cp.into_iter().enumerate() { if i > 0 { spans.push(Span::styled(" ", Style::default())); } spans.push(p); }
             spans.push(Span::styled(" ", Style::default()));
         }
     }
