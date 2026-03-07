@@ -1,5 +1,6 @@
 pub mod abandon;
 pub mod add;
+pub mod approve;
 pub mod agency_create;
 pub mod agency_init;
 pub mod agency_merge;
@@ -66,6 +67,7 @@ pub mod plan;
 pub mod quickstart;
 pub mod ready;
 pub mod reclaim;
+pub mod reject;
 pub mod replay;
 pub mod reschedule;
 pub mod resource;
@@ -483,7 +485,7 @@ mod provenance_coverage_tests {
         )
         .unwrap();
 
-        super::abandon::run(dir, "prov-abandon", Some("no longer needed")).unwrap();
+        super::abandon::run(dir, "prov-abandon", Some("no longer needed"), &[]).unwrap();
         let entries = ops_with_type(dir, "abandon");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].detail["reason"], "no longer needed");
@@ -708,7 +710,7 @@ mod provenance_coverage_tests {
         )
         .unwrap();
         super::fail::run(dir, "prov-gc", Some("oops")).unwrap();
-        super::abandon::run(dir, "prov-gc", Some("giving up")).unwrap();
+        super::abandon::run(dir, "prov-gc", Some("giving up"), &[]).unwrap();
 
         super::gc::run(dir, false, false, None).unwrap();
         let entries = ops_with_type(dir, "gc");

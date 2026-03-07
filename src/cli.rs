@@ -297,6 +297,10 @@ pub enum Commands {
         /// Reason for abandonment
         #[arg(long)]
         reason: Option<String>,
+
+        /// Task IDs that supersede/replace this task (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        superseded_by: Vec<String>,
     },
 
     /// Retry a failed task (resets to open status)
@@ -304,6 +308,24 @@ pub enum Commands {
         /// Task ID to retry
         #[arg(value_name = "TASK")]
         id: String,
+    },
+
+    /// Approve a task pending validation (transitions to Done)
+    Approve {
+        /// Task ID to approve
+        #[arg(value_name = "TASK")]
+        id: String,
+    },
+
+    /// Reject a task pending validation (reopens with feedback, or fails after max rejections)
+    Reject {
+        /// Task ID to reject
+        #[arg(value_name = "TASK")]
+        id: String,
+
+        /// Reason for rejection
+        #[arg(long)]
+        reason: String,
     },
 
     /// Claim a task for work (sets status to InProgress)
@@ -2455,6 +2477,8 @@ pub fn command_name(cmd: &Commands) -> &'static str {
         Commands::Fail { .. } => "fail",
         Commands::Abandon { .. } => "abandon",
         Commands::Retry { .. } => "retry",
+        Commands::Approve { .. } => "approve",
+        Commands::Reject { .. } => "reject",
         Commands::Claim { .. } => "claim",
         Commands::Unclaim { .. } => "unclaim",
         Commands::Pause { .. } => "pause",
