@@ -10,9 +10,8 @@ use workgraph::agency::evolver::{self, EvolutionTrigger, EvolverState};
 use workgraph::agency::run_mode::{self, AssignmentPath};
 use workgraph::agency::{
     AssignerModeContext, AssignmentMode, Evaluation, TaskAssignmentRecord,
-    count_assignment_records, eval_source, find_cached_agent, load_agent,
-    load_all_evaluations_or_warn, load_role, load_tradeoff, render_assigner_mode_context,
-    render_identity_prompt_rich, resolve_all_components, resolve_outcome, save_assignment_record,
+    count_assignment_records, eval_source, find_cached_agent,
+    load_all_evaluations_or_warn, render_assigner_mode_context, save_assignment_record,
 };
 use workgraph::chat;
 use workgraph::config::Config;
@@ -1128,17 +1127,17 @@ fn build_auto_evaluate_tasks(
         .map(|a| a.id.as_str())
         .collect();
 
-    // Collect all tasks (not just ready ones) that might need eval tasks.
-    // We iterate all non-terminal tasks so eval tasks are created early.
+    // Catch-all for tasks that weren't published with eager scaffolding
+    // (backward compatibility). The eval_scaffold helper handles idempotency
+    // and tag checks, so this is safe to call even if publish already created
+    // the eval task.
     let tasks_needing_eval: Vec<_> = graph
         .tasks()
         .filter(|t| {
-            // Skip tasks that already have an evaluation task
             let eval_id = format!(".evaluate-{}", t.id);
             if graph.get_task(&eval_id).is_some() {
                 return false;
             }
-            // Skip tasks tagged with evaluation/assignment/evolution
             let dominated_tags = ["evaluation", "assignment", "evolution"];
             if t.tags
                 .iter()
@@ -1146,9 +1145,6 @@ fn build_auto_evaluate_tasks(
             {
                 return false;
             }
-            // Skip tasks already tagged as having had evaluation scheduled.
-            // This survives gc (which removes the evaluate-* task) and prevents
-            // re-creating hundreds of eval tasks on service restart.
             if t.tags.iter().any(|tag| tag == "eval-scheduled") {
                 return false;
             }
@@ -1158,134 +1154,19 @@ fn build_auto_evaluate_tasks(
             {
                 return false;
             }
-            // Only create for tasks that are active (Open, InProgress, Blocked)
-            // or already completed (Done, Failed) without an eval task
             !matches!(t.status, Status::Abandoned)
         })
         .map(|t| (t.id.clone(), t.title.clone()))
         .collect();
 
-    // Resolve evaluator agent identity once (shared across all eval tasks)
-    let evaluator_identity = config
-        .agency
-        .evaluator_agent
-        .as_ref()
-        .and_then(|agent_hash| {
-            let agency_dir = dir.join("agency");
-            let agents_dir = agency_dir.join("cache/agents");
-            let agent_path = agents_dir.join(format!("{}.yaml", agent_hash));
-            let agent = load_agent(&agent_path).ok()?;
-            let roles_dir = agency_dir.join("cache/roles");
-            let role_path = roles_dir.join(format!("{}.yaml", agent.role_id));
-            let role = load_role(&role_path).ok()?;
-            let tradeoffs_dir = agency_dir.join("primitives/tradeoffs");
-            let tradeoff_path = tradeoffs_dir.join(format!("{}.yaml", agent.tradeoff_id));
-            let tradeoff = load_tradeoff(&tradeoff_path).ok()?;
-            let workgraph_root = dir;
-            let resolved_skills = resolve_all_components(&role, workgraph_root, &agency_dir);
-            let outcome = resolve_outcome(&role.outcome_id, &agency_dir);
-            Some(render_identity_prompt_rich(
-                &role,
-                &tradeoff,
-                &resolved_skills,
-                outcome.as_ref(),
-            ))
-        });
-
-    for (task_id, task_title) in &tasks_needing_eval {
-        let eval_task_id = format!(".evaluate-{}", task_id);
-
-        // Double-check (the filter above already checks but graph may have changed)
-        if graph.get_task(&eval_task_id).is_some() {
-            continue;
-        }
-
-        let mut desc = String::new();
-        // Prepend evaluator identity when composed evaluator agent is available
-        if let Some(ref identity) = evaluator_identity {
-            desc.push_str(identity);
-            desc.push_str("\n\n");
-        }
-        desc.push_str(&format!(
-            "Evaluate the completed task '{}'.\n\n\
-             Run `wg evaluate run {}` to produce a structured evaluation.\n\
-             This reads the task output from `.workgraph/output/{}/` and \
-             the task definition via `wg show {}`.",
-            task_id, task_id, task_id, task_id,
-        ));
-
-        let eval_task = Task {
-            id: eval_task_id.clone(),
-            title: format!("Evaluate: {}", task_title),
-            description: Some(desc),
-            status: Status::Open,
-            assigned: None,
-            estimate: None,
-            before: vec![],
-            after: vec![task_id.clone()],
-            requires: vec![],
-            tags: vec!["evaluation".to_string(), "agency".to_string()],
-            skills: vec![],
-            inputs: vec![],
-            deliverables: vec![],
-            artifacts: vec![],
-            exec: Some(format!("wg evaluate run {}", task_id)),
-            not_before: None,
-            created_at: Some(Utc::now().to_rfc3339()),
-            started_at: None,
-            completed_at: None,
-            log: vec![],
-            retry_count: 0,
-            max_retries: None,
-            failure_reason: None,
-            model: Some(
-                config
-                    .resolve_model_for_role(workgraph::config::DispatchRole::Evaluator)
-                    .model,
-            ),
-            provider: config
-                .resolve_model_for_role(workgraph::config::DispatchRole::Evaluator)
-                .provider,
-            verify: None,
-            agent: config.agency.evaluator_agent.clone(),
-
-            loop_iteration: 0,
-            cycle_failure_restarts: 0,
-            ready_after: None,
-            paused: false,
-            visibility: "internal".to_string(),
-            context_scope: None,
-            cycle_config: None,
-            // Evaluation uses inline lightweight LLM call — no file access needed
-            exec_mode: Some("bare".to_string()),
-            token_usage: None,
-            session_id: None,
-            wait_condition: None,
-            checkpoint: None,
-            resurrection_count: 0,
-            last_resurrected_at: None,
-            validation: None,
-            validation_commands: vec![],
-            test_required: false,
-            rejection_count: 0,
-            max_rejections: None,
-            superseded_by: vec![],
-            supersedes: None,
-        };
-
-        graph.add_node(Node::Task(eval_task));
-
-        // Tag the source task so we never recreate the eval task after gc.
-        if let Some(source) = graph.get_task_mut(task_id)
-            && !source.tags.iter().any(|t| t == "eval-scheduled")
-        {
-            source.tags.push("eval-scheduled".to_string());
-        }
-
-        eprintln!(
-            "[coordinator] Created evaluation task '{}' blocked by '{}'",
-            eval_task_id, task_id,
-        );
+    // Use shared scaffold helper (same logic as publish-time creation)
+    let count = crate::commands::eval_scaffold::scaffold_eval_tasks_batch(
+        dir,
+        graph,
+        &tasks_needing_eval,
+        config,
+    );
+    if count > 0 {
         modified = true;
     }
 
@@ -1502,6 +1383,17 @@ fn build_flip_verification_tasks(
             "[coordinator] Created FLIP verification task '{}' (score {:.2} < {:.2})",
             verify_task_id, eval.score, threshold,
         );
+
+        // Eagerly scaffold the eval task for the verification task
+        let verify_title = format!("Verify (FLIP {:.2}): {}", eval.score, source_title);
+        crate::commands::eval_scaffold::scaffold_eval_task(
+            dir,
+            graph,
+            &verify_task_id,
+            &verify_title,
+            config,
+        );
+
         modified = true;
     }
 

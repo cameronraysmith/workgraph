@@ -296,7 +296,9 @@ pub fn run(
     // Step 6: Run lightweight LLM call for evaluation (replaces claude --print)
     println!("Evaluating task '{}' with model '{}'...", task_id, model);
 
-    let timeout_secs = config.agency.triage_timeout.unwrap_or(60);
+    // Eval calls can be slow with large task outputs — use a generous timeout.
+    // The triage_timeout is designed for short triage calls; evals need more.
+    let timeout_secs = config.agency.triage_timeout.unwrap_or(60).max(300);
     let eval_result = workgraph::service::llm::run_lightweight_llm_call(
         &config,
         workgraph::config::DispatchRole::Evaluator,
@@ -638,7 +640,7 @@ pub fn run_flip(
         inference_model
     );
 
-    let flip_timeout = config.agency.triage_timeout.unwrap_or(60);
+    let flip_timeout = config.agency.triage_timeout.unwrap_or(60).max(300);
     let inference_result = workgraph::service::llm::run_lightweight_llm_call(
         &config,
         workgraph::config::DispatchRole::FlipInference,

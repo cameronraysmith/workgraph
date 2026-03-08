@@ -1,0 +1,287 @@
+//! Eager evaluation-task scaffolding.
+//!
+//! Creates `.evaluate-<task>` tasks at publish time (rather than lazily during
+//! coordinator ticks) so every published task is guaranteed to have an eval
+//! pipeline regardless of daemon crashes or restarts.
+
+use chrono::Utc;
+use std::path::Path;
+
+use workgraph::config::Config;
+use workgraph::graph::{Node, Status, Task, WorkGraph};
+
+/// Tags that mark tasks as part of the evaluation/assignment infrastructure.
+/// Tasks with these tags do not get their own eval tasks (no meta-evaluation).
+const DOMINATED_TAGS: &[&str] = &["evaluation", "assignment", "evolution"];
+
+/// Create a `.evaluate-<task_id>` task in `graph`, blocked by `task_id`.
+///
+/// Returns `true` if the graph was modified (i.e. the eval task was created).
+/// Idempotent: returns `false` if the eval task already exists or the source
+/// task should not be evaluated (system tags, already scheduled, etc.).
+pub fn scaffold_eval_task(
+    dir: &Path,
+    graph: &mut WorkGraph,
+    task_id: &str,
+    task_title: &str,
+    config: &Config,
+) -> bool {
+    let eval_task_id = format!(".evaluate-{}", task_id);
+
+    // Idempotency: skip if eval task already exists
+    if graph.get_task(&eval_task_id).is_some() {
+        return false;
+    }
+
+    // Skip tasks that are part of the evaluation infrastructure themselves
+    if let Some(task) = graph.get_task(task_id) {
+        if task
+            .tags
+            .iter()
+            .any(|tag| DOMINATED_TAGS.contains(&tag.as_str()))
+        {
+            return false;
+        }
+        // Skip if already tagged as having had evaluation scheduled
+        if task.tags.iter().any(|tag| tag == "eval-scheduled") {
+            return false;
+        }
+    }
+
+    // Resolve evaluator agent identity (if configured)
+    let evaluator_identity = resolve_evaluator_identity(dir, config);
+
+    let mut desc = String::new();
+    if let Some(ref identity) = evaluator_identity {
+        desc.push_str(identity);
+        desc.push_str("\n\n");
+    }
+    desc.push_str(&format!(
+        "Evaluate the completed task '{}'.\n\n\
+         Run `wg evaluate run {}` to produce a structured evaluation.\n\
+         This reads the task output from `.workgraph/output/{}/` and \
+         the task definition via `wg show {}`.",
+        task_id, task_id, task_id, task_id,
+    ));
+
+    let eval_resolved = config.resolve_model_for_role(workgraph::config::DispatchRole::Evaluator);
+
+    let eval_task = Task {
+        id: eval_task_id.clone(),
+        title: format!("Evaluate: {}", task_title),
+        description: Some(desc),
+        status: Status::Open,
+        after: vec![task_id.to_string()],
+        tags: vec!["evaluation".to_string(), "agency".to_string()],
+        exec: Some(format!("wg evaluate run {}", task_id)),
+        model: Some(eval_resolved.model),
+        provider: eval_resolved.provider,
+        agent: config.agency.evaluator_agent.clone(),
+        exec_mode: Some("bare".to_string()),
+        visibility: "internal".to_string(),
+        created_at: Some(Utc::now().to_rfc3339()),
+        ..Task::default()
+    };
+
+    graph.add_node(Node::Task(eval_task));
+
+    // Tag the source task so we never recreate the eval task after gc
+    if let Some(source) = graph.get_task_mut(task_id) {
+        if !source.tags.iter().any(|t| t == "eval-scheduled") {
+            source.tags.push("eval-scheduled".to_string());
+        }
+    }
+
+    eprintln!(
+        "[eval-scaffold] Created evaluation task '{}' blocked by '{}'",
+        eval_task_id, task_id,
+    );
+
+    true
+}
+
+/// Resolve the evaluator agent identity prompt, if an evaluator agent is configured.
+fn resolve_evaluator_identity(dir: &Path, config: &Config) -> Option<String> {
+    use workgraph::agency::{
+        load_agent, load_role, load_tradeoff, render_identity_prompt_rich, resolve_all_components,
+        resolve_outcome,
+    };
+
+    config
+        .agency
+        .evaluator_agent
+        .as_ref()
+        .and_then(|agent_hash| {
+            let agency_dir = dir.join("agency");
+            let agents_dir = agency_dir.join("cache/agents");
+            let agent_path = agents_dir.join(format!("{}.yaml", agent_hash));
+            let agent = load_agent(&agent_path).ok()?;
+            let roles_dir = agency_dir.join("cache/roles");
+            let role_path = roles_dir.join(format!("{}.yaml", agent.role_id));
+            let role = load_role(&role_path).ok()?;
+            let tradeoffs_dir = agency_dir.join("primitives/tradeoffs");
+            let tradeoff_path = tradeoffs_dir.join(format!("{}.yaml", agent.tradeoff_id));
+            let tradeoff = load_tradeoff(&tradeoff_path).ok()?;
+            let workgraph_root = dir;
+            let resolved_skills = resolve_all_components(&role, workgraph_root, &agency_dir);
+            let outcome = resolve_outcome(&role.outcome_id, &agency_dir);
+            Some(render_identity_prompt_rich(
+                &role,
+                &tradeoff,
+                &resolved_skills,
+                outcome.as_ref(),
+            ))
+        })
+}
+
+/// Scaffold eval tasks for multiple task IDs at once (batch mode for publish).
+/// Returns the number of eval tasks created.
+pub fn scaffold_eval_tasks_batch(
+    dir: &Path,
+    graph: &mut WorkGraph,
+    task_ids: &[(String, String)], // (id, title) pairs
+    config: &Config,
+) -> usize {
+    let mut count = 0;
+    for (task_id, task_title) in task_ids {
+        if scaffold_eval_task(dir, graph, task_id, task_title, config) {
+            count += 1;
+        }
+    }
+    count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+    use workgraph::graph::{Node, Status, Task, WorkGraph};
+
+    fn make_task(id: &str, title: &str) -> Task {
+        Task {
+            id: id.to_string(),
+            title: title.to_string(),
+            status: Status::Open,
+            ..Task::default()
+        }
+    }
+
+    #[test]
+    fn test_scaffold_creates_eval_task() {
+        let dir = tempdir().unwrap();
+        let config = Config::default();
+        let mut graph = WorkGraph::new();
+        graph.add_node(Node::Task(make_task("my-task", "My Task")));
+
+        let modified = scaffold_eval_task(dir.path(), &mut graph, "my-task", "My Task", &config);
+        assert!(modified);
+        let eval = graph.get_task(".evaluate-my-task").unwrap();
+        assert_eq!(eval.title, "Evaluate: My Task");
+        assert_eq!(eval.after, vec!["my-task".to_string()]);
+        assert!(eval.tags.contains(&"evaluation".to_string()));
+        assert!(eval.tags.contains(&"agency".to_string()));
+        assert_eq!(
+            eval.exec,
+            Some("wg evaluate run my-task".to_string())
+        );
+        assert_eq!(eval.exec_mode, Some("bare".to_string()));
+        assert_eq!(eval.visibility, "internal");
+    }
+
+    #[test]
+    fn test_scaffold_idempotent() {
+        let dir = tempdir().unwrap();
+        let config = Config::default();
+        let mut graph = WorkGraph::new();
+        graph.add_node(Node::Task(make_task("my-task", "My Task")));
+
+        assert!(scaffold_eval_task(
+            dir.path(),
+            &mut graph,
+            "my-task",
+            "My Task",
+            &config
+        ));
+        // Second call should be a no-op
+        assert!(!scaffold_eval_task(
+            dir.path(),
+            &mut graph,
+            "my-task",
+            "My Task",
+            &config
+        ));
+    }
+
+    #[test]
+    fn test_scaffold_skips_evaluation_tagged_tasks() {
+        let dir = tempdir().unwrap();
+        let config = Config::default();
+        let mut graph = WorkGraph::new();
+        let mut task = make_task("eval-infra", "Eval Infra");
+        task.tags = vec!["evaluation".to_string()];
+        graph.add_node(Node::Task(task));
+
+        assert!(!scaffold_eval_task(
+            dir.path(),
+            &mut graph,
+            "eval-infra",
+            "Eval Infra",
+            &config
+        ));
+        assert!(graph.get_task(".evaluate-eval-infra").is_none());
+    }
+
+    #[test]
+    fn test_scaffold_skips_already_scheduled() {
+        let dir = tempdir().unwrap();
+        let config = Config::default();
+        let mut graph = WorkGraph::new();
+        let mut task = make_task("old-task", "Old Task");
+        task.tags = vec!["eval-scheduled".to_string()];
+        graph.add_node(Node::Task(task));
+
+        assert!(!scaffold_eval_task(
+            dir.path(),
+            &mut graph,
+            "old-task",
+            "Old Task",
+            &config
+        ));
+    }
+
+    #[test]
+    fn test_scaffold_tags_source_task() {
+        let dir = tempdir().unwrap();
+        let config = Config::default();
+        let mut graph = WorkGraph::new();
+        graph.add_node(Node::Task(make_task("my-task", "My Task")));
+
+        scaffold_eval_task(dir.path(), &mut graph, "my-task", "My Task", &config);
+
+        let source = graph.get_task("my-task").unwrap();
+        assert!(source.tags.contains(&"eval-scheduled".to_string()));
+    }
+
+    #[test]
+    fn test_scaffold_batch() {
+        let dir = tempdir().unwrap();
+        let config = Config::default();
+        let mut graph = WorkGraph::new();
+        graph.add_node(Node::Task(make_task("a", "Task A")));
+        graph.add_node(Node::Task(make_task("b", "Task B")));
+        let mut eval_task = make_task("c", "Eval Task");
+        eval_task.tags = vec!["evaluation".to_string()];
+        graph.add_node(Node::Task(eval_task));
+
+        let ids = vec![
+            ("a".to_string(), "Task A".to_string()),
+            ("b".to_string(), "Task B".to_string()),
+            ("c".to_string(), "Eval Task".to_string()), // should be skipped
+        ];
+        let count = scaffold_eval_tasks_batch(dir.path(), &mut graph, &ids, &config);
+        assert_eq!(count, 2);
+        assert!(graph.get_task(".evaluate-a").is_some());
+        assert!(graph.get_task(".evaluate-b").is_some());
+        assert!(graph.get_task(".evaluate-c").is_none());
+    }
+}

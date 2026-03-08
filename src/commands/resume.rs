@@ -5,6 +5,8 @@ use std::path::Path;
 use workgraph::graph::{LogEntry, WorkGraph};
 use workgraph::parser::save_graph;
 
+use super::eval_scaffold;
+
 #[cfg(test)]
 use super::graph_path;
 #[cfg(test)]
@@ -33,6 +35,12 @@ fn run_inner(dir: &Path, id: &str, only: bool, is_publish: bool) -> Result<()> {
         validate_task_deps(&graph, id, is_publish)?;
         let action = if is_publish { "published" } else { "resumed" };
         unpause_task(&mut graph, id, action);
+
+        // Eagerly scaffold eval task at publish time
+        if is_publish {
+            scaffold_eval_for_published(dir, &mut graph, &[id.to_string()]);
+        }
+
         save_graph(&graph, &path).context("Failed to save graph")?;
         super::notify_graph_changed(dir);
         record_provenance(dir, id, is_publish);
@@ -59,6 +67,11 @@ fn run_inner(dir: &Path, id: &str, only: bool, is_publish: bool) -> Result<()> {
         }
         for task_id in &unpaused {
             unpause_task(&mut graph, task_id, action);
+        }
+
+        // Eagerly scaffold eval tasks at publish time
+        if is_publish {
+            scaffold_eval_for_published(dir, &mut graph, &unpaused);
         }
 
         save_graph(&graph, &path).context("Failed to save graph")?;
@@ -235,6 +248,34 @@ fn unpause_task(graph: &mut WorkGraph, task_id: &str, action: &str) {
         actor: None,
         message: format!("Task {}", action),
     });
+}
+
+/// Create `.evaluate-<task>` tasks for each published task that should be evaluated.
+/// Skips system tasks (dot-prefixed) and tasks already tagged for evaluation.
+fn scaffold_eval_for_published(dir: &Path, graph: &mut WorkGraph, task_ids: &[String]) {
+    let config = workgraph::config::Config::load_or_default(dir);
+    if !config.agency.auto_evaluate {
+        return;
+    }
+
+    // Collect (id, title) pairs, filtering out system tasks
+    let candidates: Vec<(String, String)> = task_ids
+        .iter()
+        .filter(|id| !workgraph::graph::is_system_task(id))
+        .filter_map(|id| {
+            graph
+                .get_task(id)
+                .map(|t| (id.clone(), t.title.clone()))
+        })
+        .collect();
+
+    let count = eval_scaffold::scaffold_eval_tasks_batch(dir, graph, &candidates, &config);
+    if count > 0 {
+        eprintln!(
+            "[publish] Eagerly scaffolded {} evaluation task(s)",
+            count
+        );
+    }
 }
 
 fn record_provenance(dir: &Path, id: &str, is_publish: bool) {
