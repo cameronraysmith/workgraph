@@ -632,10 +632,7 @@ mod tests {
         let wrapper_path = agent_output_dir(temp_dir.path(), "agent-1").join("run.sh");
         let script = fs::read_to_string(&wrapper_path).unwrap();
 
-        assert!(
-            script.contains(".merge-lock"),
-            "Should use merge lock file"
-        );
+        assert!(script.contains(".merge-lock"), "Should use merge lock file");
         assert!(script.contains("flock 9"), "Should acquire flock");
         assert!(script.contains("flock -u 9"), "Should release flock");
     }
@@ -653,7 +650,9 @@ mod tests {
         let script = fs::read_to_string(&wrapper_path).unwrap();
 
         assert!(
-            script.contains(r#"git -C "$WG_PROJECT_ROOT" worktree remove --force "$WG_WORKTREE_PATH""#),
+            script.contains(
+                r#"git -C "$WG_PROJECT_ROOT" worktree remove --force "$WG_WORKTREE_PATH""#
+            ),
             "Should force-remove worktree"
         );
         assert!(

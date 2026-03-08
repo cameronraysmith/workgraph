@@ -416,7 +416,9 @@ fn find_title_range(plain_line: &str) -> Option<(usize, usize)> {
 
     // Start at first alphanumeric or dot character (skip tree connectors like └→).
     // Dot is included so system tasks like `.assign-foo` have their prefix in range.
-    let text_start = chars.iter().position(|c| c.is_alphanumeric() || *c == '.')?;
+    let text_start = chars
+        .iter()
+        .position(|c| c.is_alphanumeric() || *c == '.')?;
 
     // End before the metadata parenthetical — look for `  (` (two spaces + open paren)
     // which separates the task ID from its status/token info.
@@ -2473,15 +2475,15 @@ fn draw_firehose_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!("  {active_count} active  {} lines", app.firehose.lines.len()),
+            format!(
+                "  {active_count} active  {} lines",
+                app.firehose.lines.len()
+            ),
             Style::default().fg(Color::DarkGray),
         ),
     ]);
 
-    let header_area = Rect {
-        height: 1,
-        ..area
-    };
+    let header_area = Rect { height: 1, ..area };
     let content_area = Rect {
         y: area.y + 1,
         height: area.height.saturating_sub(1),
@@ -3854,7 +3856,12 @@ fn draw_task_form(frame: &mut Frame, form: &TaskFormState) {
             };
             let marker = if is_selected { "▸ " } else { "  " };
             let display = if title.len() > 30 {
-                format!("{}{} ({}…)", marker, id, &title[..title.floor_char_boundary(27)])
+                format!(
+                    "{}{} ({}…)",
+                    marker,
+                    id,
+                    &title[..title.floor_char_boundary(27)]
+                )
             } else {
                 format!("{}{} ({})", marker, id, title)
             };
@@ -4322,20 +4329,47 @@ fn draw_status_bar(frame: &mut Frame, app: &VizApp, area: Rect) {
         let tc = &app.time_counters;
         let mut cp: Vec<Span> = Vec::new();
         if tc.show_uptime {
-            cp.push(Span::styled(match tc.service_uptime_secs { Some(s) => format!("\u{2191}{}", format_duration_compact(s)), None => "\u{2191}-".into() }, Style::default().fg(Color::Cyan)));
+            cp.push(Span::styled(
+                match tc.service_uptime_secs {
+                    Some(s) => format!("\u{2191}{}", format_duration_compact(s)),
+                    None => "\u{2191}-".into(),
+                },
+                Style::default().fg(Color::Cyan),
+            ));
         }
         if tc.show_cumulative {
-            cp.push(Span::styled(format!("\u{03A3}{}", format_duration_compact(tc.cumulative_secs)), Style::default().fg(Color::Magenta)));
+            cp.push(Span::styled(
+                format!("\u{03A3}{}", format_duration_compact(tc.cumulative_secs)),
+                Style::default().fg(Color::Magenta),
+            ));
         }
         if tc.show_active && tc.active_agent_count > 0 {
-            cp.push(Span::styled(format!("\u{26A1}{}({})", format_duration_compact(tc.active_secs), tc.active_agent_count), Style::default().fg(Color::Green)));
+            cp.push(Span::styled(
+                format!(
+                    "\u{26A1}{}({})",
+                    format_duration_compact(tc.active_secs),
+                    tc.active_agent_count
+                ),
+                Style::default().fg(Color::Green),
+            ));
         }
         if tc.show_session {
-            cp.push(Span::styled(format!("\u{25F7}{}", format_duration_compact(tc.session_start.elapsed().as_secs())), Style::default().fg(Color::DarkGray)));
+            cp.push(Span::styled(
+                format!(
+                    "\u{25F7}{}",
+                    format_duration_compact(tc.session_start.elapsed().as_secs())
+                ),
+                Style::default().fg(Color::DarkGray),
+            ));
         }
         if !cp.is_empty() {
             spans.push(Span::styled("| ", Style::default().fg(Color::DarkGray)));
-            for (i, p) in cp.into_iter().enumerate() { if i > 0 { spans.push(Span::styled(" ", Style::default())); } spans.push(p); }
+            for (i, p) in cp.into_iter().enumerate() {
+                if i > 0 {
+                    spans.push(Span::styled(" ", Style::default()));
+                }
+                spans.push(p);
+            }
             spans.push(Span::styled(" ", Style::default()));
         }
     }
@@ -4524,7 +4558,10 @@ fn draw_service_health_detail(frame: &mut Frame, app: &VizApp) {
     lines.push(Line::from(vec![
         Span::styled("  PID: ", label_style),
         Span::styled(
-            health.pid.map(|p| p.to_string()).unwrap_or_else(|| "N/A".to_string()),
+            health
+                .pid
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "N/A".to_string()),
             value_style,
         ),
         Span::styled("    Uptime: ", label_style),
@@ -4555,7 +4592,9 @@ fn draw_service_health_detail(frame: &mut Frame, app: &VizApp) {
             Span::styled("  Status: ", label_style),
             Span::styled(
                 "PAUSED",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" (agent spawning disabled)", dim_style),
         ]));
@@ -4574,12 +4613,17 @@ fn draw_service_health_detail(frame: &mut Frame, app: &VizApp) {
             Span::styled("  Stuck tasks: ", label_style),
             Span::styled(
                 format!("{}", health.stuck_tasks.len()),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]));
         for st in &health.stuck_tasks {
             let title_display = if st.task_title.len() > 30 {
-                format!("{}...", &st.task_title[..st.task_title.floor_char_boundary(27)])
+                format!(
+                    "{}...",
+                    &st.task_title[..st.task_title.floor_char_boundary(27)]
+                )
             } else {
                 st.task_title.clone()
             };
@@ -4600,11 +4644,17 @@ fn draw_service_health_detail(frame: &mut Frame, app: &VizApp) {
             Span::styled("none", Style::default().fg(Color::Green)),
         ]));
     } else {
-        lines.push(Line::from(vec![Span::styled("  Recent errors:", label_style)]));
+        lines.push(Line::from(vec![Span::styled(
+            "  Recent errors:",
+            label_style,
+        )]));
         for err in &health.recent_errors {
             let max_w = width as usize - 6;
             let truncated = if err.len() > max_w {
-                format!("{}...", &err[..err.floor_char_boundary(max_w.saturating_sub(3))])
+                format!(
+                    "{}...",
+                    &err[..err.floor_char_boundary(max_w.saturating_sub(3))]
+                )
             } else {
                 err.clone()
             };
@@ -4661,23 +4711,40 @@ fn draw_service_control_panel(frame: &mut Frame, app: &VizApp) {
     let focus = &health.panel_focus;
     lines.push(Line::from(vec![
         Span::styled("  PID: ", label_style),
-        Span::styled(health.pid.map(|p| p.to_string()).unwrap_or_else(|| "N/A".to_string()), value_style),
+        Span::styled(
+            health
+                .pid
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "N/A".to_string()),
+            value_style,
+        ),
         Span::styled("    Uptime: ", label_style),
         Span::styled(health.uptime.as_deref().unwrap_or("N/A"), value_style),
     ]));
     lines.push(Line::from(vec![
         Span::styled("  Agents: ", label_style),
-        Span::styled(format!("{} alive / {} max", health.agents_alive, health.agents_max), value_style),
+        Span::styled(
+            format!("{} alive / {} max", health.agents_alive, health.agents_max),
+            value_style,
+        ),
         Span::styled(format!("  ({} total)", health.agents_total), dim_style),
     ]));
     if !health.recent_errors.is_empty() {
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![Span::styled("  Recent errors:", label_style)]));
+        lines.push(Line::from(vec![Span::styled(
+            "  Recent errors:",
+            label_style,
+        )]));
         for err in health.recent_errors.iter().take(3) {
             let max_w = width as usize - 6;
             let truncated = if err.len() > max_w {
-                format!("{}...", &err[..err.floor_char_boundary(max_w.saturating_sub(3))])
-            } else { err.clone() };
+                format!(
+                    "{}...",
+                    &err[..err.floor_char_boundary(max_w.saturating_sub(3))]
+                )
+            } else {
+                err.clone()
+            };
             lines.push(Line::from(vec![
                 Span::styled("    ", dim_style),
                 Span::styled(truncated, Style::default().fg(Color::Red)),
@@ -4685,34 +4752,91 @@ fn draw_service_control_panel(frame: &mut Frame, app: &VizApp) {
         }
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(vec![Span::styled("  Controls", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))]));
-    let ssl = if is_running { "Stop Service" } else { "Start Service" };
+    lines.push(Line::from(vec![Span::styled(
+        "  Controls",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )]));
+    let ssl = if is_running {
+        "Stop Service"
+    } else {
+        "Start Service"
+    };
     let ssk = if is_running { "[S] Stop" } else { "[S] Start" };
-    lines.push(control_panel_line(ssl, ssk, *focus == ControlPanelFocus::StartStop, if is_running { Color::Red } else { Color::Green }));
-    let pl = if health.paused { "Resume Launches" } else { "Pause Launches" };
-    let pk = if health.paused { "[P] Resume" } else { "[P] Pause" };
-    lines.push(control_panel_line(pl, pk, *focus == ControlPanelFocus::PauseResume, Color::Yellow));
-    lines.push(control_panel_line("Restart Service", "[Enter]", *focus == ControlPanelFocus::Restart, Color::Cyan));
+    lines.push(control_panel_line(
+        ssl,
+        ssk,
+        *focus == ControlPanelFocus::StartStop,
+        if is_running { Color::Red } else { Color::Green },
+    ));
+    let pl = if health.paused {
+        "Resume Launches"
+    } else {
+        "Pause Launches"
+    };
+    let pk = if health.paused {
+        "[P] Resume"
+    } else {
+        "[P] Pause"
+    };
+    lines.push(control_panel_line(
+        pl,
+        pk,
+        *focus == ControlPanelFocus::PauseResume,
+        Color::Yellow,
+    ));
+    lines.push(control_panel_line(
+        "Restart Service",
+        "[Enter]",
+        *focus == ControlPanelFocus::Restart,
+        Color::Cyan,
+    ));
     let pf = *focus == ControlPanelFocus::PanicKill;
-    let ps = if pf { Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::Red).add_modifier(Modifier::BOLD) };
+    let ps = if pf {
+        Style::default()
+            .fg(Color::White)
+            .bg(Color::Red)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+    };
     lines.push(Line::from(vec![
         Span::styled(if pf { " > " } else { "   " }, ps),
         Span::styled("PANIC KILL", ps),
         Span::styled("  [K]  ", Style::default().fg(Color::DarkGray)),
-        Span::styled(format!("kills {} agents + stops service", health.agents_alive), Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("kills {} agents + stops service", health.agents_alive),
+            Style::default().fg(Color::DarkGray),
+        ),
     ]));
     lines.push(Line::from(""));
     if health.stuck_tasks.is_empty() {
-        lines.push(Line::from(vec![Span::styled("  Stuck agents: ", label_style), Span::styled("none", Style::default().fg(Color::Green))]));
+        lines.push(Line::from(vec![
+            Span::styled("  Stuck agents: ", label_style),
+            Span::styled("none", Style::default().fg(Color::Green)),
+        ]));
     } else {
         lines.push(Line::from(vec![
             Span::styled("  Stuck agents: ", label_style),
-            Span::styled(format!("{}", health.stuck_tasks.len()), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{}", health.stuck_tasks.len()),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("  (Enter=kill, U=unclaim)", dim_style),
         ]));
         for (i, st) in health.stuck_tasks.iter().enumerate() {
             let sf = *focus == ControlPanelFocus::StuckAgent(i);
-            let td = if st.task_title.len() > 25 { format!("{}...", &st.task_title[..st.task_title.floor_char_boundary(22)]) } else { st.task_title.clone() };
+            let td = if st.task_title.len() > 25 {
+                format!(
+                    "{}...",
+                    &st.task_title[..st.task_title.floor_char_boundary(22)]
+                )
+            } else {
+                st.task_title.clone()
+            };
             let pfx = if sf { " > " } else { "   " };
             let fg = if sf { Color::Yellow } else { Color::DarkGray };
             lines.push(Line::from(vec![
@@ -4723,24 +4847,60 @@ fn draw_service_control_panel(frame: &mut Frame, app: &VizApp) {
         }
     }
     lines.push(Line::from(""));
-    lines.push(control_panel_line("Kill All Dead Agents", "[Enter]", *focus == ControlPanelFocus::KillAllDead, Color::Yellow));
-    lines.push(control_panel_line("Retry Failed Evals", "[Enter]", *focus == ControlPanelFocus::RetryFailedEvals, Color::Cyan));
+    lines.push(control_panel_line(
+        "Kill All Dead Agents",
+        "[Enter]",
+        *focus == ControlPanelFocus::KillAllDead,
+        Color::Yellow,
+    ));
+    lines.push(control_panel_line(
+        "Retry Failed Evals",
+        "[Enter]",
+        *focus == ControlPanelFocus::RetryFailedEvals,
+        Color::Cyan,
+    ));
     if let Some((ref msg, ref at)) = health.feedback
-        && at.elapsed() < std::time::Duration::from_secs(5) {
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![Span::styled("  ", dim_style), Span::styled(msg.as_str(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))]));
-        }
+        && at.elapsed() < std::time::Duration::from_secs(5)
+    {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("  ", dim_style),
+            Span::styled(
+                msg.as_str(),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
     if health.panic_confirm {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("  WARNING: ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("This will kill {} running agents and stop the service.", health.agents_alive), Style::default().fg(Color::White)),
+            Span::styled(
+                "  WARNING: ",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    "This will kill {} running agents and stop the service.",
+                    health.agents_alive
+                ),
+                Style::default().fg(Color::White),
+            ),
         ]));
         lines.push(Line::from(vec![
             Span::styled("  Are you sure? ", Style::default().fg(Color::White)),
-            Span::styled("[y]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[y]",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" Yes  ", dim_style),
-            Span::styled("[n/Esc]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[n/Esc]",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" No", dim_style),
         ]));
     }
@@ -4758,9 +4918,21 @@ fn draw_service_control_panel(frame: &mut Frame, app: &VizApp) {
     frame.render_widget(Paragraph::new(visible_lines), inner);
 }
 
-fn control_panel_line<'a>(label: &'a str, key_hint: &'a str, focused: bool, color: Color) -> Line<'a> {
+fn control_panel_line<'a>(
+    label: &'a str,
+    key_hint: &'a str,
+    focused: bool,
+    color: Color,
+) -> Line<'a> {
     let prefix = if focused { " > " } else { "   " };
-    let style = if focused { Style::default().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD) } else { Style::default().fg(color) };
+    let style = if focused {
+        Style::default()
+            .fg(Color::Black)
+            .bg(color)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(color)
+    };
     Line::from(vec![
         Span::styled(prefix, style),
         Span::styled(label, style),
@@ -5243,7 +5415,6 @@ fn draw_add_endpoint_form(frame: &mut Frame, app: &VizApp, area: Rect) {
     let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, area);
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -6906,7 +7077,10 @@ mod tests {
         let task4 = make_task_with_status("both-task", "Both Task", Status::InProgress);
         graph4.add_node(Node::Task(task4));
         let mut annotations4 = HashMap::new();
-        annotations4.insert("both-task".to_string(), "[∴ evaluating] [✓ validating]".to_string());
+        annotations4.insert(
+            "both-task".to_string(),
+            "[∴ evaluating] [✓ validating]".to_string(),
+        );
 
         let tasks4: Vec<_> = graph4.tasks().collect();
         let task_ids4: HashSet<&str> = tasks4.iter().map(|t| t.id.as_str()).collect();
@@ -8178,10 +8352,7 @@ mod tests {
     fn test_wrap_segments_multi_word() {
         let line = "hi there world";
         let segs = word_wrap_segments(line, 8);
-        assert_eq!(
-            segments_to_strings(line, &segs),
-            vec!["hi there", "world"]
-        );
+        assert_eq!(segments_to_strings(line, &segs), vec!["hi there", "world"]);
     }
 
     #[test]

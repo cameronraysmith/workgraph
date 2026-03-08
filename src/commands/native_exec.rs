@@ -21,7 +21,6 @@ use workgraph::executor::native::tools::ToolRegistry;
 
 const DEFAULT_MODEL: &str = "claude-sonnet-4-5-20250514";
 
-
 /// Run the native executor agent loop.
 pub fn run(
     workgraph_dir: &Path,

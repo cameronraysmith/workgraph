@@ -14,12 +14,12 @@ use std::collections::HashMap;
 use std::fs;
 use tempfile::TempDir;
 
+use workgraph::agency::evolver;
 use workgraph::agency::{
-    Evaluation, EvaluationRef, EvolverState, EvolutionTrigger, build_role, build_tradeoff,
+    Evaluation, EvaluationRef, EvolutionTrigger, EvolverState, build_role, build_tradeoff,
     count_evaluation_files, init, recalculate_avg_score, record_evaluation, save_role,
     save_tradeoff, should_trigger_evolution,
 };
-use workgraph::agency::evolver;
 use workgraph::config::AgencyConfig;
 use workgraph::graph::{Node, Status, Task, WorkGraph, is_system_task};
 use workgraph::parser::{load_graph, save_graph};
@@ -256,9 +256,7 @@ fn test_smoke_evolver_state_tracks_history() {
         loaded.history[0].strategies_used,
         vec!["mutation".to_string(), "gap-analysis".to_string()]
     );
-    assert!(
-        (loaded.history[0].pre_evolution_avg_score.unwrap() - 0.72).abs() < f64::EPSILON
-    );
+    assert!((loaded.history[0].pre_evolution_avg_score.unwrap() - 0.72).abs() < f64::EPSILON);
     assert_eq!(
         loaded.history[0].task_id.as_deref(),
         Some(".evolve-auto-001")

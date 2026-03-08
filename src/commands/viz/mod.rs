@@ -137,7 +137,10 @@ impl Default for VizOptions {
 /// Returns true if the task is an auto-generated internal task (assignment or evaluation).
 fn is_internal_task(task: &Task) -> bool {
     workgraph::graph::is_system_task(&task.id)
-        || task.tags.iter().any(|t| t == "assignment" || t == "evaluation")
+        || task
+            .tags
+            .iter()
+            .any(|t| t == "assignment" || t == "evaluation")
 }
 
 /// Determine the phase annotation for a parent task based on its related internal tasks.
@@ -159,8 +162,16 @@ fn compute_phase_annotation(internal_task: &Task) -> &'static str {
 
 /// Extract the parent task ID from a system task ID.
 fn system_task_parent_id(id: &str) -> Option<String> {
-    for prefix in &[".assign-", ".evaluate-", ".verify-flip-", ".respond-to-",
-                     "assign-", "evaluate-", "verify-flip-", "respond-to-"] {
+    for prefix in &[
+        ".assign-",
+        ".evaluate-",
+        ".verify-flip-",
+        ".respond-to-",
+        "assign-",
+        "evaluate-",
+        "verify-flip-",
+        "respond-to-",
+    ] {
         if let Some(rest) = id.strip_prefix(prefix) {
             return Some(rest.to_string());
         }
@@ -188,16 +199,17 @@ pub(crate) fn filter_internal_tasks<'a>(
         internal_ids.insert(task.id.as_str());
 
         if let Some(pid) = system_task_parent_id(&task.id)
-            && task.status == Status::InProgress {
-                let annotation = compute_phase_annotation(task);
-                annotations
-                    .entry(pid)
-                    .and_modify(|existing| {
-                        existing.push(' ');
-                        existing.push_str(annotation);
-                    })
-                    .or_insert_with(|| annotation.to_string());
-            }
+            && task.status == Status::InProgress
+        {
+            let annotation = compute_phase_annotation(task);
+            annotations
+                .entry(pid)
+                .and_modify(|existing| {
+                    existing.push(' ');
+                    existing.push_str(annotation);
+                })
+                .or_insert_with(|| annotation.to_string());
+        }
     }
 
     // Second pass: filter out internal tasks and fix edges

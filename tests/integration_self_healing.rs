@@ -11,7 +11,7 @@
 
 use chrono::{Duration, Utc};
 use workgraph::graph::{
-    is_system_task, LogEntry, Node, Status, Task, WaitCondition, WaitSpec, WorkGraph,
+    LogEntry, Node, Status, Task, WaitCondition, WaitSpec, WorkGraph, is_system_task,
 };
 use workgraph::query::ready_tasks;
 
@@ -241,20 +241,18 @@ fn test_smoke_healing_category_strategies() {
             "ran out of tokens",
         );
         let rem = graph.get_task(".remediate-t-ctx").unwrap();
-        assert!(rem
-            .description
-            .as_ref()
-            .unwrap()
-            .contains("context_overflow"));
+        assert!(
+            rem.description
+                .as_ref()
+                .unwrap()
+                .contains("context_overflow")
+        );
     }
 
     // Agent confusion → remediation task
     {
         let mut graph = WorkGraph::new();
-        graph.add_node(Node::Task(make_failed_task(
-            "t-confused",
-            "wrong approach",
-        )));
+        graph.add_node(Node::Task(make_failed_task("t-confused", "wrong approach")));
         simulate_create_remediation_task(
             &mut graph,
             "t-confused",
@@ -262,20 +260,18 @@ fn test_smoke_healing_category_strategies() {
             "misunderstood",
         );
         let rem = graph.get_task(".remediate-t-confused").unwrap();
-        assert!(rem
-            .description
-            .as_ref()
-            .unwrap()
-            .contains("agent_confusion"));
+        assert!(
+            rem.description
+                .as_ref()
+                .unwrap()
+                .contains("agent_confusion")
+        );
     }
 
     // Transient → retry with backoff (no remediation task)
     {
         let mut graph = WorkGraph::new();
-        graph.add_node(Node::Task(make_failed_task(
-            "t-transient",
-            "rate limited",
-        )));
+        graph.add_node(Node::Task(make_failed_task("t-transient", "rate limited")));
         simulate_transient_retry(&mut graph, "t-transient");
         assert!(
             graph.get_task(".remediate-t-transient").is_none(),
@@ -300,12 +296,7 @@ fn test_smoke_healing_category_strategies() {
         );
         let t = graph.get_task("t-unfixable").unwrap();
         assert!(t.paused, "Unfixable task should be paused (escalated)");
-        assert!(t
-            .log
-            .last()
-            .unwrap()
-            .message
-            .contains("Escalated to human"));
+        assert!(t.log.last().unwrap().message.contains("Escalated to human"));
     }
 }
 
@@ -330,8 +321,7 @@ fn test_smoke_healing_max_attempts_enforced() {
         graph.get_task_mut(&rem_id).unwrap().status = Status::Done;
         // Task fails again
         graph.get_task_mut("retry-me").unwrap().status = Status::Failed;
-        graph.get_task_mut("retry-me").unwrap().failure_reason =
-            Some("still failing".to_string());
+        graph.get_task_mut("retry-me").unwrap().failure_reason = Some("still failing".to_string());
     }
 
     let t = graph.get_task("retry-me").unwrap();
@@ -502,12 +492,13 @@ fn test_smoke_healing_escalation_low_confidence() {
         t.paused,
         "Low-confidence diagnosis should escalate (pause) the task"
     );
-    assert!(t
-        .log
-        .last()
-        .unwrap()
-        .message
-        .contains("Low diagnosis confidence"));
+    assert!(
+        t.log
+            .last()
+            .unwrap()
+            .message
+            .contains("Low diagnosis confidence")
+    );
     // No remediation task created
     assert!(graph.get_task(".remediate-unclear-fail").is_none());
 }
@@ -523,12 +514,7 @@ fn test_smoke_healing_escalation_unfixable() {
 
     let t = graph.get_task("broken-hw").unwrap();
     assert!(t.paused);
-    assert!(t
-        .log
-        .last()
-        .unwrap()
-        .message
-        .contains("Escalated to human"));
+    assert!(t.log.last().unwrap().message.contains("Escalated to human"));
     assert!(graph.get_task(".remediate-broken-hw").is_none());
 }
 
@@ -563,9 +549,7 @@ fn test_smoke_healing_remediation_task_structure() {
 
     // Has creation log entry
     assert!(!rem.log.is_empty());
-    assert!(rem.log[0]
-        .message
-        .contains("Auto-created remediation task"));
+    assert!(rem.log[0].message.contains("Auto-created remediation task"));
     assert_eq!(rem.log[0].actor, Some("coordinator".to_string()));
 }
 
@@ -588,12 +572,7 @@ fn test_smoke_healing_full_cycle() {
     graph.add_node(Node::Task(consumer));
 
     // Step 1: Task fails, remediation created
-    simulate_create_remediation_task(
-        &mut graph,
-        "impl-auth",
-        "build_failure",
-        "test_auth fails",
-    );
+    simulate_create_remediation_task(&mut graph, "impl-auth", "build_failure", "test_auth fails");
 
     // Consumer should still be blocked (impl-auth is Open but blocked by remediation)
     let ready = ready_tasks(&graph);
@@ -612,10 +591,7 @@ fn test_smoke_healing_full_cycle() {
     );
 
     // Step 2: Remediation completes
-    graph
-        .get_task_mut(".remediate-impl-auth")
-        .unwrap()
-        .status = Status::Done;
+    graph.get_task_mut(".remediate-impl-auth").unwrap().status = Status::Done;
 
     // impl-auth should now be ready
     let ready = ready_tasks(&graph);
@@ -654,10 +630,7 @@ fn test_smoke_healing_remediation_count_tracks() {
     );
 
     // Complete remediation, task fails again
-    graph
-        .get_task_mut(".remediate-multi-fix")
-        .unwrap()
-        .status = Status::Done;
+    graph.get_task_mut(".remediate-multi-fix").unwrap().status = Status::Done;
     graph.get_task_mut("multi-fix").unwrap().status = Status::Failed;
 
     // Second remediation

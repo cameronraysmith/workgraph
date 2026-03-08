@@ -445,10 +445,7 @@ pub(crate) fn build_previous_attempt_context(
     }
 
     // Find the most recent archived agent for this task
-    let archive_base = workgraph_dir
-        .join("log")
-        .join("agents")
-        .join(&task.id);
+    let archive_base = workgraph_dir.join("log").join("agents").join(&task.id);
 
     if !archive_base.exists() {
         return String::new();
@@ -483,18 +480,20 @@ pub(crate) fn build_previous_attempt_context(
     // Priority 1: Look for checkpoint summary from the previous agent
     let checkpoint_context = find_checkpoint_for_task(task, workgraph_dir);
     if let Some(summary) = checkpoint_context
-        && !summary.is_empty() {
-            return format_previous_context(&archive_timestamp, &summary, max_bytes);
-        }
+        && !summary.is_empty()
+    {
+        return format_previous_context(&archive_timestamp, &summary, max_bytes);
+    }
 
     // Priority 2: Truncated output.log from the archive
     let output_path = latest_archive.join("output.txt");
     if output_path.exists()
         && let Ok(content) = fs::read_to_string(&output_path)
-            && !content.trim().is_empty() {
-                let tail = truncate_to_tail(&content, max_bytes);
-                return format_previous_context(&archive_timestamp, &tail, max_bytes);
-            }
+        && !content.trim().is_empty()
+    {
+        let tail = truncate_to_tail(&content, max_bytes);
+        return format_previous_context(&archive_timestamp, &tail, max_bytes);
+    }
 
     // Priority 3: Task log entries
     if !task.log.is_empty() {
@@ -522,16 +521,15 @@ pub(crate) fn build_previous_attempt_context(
 }
 
 /// Find the most recent checkpoint for a task from any previously assigned agent.
-fn find_checkpoint_for_task(
-    task: &workgraph::graph::Task,
-    workgraph_dir: &Path,
-) -> Option<String> {
+fn find_checkpoint_for_task(task: &workgraph::graph::Task, workgraph_dir: &Path) -> Option<String> {
     let mut prev_agents: Vec<String> = Vec::new();
     for entry in &task.log {
         if let Some(ref actor) = entry.actor
-            && actor.starts_with("agent-") && !prev_agents.contains(actor) {
-                prev_agents.push(actor.clone());
-            }
+            && actor.starts_with("agent-")
+            && !prev_agents.contains(actor)
+        {
+            prev_agents.push(actor.clone());
+        }
     }
 
     for agent_id in prev_agents.iter().rev() {
@@ -576,7 +574,6 @@ fn format_previous_context(timestamp: &str, content: &str, max_bytes: usize) -> 
         timestamp, truncated_content
     )
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1092,7 +1089,10 @@ mod tests {
         let mut task = make_task("t1", "Test task");
         task.retry_count = 1;
         let result = build_previous_attempt_context(&task, wg_dir, 0);
-        assert!(result.is_empty(), "Should return empty when max_tokens is 0");
+        assert!(
+            result.is_empty(),
+            "Should return empty when max_tokens is 0"
+        );
     }
 
     #[test]
@@ -1104,7 +1104,10 @@ mod tests {
         let mut task = make_task("t1", "Test task");
         task.retry_count = 1;
         let result = build_previous_attempt_context(&task, wg_dir, 2000);
-        assert!(result.is_empty(), "Should return empty when no archive exists");
+        assert!(
+            result.is_empty(),
+            "Should return empty when no archive exists"
+        );
     }
 
     #[test]
@@ -1313,5 +1316,4 @@ mod tests {
         assert!(result.contains("Some work done"));
         assert!(result.contains("Continue from where they left off"));
     }
-
 }

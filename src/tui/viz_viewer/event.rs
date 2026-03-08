@@ -309,30 +309,56 @@ fn handle_service_control_panel_key(app: &mut VizApp, code: KeyCode) {
     let stuck_count = app.service_health.stuck_tasks.len();
     if app.service_health.panic_confirm {
         match code {
-            KeyCode::Char('y') => { app.execute_panic_kill(); }
-            KeyCode::Char('n') | KeyCode::Esc => { app.service_health.panic_confirm = false; }
+            KeyCode::Char('y') => {
+                app.execute_panic_kill();
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                app.service_health.panic_confirm = false;
+            }
             _ => {}
         }
         return;
     }
     match code {
-        KeyCode::Esc | KeyCode::Char('q') => { app.close_service_control_panel(); }
-        KeyCode::Down | KeyCode::Char('j') => { app.service_health.panel_focus = app.service_health.panel_focus.next(stuck_count); }
-        KeyCode::Up | KeyCode::Char('k') => { app.service_health.panel_focus = app.service_health.panel_focus.prev(stuck_count); }
-        KeyCode::Enter | KeyCode::Char(' ') => {
-            if app.service_health.panel_focus == ControlPanelFocus::PanicKill { app.service_health.panic_confirm = true; }
-            else { app.execute_service_action(); }
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.close_service_control_panel();
         }
-        KeyCode::Char('s') | KeyCode::Char('S') => { app.service_health.panel_focus = ControlPanelFocus::StartStop; app.execute_service_action(); }
-        KeyCode::Char('p') | KeyCode::Char('P') => { app.service_health.panel_focus = ControlPanelFocus::PauseResume; app.execute_service_action(); }
-        KeyCode::Char('K') => { app.service_health.panel_focus = ControlPanelFocus::PanicKill; app.service_health.panic_confirm = true; }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.service_health.panel_focus = app.service_health.panel_focus.next(stuck_count);
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.service_health.panel_focus = app.service_health.panel_focus.prev(stuck_count);
+        }
+        KeyCode::Enter | KeyCode::Char(' ') => {
+            if app.service_health.panel_focus == ControlPanelFocus::PanicKill {
+                app.service_health.panic_confirm = true;
+            } else {
+                app.execute_service_action();
+            }
+        }
+        KeyCode::Char('s') | KeyCode::Char('S') => {
+            app.service_health.panel_focus = ControlPanelFocus::StartStop;
+            app.execute_service_action();
+        }
+        KeyCode::Char('p') | KeyCode::Char('P') => {
+            app.service_health.panel_focus = ControlPanelFocus::PauseResume;
+            app.execute_service_action();
+        }
+        KeyCode::Char('K') => {
+            app.service_health.panel_focus = ControlPanelFocus::PanicKill;
+            app.service_health.panic_confirm = true;
+        }
         KeyCode::Char('u') | KeyCode::Char('U') => {
             if let ControlPanelFocus::StuckAgent(idx) = app.service_health.panel_focus
-                && let Some(st) = app.service_health.stuck_tasks.get(idx) {
-                    let tid = st.task_id.clone();
-                    app.exec_command(vec!["unclaim".to_string(), tid.clone()], CommandEffect::RefreshAndNotify(format!("Unclaimed {}", tid)));
-                    app.set_service_feedback(format!("Unclaimed {}", tid));
-                }
+                && let Some(st) = app.service_health.stuck_tasks.get(idx)
+            {
+                let tid = st.task_id.clone();
+                app.exec_command(
+                    vec!["unclaim".to_string(), tid.clone()],
+                    CommandEffect::RefreshAndNotify(format!("Unclaimed {}", tid)),
+                );
+                app.set_service_feedback(format!("Unclaimed {}", tid));
+            }
         }
         _ => {}
     }
@@ -1225,7 +1251,10 @@ fn right_panel_scroll_down(app: &mut VizApp, amount: usize) {
         }
         RightPanelTab::Firehose => {
             app.firehose.scroll += amount;
-            let max = app.firehose.total_rendered_lines.saturating_sub(app.firehose.viewport_height);
+            let max = app
+                .firehose
+                .total_rendered_lines
+                .saturating_sub(app.firehose.viewport_height);
             if app.firehose.scroll >= max {
                 app.firehose.auto_tail = true;
             }
@@ -1394,8 +1423,8 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
         }
         MouseEventKind::Down(MouseButton::Left) => {
             // Service health badge click
-            let in_service_badge = app.last_service_badge_area.width > 0
-                && app.last_service_badge_area.contains(pos);
+            let in_service_badge =
+                app.last_service_badge_area.width > 0 && app.last_service_badge_area.contains(pos);
             if in_service_badge {
                 app.toggle_service_control_panel();
                 return;
@@ -1633,12 +1662,7 @@ pub(super) enum EditorTarget {
 /// coordinate mapping relies on `screen_area` which is never set by our renderer.
 /// Instead, we compute the cursor position ourselves using the same word-wrapping
 /// logic as the renderer.
-pub(super) fn route_mouse_to_editor(
-    app: &mut VizApp,
-    row: u16,
-    column: u16,
-    target: EditorTarget,
-) {
+pub(super) fn route_mouse_to_editor(app: &mut VizApp, row: u16, column: u16, target: EditorTarget) {
     match target {
         EditorTarget::Chat => {
             chat_click_to_cursor(app, row, column);
@@ -1826,13 +1850,11 @@ fn message_click_to_cursor(app: &mut VizApp, screen_row: u16, screen_col: u16) {
         }
 
         app.messages_panel.editor.cursor = edtui::Index2::new(line_idx, char_idx);
-    } else {
-        if let Some(last_line) = logical_lines.last() {
-            app.messages_panel.editor.cursor = edtui::Index2::new(
-                logical_lines.len().saturating_sub(1),
-                last_line.chars().count(),
-            );
-        }
+    } else if let Some(last_line) = logical_lines.last() {
+        app.messages_panel.editor.cursor = edtui::Index2::new(
+            logical_lines.len().saturating_sub(1),
+            last_line.chars().count(),
+        );
     }
 }
 
@@ -3066,23 +3088,42 @@ mod scrollbar_tests {
         setup_graph_scroll(&mut app, 100, 20);
         app.scroll.content_width = 200;
         app.scroll.viewport_width = 80;
-        app.last_graph_area = Rect { x: 0, y: 0, width: 79, height: 20 };
-        app.last_graph_scrollbar_area = Rect { x: 79, y: 0, width: 1, height: 20 };
+        app.last_graph_area = Rect {
+            x: 0,
+            y: 0,
+            width: 79,
+            height: 20,
+        };
+        app.last_graph_scrollbar_area = Rect {
+            x: 79,
+            y: 0,
+            width: 1,
+            height: 20,
+        };
         app.last_panel_scrollbar_area = Rect::default();
         app.last_graph_hscrollbar_area = Rect::default();
 
         // Mouse down inside graph body.
         handle_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), 10, 40);
-        assert!(app.graph_pan_last.is_some(), "Pan should start on mouse down in graph");
+        assert!(
+            app.graph_pan_last.is_some(),
+            "Pan should start on mouse down in graph"
+        );
         assert_eq!(app.scroll.offset_y, 0);
 
         // Drag upward (row decreases from 10 to 5) → content follows finger up → scroll_down.
         handle_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), 5, 40);
-        assert_eq!(app.scroll.offset_y, 5, "Dragging up should scroll down by 5 rows");
+        assert_eq!(
+            app.scroll.offset_y, 5,
+            "Dragging up should scroll down by 5 rows"
+        );
 
         // Drag back down (row increases from 5 to 8) → content follows finger down → scroll_up.
         handle_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), 8, 40);
-        assert_eq!(app.scroll.offset_y, 2, "Dragging down should scroll up by 3 rows");
+        assert_eq!(
+            app.scroll.offset_y, 2,
+            "Dragging down should scroll up by 3 rows"
+        );
     }
 
     #[test]
@@ -3091,8 +3132,18 @@ mod scrollbar_tests {
         setup_graph_scroll(&mut app, 100, 20);
         app.scroll.content_width = 200;
         app.scroll.viewport_width = 80;
-        app.last_graph_area = Rect { x: 0, y: 0, width: 79, height: 20 };
-        app.last_graph_scrollbar_area = Rect { x: 79, y: 0, width: 1, height: 20 };
+        app.last_graph_area = Rect {
+            x: 0,
+            y: 0,
+            width: 79,
+            height: 20,
+        };
+        app.last_graph_scrollbar_area = Rect {
+            x: 79,
+            y: 0,
+            width: 1,
+            height: 20,
+        };
         app.last_panel_scrollbar_area = Rect::default();
         app.last_graph_hscrollbar_area = Rect::default();
 
@@ -3102,19 +3153,35 @@ mod scrollbar_tests {
 
         // Drag left (column decreases from 40 to 30) → content follows finger left → scroll_right.
         handle_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), 10, 30);
-        assert_eq!(app.scroll.offset_x, 10, "Dragging left should scroll right by 10 cols");
+        assert_eq!(
+            app.scroll.offset_x, 10,
+            "Dragging left should scroll right by 10 cols"
+        );
 
         // Drag right (column increases from 30 to 35) → content follows finger right → scroll_left.
         handle_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), 10, 35);
-        assert_eq!(app.scroll.offset_x, 5, "Dragging right should scroll left by 5 cols");
+        assert_eq!(
+            app.scroll.offset_x, 5,
+            "Dragging right should scroll left by 5 cols"
+        );
     }
 
     #[test]
     fn drag_pan_cleared_on_mouse_up() {
         let (mut app, _tmp) = build_test_app();
         setup_graph_scroll(&mut app, 100, 20);
-        app.last_graph_area = Rect { x: 0, y: 0, width: 79, height: 20 };
-        app.last_graph_scrollbar_area = Rect { x: 79, y: 0, width: 1, height: 20 };
+        app.last_graph_area = Rect {
+            x: 0,
+            y: 0,
+            width: 79,
+            height: 20,
+        };
+        app.last_graph_scrollbar_area = Rect {
+            x: 79,
+            y: 0,
+            width: 1,
+            height: 20,
+        };
         app.last_panel_scrollbar_area = Rect::default();
         app.last_graph_hscrollbar_area = Rect::default();
 
@@ -3122,7 +3189,10 @@ mod scrollbar_tests {
         assert!(app.graph_pan_last.is_some());
 
         handle_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), 5, 40);
-        assert!(app.graph_pan_last.is_none(), "Pan state should be cleared on mouse up");
+        assert!(
+            app.graph_pan_last.is_none(),
+            "Pan state should be cleared on mouse up"
+        );
     }
 
     #[test]
@@ -3131,8 +3201,18 @@ mod scrollbar_tests {
         setup_graph_scroll(&mut app, 100, 20);
         app.scroll.content_width = 200;
         app.scroll.viewport_width = 80;
-        app.last_graph_area = Rect { x: 0, y: 0, width: 79, height: 20 };
-        app.last_graph_scrollbar_area = Rect { x: 79, y: 0, width: 1, height: 20 };
+        app.last_graph_area = Rect {
+            x: 0,
+            y: 0,
+            width: 79,
+            height: 20,
+        };
+        app.last_graph_scrollbar_area = Rect {
+            x: 79,
+            y: 0,
+            width: 1,
+            height: 20,
+        };
         app.last_panel_scrollbar_area = Rect::default();
         app.last_graph_hscrollbar_area = Rect::default();
 
@@ -3140,7 +3220,10 @@ mod scrollbar_tests {
         handle_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), 10, 79);
         assert_eq!(app.scrollbar_drag, Some(ScrollbarDragTarget::Graph));
         // graph_pan_last should NOT be set since this was a scrollbar click.
-        assert!(app.graph_pan_last.is_none(), "Scrollbar click should not start graph pan");
+        assert!(
+            app.graph_pan_last.is_none(),
+            "Scrollbar click should not start graph pan"
+        );
     }
 
     #[test]
@@ -3149,8 +3232,18 @@ mod scrollbar_tests {
         setup_graph_scroll(&mut app, 100, 20);
         app.scroll.content_width = 200;
         app.scroll.viewport_width = 80;
-        app.last_graph_area = Rect { x: 0, y: 0, width: 79, height: 20 };
-        app.last_graph_scrollbar_area = Rect { x: 79, y: 0, width: 1, height: 20 };
+        app.last_graph_area = Rect {
+            x: 0,
+            y: 0,
+            width: 79,
+            height: 20,
+        };
+        app.last_graph_scrollbar_area = Rect {
+            x: 79,
+            y: 0,
+            width: 1,
+            height: 20,
+        };
         app.last_panel_scrollbar_area = Rect::default();
         app.last_graph_hscrollbar_area = Rect::default();
 
@@ -3167,16 +3260,27 @@ mod scrollbar_tests {
     fn mouse_wheel_scroll_still_works_with_pan_state() {
         let (mut app, _tmp) = build_test_app();
         setup_graph_scroll(&mut app, 100, 20);
-        app.last_graph_area = Rect { x: 0, y: 0, width: 79, height: 20 };
+        app.last_graph_area = Rect {
+            x: 0,
+            y: 0,
+            width: 79,
+            height: 20,
+        };
         app.last_graph_scrollbar_area = Rect::default();
         app.last_panel_scrollbar_area = Rect::default();
         app.last_graph_hscrollbar_area = Rect::default();
 
         // Scroll wheel should work normally.
         handle_mouse(&mut app, MouseEventKind::ScrollDown, 10, 40);
-        assert_eq!(app.scroll.offset_y, 3, "Mouse wheel ScrollDown should scroll by 3");
+        assert_eq!(
+            app.scroll.offset_y, 3,
+            "Mouse wheel ScrollDown should scroll by 3"
+        );
 
         handle_mouse(&mut app, MouseEventKind::ScrollUp, 10, 40);
-        assert_eq!(app.scroll.offset_y, 0, "Mouse wheel ScrollUp should scroll back");
+        assert_eq!(
+            app.scroll.offset_y, 0,
+            "Mouse wheel ScrollUp should scroll back"
+        );
     }
 }

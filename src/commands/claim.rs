@@ -56,10 +56,7 @@ pub fn claim(dir: &Path, id: &str, actor: Option<&str>) -> Result<()> {
             anyhow::bail!("Cannot claim task '{}': task is Abandoned", id);
         }
         Status::PendingValidation => {
-            anyhow::bail!(
-                "Cannot claim task '{}': task is pending validation",
-                id
-            );
+            anyhow::bail!("Cannot claim task '{}': task is pending validation", id);
         }
     }
 

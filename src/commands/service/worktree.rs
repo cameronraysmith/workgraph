@@ -46,11 +46,7 @@ pub fn remove_worktree(project_root: &Path, worktree_path: &Path, branch: &str) 
 /// Check for recoverable commits on a dead agent's worktree branch.
 /// If commits exist, creates a recovery branch at `recover/<agent-id>/<task-id>`.
 /// Returns the number of commits found.
-pub fn recover_commits(
-    project_root: &Path,
-    branch: &str,
-    agent_id: &str,
-) -> usize {
+pub fn recover_commits(project_root: &Path, branch: &str, agent_id: &str) -> usize {
     let commit_count = Command::new("git")
         .args(["log", "--oneline", &format!("HEAD..{}", branch)])
         .current_dir(project_root)
@@ -64,10 +60,7 @@ pub fn recover_commits(
         .unwrap_or(0);
 
     if commit_count > 0 {
-        let recovery_branch = format!(
-            "recover/{}",
-            branch.strip_prefix("wg/").unwrap_or(branch)
-        );
+        let recovery_branch = format!("recover/{}", branch.strip_prefix("wg/").unwrap_or(branch));
         eprintln!(
             "[worktree] Dead agent {} had {} commits on {}. Creating recovery branch: {}",
             agent_id, commit_count, branch, recovery_branch
@@ -119,15 +112,16 @@ fn find_branch_for_worktree(project_root: &Path, worktree_path: &Path) -> Option
             current_path = Some(path);
         } else if let Some(branch_ref) = line.strip_prefix("branch ") {
             if let Some(cp) = current_path
-                && cp == worktree_str.as_ref() {
-                    // Convert refs/heads/wg/agent-X/task-Y to wg/agent-X/task-Y
-                    return Some(
-                        branch_ref
-                            .strip_prefix("refs/heads/")
-                            .unwrap_or(branch_ref)
-                            .to_string(),
-                    );
-                }
+                && cp == worktree_str.as_ref()
+            {
+                // Convert refs/heads/wg/agent-X/task-Y to wg/agent-X/task-Y
+                return Some(
+                    branch_ref
+                        .strip_prefix("refs/heads/")
+                        .unwrap_or(branch_ref)
+                        .to_string(),
+                );
+            }
         } else if line.is_empty() {
             current_path = None;
         }
@@ -328,7 +322,11 @@ mod tests {
             .unwrap();
     }
 
-    fn create_test_worktree(project: &Path, agent_id: &str, task_id: &str) -> (std::path::PathBuf, String) {
+    fn create_test_worktree(
+        project: &Path,
+        agent_id: &str,
+        task_id: &str,
+    ) -> (std::path::PathBuf, String) {
         let branch = format!("wg/{}/{}", agent_id, task_id);
         let wt_dir = project.join(WORKTREES_DIR).join(agent_id);
         fs::create_dir_all(project.join(WORKTREES_DIR)).unwrap();

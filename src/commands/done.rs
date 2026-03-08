@@ -113,7 +113,8 @@ fn check_agent_git_hygiene(dir: &Path, task_id: &str) {
             let changed: Vec<&str> = status.lines().take(10).collect();
             eprintln!(
                 "Warning: git hygiene for '{}': uncommitted changes:\n{}",
-                task_id, changed.join("\n")
+                task_id,
+                changed.join("\n")
             );
         }
     }

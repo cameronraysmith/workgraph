@@ -156,8 +156,8 @@ fn test_prefixed_model_routes_to_openai() {
     let mock_body = openai_mock_response("openai/gpt-4o");
     let (base_url, paths) = start_recording_mock_server(mock_body, 1);
 
-    let client = OpenAiClient::new("test-key".to_string(), "openai/gpt-4o", Some(&base_url))
-        .unwrap();
+    let client =
+        OpenAiClient::new("test-key".to_string(), "openai/gpt-4o", Some(&base_url)).unwrap();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     let request = workgraph::executor::native::client::MessagesRequest {
@@ -352,12 +352,8 @@ fn test_per_role_different_providers() {
     let mut config = Config::default();
 
     // Triage → OpenAI (budget model)
-    config
-        .models
-        .set_model(DispatchRole::Triage, "gpt-4o-mini");
-    config
-        .models
-        .set_provider(DispatchRole::Triage, "openai");
+    config.models.set_model(DispatchRole::Triage, "gpt-4o-mini");
+    config.models.set_provider(DispatchRole::Triage, "openai");
 
     // Evaluator → Anthropic (high-capability model)
     config
@@ -394,12 +390,8 @@ fn test_per_role_isolation() {
     // Setting provider on one role should not affect other roles
     let mut config = Config::default();
 
-    config
-        .models
-        .set_model(DispatchRole::Triage, "gpt-4o-mini");
-    config
-        .models
-        .set_provider(DispatchRole::Triage, "openai");
+    config.models.set_model(DispatchRole::Triage, "gpt-4o-mini");
+    config.models.set_provider(DispatchRole::Triage, "openai");
 
     // Evaluator should still have default (no explicit provider)
     let evaluator = config.resolve_model_for_role(DispatchRole::Evaluator);
@@ -453,8 +445,7 @@ provider = "openai"
     assert_eq!(eval_provider.name(), "anthropic");
 
     // The triage should route to OpenAI
-    let triage_provider =
-        create_provider_ext(tmp.path(), "gpt-4o-mini", Some("openai")).unwrap();
+    let triage_provider = create_provider_ext(tmp.path(), "gpt-4o-mini", Some("openai")).unwrap();
     assert_eq!(triage_provider.name(), "openai");
 
     // Verify they actually hit different API endpoints
@@ -533,9 +524,7 @@ fn test_fallback_tier_defaults() {
 
     // Compactor → "haiku"
     assert_eq!(
-        config
-            .resolve_model_for_role(DispatchRole::Compactor)
-            .model,
+        config.resolve_model_for_role(DispatchRole::Compactor).model,
         "haiku"
     );
 
@@ -557,9 +546,7 @@ fn test_fallback_tier_defaults() {
 
     // Evaluator → agent.model (no tier default)
     assert_eq!(
-        config
-            .resolve_model_for_role(DispatchRole::Evaluator)
-            .model,
+        config.resolve_model_for_role(DispatchRole::Evaluator).model,
         config.agent.model
     );
 }
@@ -580,9 +567,7 @@ fn test_fallback_models_section_overrides_legacy() {
     let mut config = Config::default();
     config.agency.triage_model = Some("legacy-model".to_string());
     config.models.set_model(DispatchRole::Triage, "new-model");
-    config
-        .models
-        .set_provider(DispatchRole::Triage, "openai");
+    config.models.set_provider(DispatchRole::Triage, "openai");
 
     let resolved = config.resolve_model_for_role(DispatchRole::Triage);
     assert_eq!(resolved.model, "new-model");
@@ -651,10 +636,7 @@ fn test_model_registry_persistence() {
     let loaded = ModelRegistry::load(tmp.path()).unwrap();
 
     assert!(loaded.get("custom/test-model").is_some());
-    assert_eq!(
-        loaded.get("custom/test-model").unwrap().provider,
-        "custom"
-    );
+    assert_eq!(loaded.get("custom/test-model").unwrap().provider, "custom");
 }
 
 #[test]
@@ -662,7 +644,10 @@ fn test_model_registry_provider_filtering() {
     let registry = ModelRegistry::with_defaults();
 
     let frontier = registry.list(Some(&ModelTier::Frontier));
-    assert!(frontier.len() >= 2, "Should have at least 2 frontier models");
+    assert!(
+        frontier.len() >= 2,
+        "Should have at least 2 frontier models"
+    );
     for m in &frontier {
         assert_eq!(m.tier, ModelTier::Frontier);
     }
@@ -711,8 +696,7 @@ async fn test_openai_provider_send_via_mock() {
     let mock_body = openai_mock_response("gpt-4o-mini");
     let base_url = start_mock_server(mock_body, 1);
 
-    let client =
-        OpenAiClient::new("mock-key".to_string(), "gpt-4o-mini", Some(&base_url)).unwrap();
+    let client = OpenAiClient::new("mock-key".to_string(), "gpt-4o-mini", Some(&base_url)).unwrap();
 
     use workgraph::executor::native::provider::Provider;
     let request = workgraph::executor::native::client::MessagesRequest {

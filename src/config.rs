@@ -530,7 +530,6 @@ pub enum ExecMode {
     Full,
 }
 
-
 impl std::fmt::Display for ExecMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

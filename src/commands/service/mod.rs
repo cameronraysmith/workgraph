@@ -1117,7 +1117,10 @@ fn ensure_coordinator_task(dir: &Path) {
 
     graph.add_node(Node::Task(task));
     if let Err(e) = save_graph(&graph, &gp) {
-        eprintln!("[daemon] Failed to save graph after creating .coordinator task: {}", e);
+        eprintln!(
+            "[daemon] Failed to save graph after creating .coordinator task: {}",
+            e
+        );
     }
 }
 
@@ -1252,7 +1255,11 @@ pub fn run_daemon(
     if config.agency.auto_evolve {
         let agency_dir = dir.join("agency");
         let roles_dir = agency_dir.join("cache/roles");
-        if !roles_dir.exists() || agency::load_all_roles(&roles_dir).map(|r| r.is_empty()).unwrap_or(true) {
+        if !roles_dir.exists()
+            || agency::load_all_roles(&roles_dir)
+                .map(|r| r.is_empty())
+                .unwrap_or(true)
+        {
             logger.info("auto_evolve enabled but agency not initialized — bootstrapping agency");
             match super::agency_init::run(&dir) {
                 Ok(()) => logger.info("Agency auto-bootstrap complete"),
@@ -1472,13 +1479,18 @@ pub fn run_daemon(
                     // Compaction: distill graph state into context.md at configured intervals
                     {
                         let config = workgraph::config::Config::load_or_default(&dir);
-                        if workgraph::service::compactor::should_compact(&dir, coord_state.ticks, &config) {
-                            match workgraph::service::compactor::run_compaction(&dir, coord_state.ticks) {
+                        if workgraph::service::compactor::should_compact(
+                            &dir,
+                            coord_state.ticks,
+                            &config,
+                        ) {
+                            match workgraph::service::compactor::run_compaction(
+                                &dir,
+                                coord_state.ticks,
+                            ) {
                                 Ok(path) => {
-                                    logger.info(&format!(
-                                        "Compaction complete → {}",
-                                        path.display()
-                                    ));
+                                    logger
+                                        .info(&format!("Compaction complete → {}", path.display()));
                                 }
                                 Err(e) => {
                                     logger.error(&format!("Compaction error: {}", e));
@@ -1666,14 +1678,9 @@ pub fn run_restart(dir: &Path, json: bool) -> Result<()> {
 
     // Start a new daemon with the same config.
     run_start(
-        dir,
-        None,  // socket — use default
-        None,  // port
-        max_agents,
-        executor,
-        interval,
-        model,
-        json,
+        dir, None, // socket — use default
+        None, // port
+        max_agents, executor, interval, model, json,
         true,  // force — clean up any leftover state
         false, // no_coordinator_agent — use default
     )

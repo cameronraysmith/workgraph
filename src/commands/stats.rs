@@ -27,16 +27,18 @@ pub fn run(dir: &Path, json: bool) -> Result<()> {
     let now = chrono::Utc::now();
 
     // Service uptime
-    let service_uptime_secs: Option<u64> = ServiceState::load(dir)
-        .ok()
-        .flatten()
-        .and_then(|state| {
+    let service_uptime_secs: Option<u64> =
+        ServiceState::load(dir).ok().flatten().and_then(|state| {
             if !is_service_alive(state.pid) {
                 return None;
             }
             chrono::DateTime::parse_from_rfc3339(&state.started_at)
                 .ok()
-                .map(|started| (now - started.with_timezone(&chrono::Utc)).num_seconds().max(0) as u64)
+                .map(|started| {
+                    (now - started.with_timezone(&chrono::Utc))
+                        .num_seconds()
+                        .max(0) as u64
+                })
         });
 
     // Agent time computation
@@ -60,11 +62,15 @@ pub fn run(dir: &Path, json: bool) -> Result<()> {
             active_count += 1;
         } else if let Some(ref end_str) = agent.completed_at {
             if let Ok(end) = chrono::DateTime::parse_from_rfc3339(end_str) {
-                let elapsed = (end.with_timezone(&chrono::Utc) - start).num_seconds().max(0);
+                let elapsed = (end.with_timezone(&chrono::Utc) - start)
+                    .num_seconds()
+                    .max(0);
                 cumulative_secs += elapsed;
             }
         } else if let Ok(hb) = chrono::DateTime::parse_from_rfc3339(&agent.last_heartbeat) {
-            let elapsed = (hb.with_timezone(&chrono::Utc) - start).num_seconds().max(0);
+            let elapsed = (hb.with_timezone(&chrono::Utc) - start)
+                .num_seconds()
+                .max(0);
             cumulative_secs += elapsed;
         }
     }
@@ -94,13 +100,17 @@ pub fn run(dir: &Path, json: bool) -> Result<()> {
 
         // Cumulative walltime
         println!(
-            "  \u{03A3} Cumulative walltime: {} ({} agents total)", fmt_duration(cumulative_secs), total_agents,
+            "  \u{03A3} Cumulative walltime: {} ({} agents total)",
+            fmt_duration(cumulative_secs),
+            total_agents,
         );
 
         // Active agent time
         if active_count > 0 {
             println!(
-                "  \u{26A1} Active agent time:   {} ({} agents)", fmt_duration(active_secs), active_count,
+                "  \u{26A1} Active agent time:   {} ({} agents)",
+                fmt_duration(active_secs),
+                active_count,
             );
         } else {
             println!("  \u{26A1} Active agent time:   (no active agents)");

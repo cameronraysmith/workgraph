@@ -436,7 +436,9 @@ pub(crate) fn build_evolver_prompt(
          You can modify the mutable files to improve coordinator behavior based on evaluation data.\n\n",
     );
     out.push_str("- **modify_coordinator_prompt**: Modify a coordinator prompt file. Requires: target_id (\"evolved-amendments\" or \"common-patterns\"), new_content (full file content).\n\n");
-    out.push_str("**Immutable files (do NOT target):** `base-system-prompt.md`, `behavioral-rules.md`\n");
+    out.push_str(
+        "**Immutable files (do NOT target):** `base-system-prompt.md`, `behavioral-rules.md`\n",
+    );
     out.push_str("**Mutable files:** `evolved-amendments.md` (add rules/heuristics), `common-patterns.md` (add/update examples)\n\n");
 
     // Include current coordinator prompt files for context

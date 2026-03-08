@@ -306,9 +306,7 @@ pub(crate) fn cleanup_dead_agents(dir: &Path, graph_path: &Path) -> Result<Vec<S
         let agent_dir = if output_path.is_absolute() {
             output_path.parent().map(|p| p.to_path_buf())
         } else {
-            output_path
-                .parent()
-                .map(|p| project_root.join(p))
+            output_path.parent().map(|p| project_root.join(p))
         };
         let agent_dir = match agent_dir {
             Some(d) => d,
@@ -318,24 +316,25 @@ pub(crate) fn cleanup_dead_agents(dir: &Path, graph_path: &Path) -> Result<Vec<S
         let metadata_path = agent_dir.join("metadata.json");
         if let Ok(metadata_str) = fs::read_to_string(&metadata_path)
             && let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&metadata_str)
-                && let (Some(wt_path_str), Some(wt_branch)) = (
-                    metadata.get("worktree_path").and_then(|v| v.as_str()),
-                    metadata.get("worktree_branch").and_then(|v| v.as_str()),
-                ) {
-                    let wt_path = Path::new(wt_path_str);
-                    if wt_path.exists() {
-                        eprintln!(
-                            "[triage] Cleaning up worktree for dead agent {}: {:?}",
-                            agent_id, wt_path
-                        );
-                        super::worktree::cleanup_dead_agent_worktree(
-                            project_root,
-                            wt_path,
-                            wt_branch,
-                            agent_id,
-                        );
-                    }
-                }
+            && let (Some(wt_path_str), Some(wt_branch)) = (
+                metadata.get("worktree_path").and_then(|v| v.as_str()),
+                metadata.get("worktree_branch").and_then(|v| v.as_str()),
+            )
+        {
+            let wt_path = Path::new(wt_path_str);
+            if wt_path.exists() {
+                eprintln!(
+                    "[triage] Cleaning up worktree for dead agent {}: {:?}",
+                    agent_id, wt_path
+                );
+                super::worktree::cleanup_dead_agent_worktree(
+                    project_root,
+                    wt_path,
+                    wt_branch,
+                    agent_id,
+                );
+            }
+        }
     }
 
     Ok(dead.into_iter().map(|(id, _, _, _, _)| id).collect())

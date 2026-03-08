@@ -92,9 +92,10 @@ impl ZeroOutputState {
         let path = Self::state_path(dir);
         if path.exists()
             && let Ok(content) = std::fs::read_to_string(&path)
-                && let Ok(state) = serde_json::from_str(&content) {
-                    return state;
-                }
+            && let Ok(state) = serde_json::from_str(&content)
+        {
+            return state;
+        }
         Self::default()
     }
 
@@ -153,9 +154,10 @@ impl ZeroOutputState {
     /// Check if global spawning is paused due to backoff.
     pub fn is_spawn_paused(&self) -> bool {
         if let Some(ref backoff) = self.global_backoff
-            && let Ok(resume) = backoff.resume_after.parse::<DateTime<Utc>>() {
-                return Utc::now() < resume;
-            }
+            && let Ok(resume) = backoff.resume_after.parse::<DateTime<Utc>>()
+        {
+            return Utc::now() < resume;
+        }
         false
     }
 
@@ -379,7 +381,10 @@ pub fn sweep_zero_output_agents(dir: &Path) -> ZeroOutputSweepResult {
                     eprintln!(
                         "[zero-output] CIRCUIT BREAKER: Task '{}' failed after {} zero-output spawns",
                         task_id,
-                        state.task_respawn_counts.get(task_id.as_str()).unwrap_or(&0)
+                        state
+                            .task_respawn_counts
+                            .get(task_id.as_str())
+                            .unwrap_or(&0)
                     );
                 } else {
                     // Not yet circuit-broken: reset task for respawn
@@ -395,7 +400,10 @@ pub fn sweep_zero_output_agents(dir: &Path) -> ZeroOutputSweepResult {
                             agent_id,
                             pid,
                             age_secs,
-                            state.task_respawn_counts.get(task_id.as_str()).unwrap_or(&1),
+                            state
+                                .task_respawn_counts
+                                .get(task_id.as_str())
+                                .unwrap_or(&1),
                             MAX_ZERO_OUTPUT_RESPAWNS
                         ),
                     });
@@ -411,10 +419,9 @@ pub fn sweep_zero_output_agents(dir: &Path) -> ZeroOutputSweepResult {
             });
         }
 
-        if graph_modified
-            && let Err(e) = save_graph(&graph, &graph_path) {
-                eprintln!("[zero-output] Failed to save graph: {}", e);
-            }
+        if graph_modified && let Err(e) = save_graph(&graph, &graph_path) {
+            eprintln!("[zero-output] Failed to save graph: {}", e);
+        }
     }
 
     state.save(dir);

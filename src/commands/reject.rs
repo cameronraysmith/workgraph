@@ -188,7 +188,12 @@ mod tests {
         let graph = load_graph(&path).unwrap();
         let task = graph.get_task("t1").unwrap();
         assert_eq!(task.status, Status::Failed);
-        assert!(task.failure_reason.as_ref().unwrap().contains("max rejections"));
+        assert!(
+            task.failure_reason
+                .as_ref()
+                .unwrap()
+                .contains("max rejections")
+        );
     }
 
     #[test]

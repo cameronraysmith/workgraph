@@ -895,8 +895,12 @@ fn apply_modify_coordinator_prompt(
         .context("Failed to create coordinator-prompt directory")?;
 
     let path = prompt_dir.join(&filename);
-    std::fs::write(&path, content)
-        .with_context(|| format!("Failed to write coordinator prompt file: {}", path.display()))?;
+    std::fs::write(&path, content).with_context(|| {
+        format!(
+            "Failed to write coordinator prompt file: {}",
+            path.display()
+        )
+    })?;
 
     Ok(serde_json::json!({
         "op": "modify_coordinator_prompt",

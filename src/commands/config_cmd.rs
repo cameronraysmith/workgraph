@@ -130,7 +130,7 @@ pub fn show(dir: &Path, scope: Option<ConfigScope>, json: bool) -> Result<()> {
         println!("[tui]");
         println!("  chat_history = {}", config.tui.chat_history);
         println!("  chat_history_max = {}", config.tui.chat_history_max);
-    println!("  counters = \"{}\"", config.tui.counters);
+        println!("  counters = \"{}\"", config.tui.counters);
         println!();
         println!("[viz]");
         println!("  edge_color = \"{}\"", config.viz.edge_color);

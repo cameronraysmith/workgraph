@@ -1416,9 +1416,15 @@ fn evaluate_coordinator_turn(
     let graph_summary = if let Ok(graph) = load_graph(&gp) {
         let total = graph.tasks().count();
         let done = graph.tasks().filter(|t| t.status == Status::Done).count();
-        let in_prog = graph.tasks().filter(|t| t.status == Status::InProgress).count();
+        let in_prog = graph
+            .tasks()
+            .filter(|t| t.status == Status::InProgress)
+            .count();
         let failed = graph.tasks().filter(|t| t.status == Status::Failed).count();
-        format!("{} tasks ({} done, {} in-progress, {} failed)", total, done, in_prog, failed)
+        format!(
+            "{} tasks ({} done, {} in-progress, {} failed)",
+            total, done, in_prog, failed
+        )
     } else {
         "unknown".to_string()
     };
@@ -1465,10 +1471,7 @@ fn evaluate_coordinator_turn(
         }
     };
 
-    let score = parsed
-        .get("score")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.5);
+    let score = parsed.get("score").and_then(|v| v.as_f64()).unwrap_or(0.5);
     let notes = parsed
         .get("notes")
         .and_then(|v| v.as_str())
@@ -1523,10 +1526,7 @@ fn evaluate_coordinator_turn(
             );
         }
         Err(e) => {
-            eprintln!(
-                "[coordinator-eval] Failed to record evaluation: {}",
-                e
-            );
+            eprintln!("[coordinator-eval] Failed to record evaluation: {}", e);
         }
     }
 }

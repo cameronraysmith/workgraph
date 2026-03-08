@@ -409,7 +409,10 @@ fn test_no_zombie_accumulation_across_multiple_abandons() {
     // Create 3 tasks, each with system children
     for i in 1..=3 {
         let id = format!("task-{}", i);
-        wg_ok(&wg_dir, &["add", &format!("Task {}", i), "--id", &id, "--immediate"]);
+        wg_ok(
+            &wg_dir,
+            &["add", &format!("Task {}", i), "--id", &id, "--immediate"],
+        );
 
         // Simulate eval + verify system tasks
         let mut g = graph(&wg_dir);
@@ -474,11 +477,23 @@ fn test_full_lifecycle_abandon_supersede_cascade() {
     // Create replacement tasks
     wg_ok(
         &wg_dir,
-        &["add", "Auth: login flow", "--id", "auth-login", "--immediate"],
+        &[
+            "add",
+            "Auth: login flow",
+            "--id",
+            "auth-login",
+            "--immediate",
+        ],
     );
     wg_ok(
         &wg_dir,
-        &["add", "Auth: token refresh", "--id", "auth-token", "--immediate"],
+        &[
+            "add",
+            "Auth: token refresh",
+            "--id",
+            "auth-token",
+            "--immediate",
+        ],
     );
 
     // Simulate system tasks for original

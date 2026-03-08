@@ -14,13 +14,12 @@ use std::collections::HashMap;
 use std::fs;
 use tempfile::TempDir;
 
-use workgraph::agency::{
-    Evaluation, EvaluationRef, EvolverState, EvolutionTrigger,
-    build_role, build_tradeoff, count_evaluation_files, init,
-    recalculate_avg_score, record_evaluation, save_role, save_tradeoff,
-    should_trigger_evolution,
-};
 use workgraph::agency::evolver;
+use workgraph::agency::{
+    Evaluation, EvaluationRef, EvolutionTrigger, EvolverState, build_role, build_tradeoff,
+    count_evaluation_files, init, recalculate_avg_score, record_evaluation, save_role,
+    save_tradeoff, should_trigger_evolution,
+};
 use workgraph::config::{AgencyConfig, Config, DispatchRole};
 use workgraph::graph::{Node, Status, Task, TokenUsage, WorkGraph, is_system_task};
 use workgraph::parser::{load_graph, save_graph};
@@ -48,7 +47,13 @@ fn setup_workgraph(tmp: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
     (wg_dir, graph_path)
 }
 
-fn make_evaluation(id: &str, task_id: &str, score: f64, role_id: &str, tradeoff_id: &str) -> Evaluation {
+fn make_evaluation(
+    id: &str,
+    task_id: &str,
+    score: f64,
+    role_id: &str,
+    tradeoff_id: &str,
+) -> Evaluation {
     Evaluation {
         id: id.to_string(),
         task_id: task_id.to_string(),
@@ -90,7 +95,10 @@ fn test_auto_evaluate_creates_dot_prefixed_eval_tasks() {
                 return false;
             }
             let dominated_tags = ["evaluation", "assignment", "evolution"];
-            if t.tags.iter().any(|tag| dominated_tags.contains(&tag.as_str())) {
+            if t.tags
+                .iter()
+                .any(|tag| dominated_tags.contains(&tag.as_str()))
+            {
                 return false;
             }
             if t.tags.iter().any(|tag| tag == "eval-scheduled") {
@@ -156,7 +164,9 @@ fn test_evaluator_dispatch_role_for_eval_tasks() {
     let mut config = Config::default();
 
     // Set evaluator-specific model via the new routing config
-    config.models.set_model(DispatchRole::Evaluator, "haiku-evaluator");
+    config
+        .models
+        .set_model(DispatchRole::Evaluator, "haiku-evaluator");
 
     let resolved = config.resolve_model_for_role(DispatchRole::Evaluator);
     assert_eq!(resolved.model, "haiku-evaluator");
@@ -169,7 +179,9 @@ fn test_evaluator_dispatch_role_for_eval_tasks() {
     );
 
     // Evolver dispatch role should also be independently configurable
-    config.models.set_model(DispatchRole::Evolver, "evolver-model");
+    config
+        .models
+        .set_model(DispatchRole::Evolver, "evolver-model");
     let evolver_resolved = config.resolve_model_for_role(DispatchRole::Evolver);
     assert_eq!(evolver_resolved.model, "evolver-model");
 }
@@ -179,7 +191,9 @@ fn test_eval_task_model_matches_evaluator_dispatch_role() {
     // Simulate what the coordinator does: create an eval task with
     // the model resolved from DispatchRole::Evaluator
     let mut config = Config::default();
-    config.models.set_model(DispatchRole::Evaluator, "eval-model-v2");
+    config
+        .models
+        .set_model(DispatchRole::Evaluator, "eval-model-v2");
 
     let resolved = config.resolve_model_for_role(DispatchRole::Evaluator);
 
@@ -294,7 +308,10 @@ fn test_evaluations_trigger_evolution() {
     // Check that evolution should trigger
     let state = EvolverState::default();
     let trigger = should_trigger_evolution(&agency_dir, &config, &state);
-    assert!(trigger.is_some(), "Evolution should trigger after 6 evals (threshold=5)");
+    assert!(
+        trigger.is_some(),
+        "Evolution should trigger after 6 evals (threshold=5)"
+    );
 
     match trigger.unwrap() {
         EvolutionTrigger::Threshold { new_evals } => {
@@ -338,11 +355,17 @@ fn test_reactive_evolution_trigger_low_scores() {
 
     let state = EvolverState::default();
     let trigger = should_trigger_evolution(&agency_dir, &config, &state);
-    assert!(trigger.is_some(), "Reactive trigger should fire for low scores");
+    assert!(
+        trigger.is_some(),
+        "Reactive trigger should fire for low scores"
+    );
 
     match trigger.unwrap() {
         EvolutionTrigger::Reactive { avg_score } => {
-            assert!(avg_score < 0.4, "Average score should be below reactive threshold");
+            assert!(
+                avg_score < 0.4,
+                "Average score should be below reactive threshold"
+            );
         }
         other => panic!("Expected Reactive trigger, got {:?}", other),
     }
@@ -417,7 +440,10 @@ fn test_auto_evolve_creates_dot_prefixed_evolve_task() {
 
     let final_graph = load_graph(&graph_path).unwrap();
     let evolve = final_graph.get_task(evolve_task_id).unwrap();
-    assert!(is_system_task(&evolve.id), "Evolve task should be dot-prefixed system task");
+    assert!(
+        is_system_task(&evolve.id),
+        "Evolve task should be dot-prefixed system task"
+    );
     assert!(evolve.tags.contains(&"evolution".to_string()));
     assert!(evolve.exec.as_ref().unwrap().contains("wg evolve"));
 }
@@ -455,9 +481,7 @@ fn test_evolver_state_tracks_evolution_history() {
         state.history[0].strategies_used,
         vec!["mutation".to_string(), "gap-analysis".to_string()]
     );
-    assert!(
-        (state.history[0].pre_evolution_avg_score.unwrap() - 0.72).abs() < f64::EPSILON
-    );
+    assert!((state.history[0].pre_evolution_avg_score.unwrap() - 0.72).abs() < f64::EPSILON);
     assert_eq!(
         state.history[0].task_id.as_deref(),
         Some(".evolve-auto-001")
@@ -510,13 +534,25 @@ fn test_no_infinite_regress_for_system_tasks() {
     let dominated_tags = ["evaluation", "assignment", "evolution"];
 
     let eval_tags = vec!["evaluation".to_string(), "agency".to_string()];
-    assert!(eval_tags.iter().any(|t| dominated_tags.contains(&t.as_str())));
+    assert!(
+        eval_tags
+            .iter()
+            .any(|t| dominated_tags.contains(&t.as_str()))
+    );
 
     let evolve_tags = vec!["evolution".to_string(), "agency".to_string()];
-    assert!(evolve_tags.iter().any(|t| dominated_tags.contains(&t.as_str())));
+    assert!(
+        evolve_tags
+            .iter()
+            .any(|t| dominated_tags.contains(&t.as_str()))
+    );
 
     let assign_tags = vec!["assignment".to_string(), "agency".to_string()];
-    assert!(assign_tags.iter().any(|t| dominated_tags.contains(&t.as_str())));
+    assert!(
+        assign_tags
+            .iter()
+            .any(|t| dominated_tags.contains(&t.as_str()))
+    );
 }
 
 // ===========================================================================
@@ -709,10 +745,16 @@ fn test_full_agency_loop_end_to_end() {
     // 12 original tasks + 12 eval tasks + 1 evolve task = 25
     assert_eq!(total_tasks, 25);
 
-    let eval_tasks: Vec<_> = final_graph.tasks().filter(|t| t.id.starts_with(".evaluate-")).collect();
+    let eval_tasks: Vec<_> = final_graph
+        .tasks()
+        .filter(|t| t.id.starts_with(".evaluate-"))
+        .collect();
     assert_eq!(eval_tasks.len(), 12);
 
-    let evolve_tasks: Vec<_> = final_graph.tasks().filter(|t| t.id.starts_with(".evolve-")).collect();
+    let evolve_tasks: Vec<_> = final_graph
+        .tasks()
+        .filter(|t| t.id.starts_with(".evolve-"))
+        .collect();
     assert_eq!(evolve_tasks.len(), 1);
 }
 
@@ -755,7 +797,10 @@ fn test_evolution_disabled_no_trigger() {
     let state = EvolverState::default();
 
     let trigger = should_trigger_evolution(&agency_dir, &config, &state);
-    assert!(trigger.is_none(), "Should not trigger when auto_evolve=false");
+    assert!(
+        trigger.is_none(),
+        "Should not trigger when auto_evolve=false"
+    );
 }
 
 // ===========================================================================

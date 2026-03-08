@@ -65,11 +65,7 @@ impl CompactorState {
 }
 
 /// Check whether compaction should run based on coordinator tick count and ops growth.
-pub fn should_compact(
-    workgraph_dir: &Path,
-    current_tick: u64,
-    config: &Config,
-) -> bool {
+pub fn should_compact(workgraph_dir: &Path, current_tick: u64, config: &Config) -> bool {
     let interval = config.coordinator.compactor_interval;
     if interval == 0 {
         return false;
@@ -275,17 +271,18 @@ fn build_evaluation_digest(workgraph_dir: &Path) -> String {
         for entry in dir.flatten() {
             if entry.path().extension().is_some_and(|e| e == "json")
                 && let Ok(content) = fs::read_to_string(entry.path())
-                    && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                        let task = val.get("task_id").and_then(|v| v.as_str()).unwrap_or("?");
-                        let score = val.get("score").and_then(|v| v.as_f64());
-                        let verdict = val.get("verdict").and_then(|v| v.as_str());
-                        let line = match (score, verdict) {
-                            (Some(s), Some(v)) => format!("- {}: score={:.1}, verdict={}", task, s, v),
-                            (Some(s), None) => format!("- {}: score={:.1}", task, s),
-                            _ => format!("- {}: evaluated", task),
-                        };
-                        entries.push(line);
-                    }
+                && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content)
+            {
+                let task = val.get("task_id").and_then(|v| v.as_str()).unwrap_or("?");
+                let score = val.get("score").and_then(|v| v.as_f64());
+                let verdict = val.get("verdict").and_then(|v| v.as_str());
+                let line = match (score, verdict) {
+                    (Some(s), Some(v)) => format!("- {}: score={:.1}, verdict={}", task, s, v),
+                    (Some(s), None) => format!("- {}: score={:.1}", task, s),
+                    _ => format!("- {}: evaluated", task),
+                };
+                entries.push(line);
+            }
         }
     }
 
@@ -307,7 +304,13 @@ fn build_compactor_prompt(snapshot: &GraphSnapshot) -> String {
          Total tasks: {}\n\
          - Open: {}, In-progress: {}, Done: {}, Failed: {}, Blocked: {}, Abandoned: {}, Waiting: {}\n\n",
         snapshot.total_tasks,
-        c.open, c.in_progress, c.done, c.failed, c.blocked, c.abandoned, c.waiting,
+        c.open,
+        c.in_progress,
+        c.done,
+        c.failed,
+        c.blocked,
+        c.abandoned,
+        c.waiting,
     );
 
     if !snapshot.active_tasks.is_empty() {

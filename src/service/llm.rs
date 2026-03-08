@@ -42,7 +42,8 @@ pub fn run_lightweight_llm_call(
     if let Some(prov) = provider {
         match prov {
             "anthropic" => {
-                if let Ok(result) = call_anthropic_native(config, prov, model, prompt, timeout_secs) {
+                if let Ok(result) = call_anthropic_native(config, prov, model, prompt, timeout_secs)
+                {
                     return Ok(result);
                 }
             }
@@ -90,10 +91,16 @@ fn call_claude_cli(model: &str, prompt: &str, timeout_secs: u64) -> Result<LlmCa
     })
 }
 
-fn call_anthropic_native(config: &Config, provider_name: &str, model: &str, prompt: &str, timeout_secs: u64) -> Result<LlmCallResult> {
+fn call_anthropic_native(
+    config: &Config,
+    provider_name: &str,
+    model: &str,
+    prompt: &str,
+    timeout_secs: u64,
+) -> Result<LlmCallResult> {
     use crate::executor::native::client::{
         AnthropicClient, ContentBlock, Message, MessagesRequest, Role,
-        };
+    };
     use crate::executor::native::provider::Provider;
 
     let endpoint = config.llm_endpoints.find_for_provider(provider_name);
@@ -138,8 +145,16 @@ fn call_anthropic_native(config: &Config, provider_name: &str, model: &str, prom
         cost_usd: 0.0,
         input_tokens: u64::from(response.usage.input_tokens),
         output_tokens: u64::from(response.usage.output_tokens),
-        cache_read_input_tokens: response.usage.cache_read_input_tokens.map(u64::from).unwrap_or(0),
-        cache_creation_input_tokens: response.usage.cache_creation_input_tokens.map(u64::from).unwrap_or(0),
+        cache_read_input_tokens: response
+            .usage
+            .cache_read_input_tokens
+            .map(u64::from)
+            .unwrap_or(0),
+        cache_creation_input_tokens: response
+            .usage
+            .cache_creation_input_tokens
+            .map(u64::from)
+            .unwrap_or(0),
     });
 
     let text: String = response
@@ -156,16 +171,17 @@ fn call_anthropic_native(config: &Config, provider_name: &str, model: &str, prom
     if text.is_empty() {
         anyhow::bail!("Empty response from native Anthropic call");
     }
-    Ok(LlmCallResult {
-        text,
-        token_usage,
-    })
+    Ok(LlmCallResult { text, token_usage })
 }
 
-fn call_openai_native(config: &Config, provider_name: &str, model: &str, prompt: &str, timeout_secs: u64) -> Result<LlmCallResult> {
-    use crate::executor::native::client::{
-        ContentBlock, Message, MessagesRequest, Role,
-    };
+fn call_openai_native(
+    config: &Config,
+    provider_name: &str,
+    model: &str,
+    prompt: &str,
+    timeout_secs: u64,
+) -> Result<LlmCallResult> {
+    use crate::executor::native::client::{ContentBlock, Message, MessagesRequest, Role};
     use crate::executor::native::openai_client::OpenAiClient;
     use crate::executor::native::provider::Provider;
 
@@ -211,8 +227,16 @@ fn call_openai_native(config: &Config, provider_name: &str, model: &str, prompt:
         cost_usd: 0.0,
         input_tokens: u64::from(response.usage.input_tokens),
         output_tokens: u64::from(response.usage.output_tokens),
-        cache_read_input_tokens: response.usage.cache_read_input_tokens.map(u64::from).unwrap_or(0),
-        cache_creation_input_tokens: response.usage.cache_creation_input_tokens.map(u64::from).unwrap_or(0),
+        cache_read_input_tokens: response
+            .usage
+            .cache_read_input_tokens
+            .map(u64::from)
+            .unwrap_or(0),
+        cache_creation_input_tokens: response
+            .usage
+            .cache_creation_input_tokens
+            .map(u64::from)
+            .unwrap_or(0),
     });
 
     let text: String = response
@@ -229,10 +253,7 @@ fn call_openai_native(config: &Config, provider_name: &str, model: &str, prompt:
     if text.is_empty() {
         anyhow::bail!("Empty response from native OpenAI call");
     }
-    Ok(LlmCallResult {
-        text,
-        token_usage,
-    })
+    Ok(LlmCallResult { text, token_usage })
 }
 
 #[cfg(test)]

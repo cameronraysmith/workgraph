@@ -295,8 +295,7 @@ pub fn run(
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let old = task.exec_mode.clone();
             task.exec_mode = Some(mode.to_string());
-            field_changes
-                .push(serde_json::json!({"field": "exec_mode", "old": old, "new": mode}));
+            field_changes.push(serde_json::json!({"field": "exec_mode", "old": old, "new": mode}));
             println!("Updated exec_mode: {}", mode);
             changed = true;
         }
@@ -346,18 +345,16 @@ pub fn run(
             None
         };
         if let Some(ref aid) = found_id
-            && let Some(assign_task) = graph.get_task_mut(aid) {
-                match assign_task.status {
-                    workgraph::graph::Status::Open | workgraph::graph::Status::InProgress => {
-                        assign_task.status = workgraph::graph::Status::Abandoned;
-                        println!(
-                            "Abandoned assignment task '{}' (dependencies changed)",
-                            aid
-                        );
-                    }
-                    _ => {}
+            && let Some(assign_task) = graph.get_task_mut(aid)
+        {
+            match assign_task.status {
+                workgraph::graph::Status::Open | workgraph::graph::Status::InProgress => {
+                    assign_task.status = workgraph::graph::Status::Abandoned;
+                    println!("Abandoned assignment task '{}' (dependencies changed)", aid);
                 }
+                _ => {}
             }
+        }
 
         // Clear the agent field so the task gets re-assigned when actually ready
         let task = graph.get_task_mut_or_err(task_id)?;

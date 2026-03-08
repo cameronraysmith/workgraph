@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::store::{load_all_evaluations, AgencyError};
+use super::store::{AgencyError, load_all_evaluations};
 use crate::config::AgencyConfig;
 
 /// Safe strategies allowed in automatic evolution cycles.
@@ -134,13 +134,14 @@ pub fn should_trigger_evolution(
 
     // Check minimum interval
     if let Some(ref last_ts) = state.last_evolution_at
-        && let Ok(last_time) = last_ts.parse::<DateTime<Utc>>() {
-            let elapsed = Utc::now().signed_duration_since(last_time);
-            if elapsed.num_seconds() < config.evolution_interval as i64 {
-                // Interval not met — only allow reactive trigger
-                return check_reactive_trigger(agency_dir, config, new_evals);
-            }
+        && let Ok(last_time) = last_ts.parse::<DateTime<Utc>>()
+    {
+        let elapsed = Utc::now().signed_duration_since(last_time);
+        if elapsed.num_seconds() < config.evolution_interval as i64 {
+            // Interval not met — only allow reactive trigger
+            return check_reactive_trigger(agency_dir, config, new_evals);
         }
+    }
 
     // Check threshold trigger
     if new_evals >= config.evolution_threshold {
@@ -327,7 +328,10 @@ mod tests {
 
         let trigger = should_trigger_evolution(&agency_dir, &config, &state);
         assert!(trigger.is_some());
-        assert!(matches!(trigger.unwrap(), EvolutionTrigger::Threshold { new_evals: 12 }));
+        assert!(matches!(
+            trigger.unwrap(),
+            EvolutionTrigger::Threshold { new_evals: 12 }
+        ));
     }
 
     #[test]

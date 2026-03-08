@@ -452,9 +452,11 @@ fn main() -> Result<()> {
                 commands::fail::run(&workgraph_dir, &id, reason.as_deref())
             }
         }
-        Commands::Abandon { id, reason, superseded_by } => {
-            commands::abandon::run(&workgraph_dir, &id, reason.as_deref(), &superseded_by)
-        }
+        Commands::Abandon {
+            id,
+            reason,
+            superseded_by,
+        } => commands::abandon::run(&workgraph_dir, &id, reason.as_deref(), &superseded_by),
         Commands::Retry { id } => commands::retry::run(&workgraph_dir, &id),
         Commands::Approve { id } => commands::approve::run(&workgraph_dir, &id),
         Commands::Reject { id, reason } => commands::reject::run(&workgraph_dir, &id, &reason),
@@ -1696,9 +1698,7 @@ fn main() -> Result<()> {
             ServiceCommands::Stop { force, kill_agents } => {
                 commands::service::run_stop(&workgraph_dir, force, kill_agents, cli.json)
             }
-            ServiceCommands::Restart => {
-                commands::service::run_restart(&workgraph_dir, cli.json)
-            }
+            ServiceCommands::Restart => commands::service::run_restart(&workgraph_dir, cli.json),
             ServiceCommands::Status => commands::service::run_status(&workgraph_dir, cli.json),
             ServiceCommands::Reload {
                 max_agents,

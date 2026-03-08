@@ -107,8 +107,7 @@ pub(crate) fn spawn_agent_inner(
     // Inject previous attempt context on retry
     if task.retry_count > 0 {
         let max_tokens = config.checkpoint.retry_context_tokens;
-        scope_ctx.previous_attempt_context =
-            build_previous_attempt_context(task, dir, max_tokens);
+        scope_ctx.previous_attempt_context = build_previous_attempt_context(task, dir, max_tokens);
     }
 
     // Create template variables

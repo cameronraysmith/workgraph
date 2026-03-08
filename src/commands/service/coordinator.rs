@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use workgraph::agency;
-use workgraph::agency::evolver::{self, EvolverState, EvolutionTrigger};
+use workgraph::agency::evolver::{self, EvolutionTrigger, EvolverState};
 use workgraph::agency::run_mode::{self, AssignmentPath};
 use workgraph::agency::{
     AssignerModeContext, AssignmentMode, Evaluation, TaskAssignmentRecord,
@@ -929,26 +929,26 @@ fn build_auto_assign_tasks(
         };
 
         // Resolve the agent hash from the verdict
-        let resolved_agent =
-            match agency::find_agent_by_prefix(&agents_dir, &verdict.agent_hash) {
-                Ok(agent) => agent,
-                Err(e) => {
-                    eprintln!(
-                        "[coordinator] Assignment verdict agent '{}' not found for '{}': {}",
-                        verdict.agent_hash, task_id, e
-                    );
-                    continue;
-                }
-            };
+        let resolved_agent = match agency::find_agent_by_prefix(&agents_dir, &verdict.agent_hash) {
+            Ok(agent) => agent,
+            Err(e) => {
+                eprintln!(
+                    "[coordinator] Assignment verdict agent '{}' not found for '{}': {}",
+                    verdict.agent_hash, task_id, e
+                );
+                continue;
+            }
+        };
 
         // Apply assignment to the original task
         if let Some(task) = graph.get_task_mut(&task_id) {
             task.agent = Some(resolved_agent.id.clone());
             if let Some(ref mode) = verdict.exec_mode
-                && mode.parse::<workgraph::config::ExecMode>().is_ok() {
-                    task.exec_mode = Some(mode.clone());
-                }
-                // else: invalid value, keep default
+                && mode.parse::<workgraph::config::ExecMode>().is_ok()
+            {
+                task.exec_mode = Some(mode.clone());
+            }
+            // else: invalid value, keep default
             if let Some(ref scope) = verdict.context_scope {
                 match scope.as_str() {
                     "clean" | "task" | "graph" | "full" => {
@@ -1535,9 +1535,9 @@ fn build_auto_evolve_task(
     };
 
     // Check that no .evolve-* task is already in-progress or open
-    let has_active_evolve = graph
-        .tasks()
-        .any(|t| t.id.starts_with(".evolve-") && matches!(t.status, Status::Open | Status::InProgress));
+    let has_active_evolve = graph.tasks().any(|t| {
+        t.id.starts_with(".evolve-") && matches!(t.status, Status::Open | Status::InProgress)
+    });
     if has_active_evolve {
         return false;
     }
@@ -1913,10 +1913,15 @@ fn spawn_agents_for_ready_tasks(
         // Skip system tasks whose source task is abandoned (defense-in-depth)
         if task.id.starts_with('.') {
             let source_abandoned = task.after.iter().any(|dep_id| {
-                graph.get_task(dep_id).is_some_and(|t| t.status == Status::Abandoned)
+                graph
+                    .get_task(dep_id)
+                    .is_some_and(|t| t.status == Status::Abandoned)
             });
             if source_abandoned {
-                eprintln!("[coordinator] Skipping '{}': source task is abandoned", task.id);
+                eprintln!(
+                    "[coordinator] Skipping '{}': source task is abandoned",
+                    task.id
+                );
                 continue;
             }
         }
@@ -1926,10 +1931,7 @@ fn spawn_agents_for_ready_tasks(
         // before being spawned.  The assignment flow sets `task.agent`; if it's
         // still None the task hasn't been assigned yet — skip it so the next
         // tick's Phase 3 can create the .assign-* task.
-        if auto_assign
-            && !workgraph::graph::is_system_task(&task.id)
-            && task.agent.is_none()
-        {
+        if auto_assign && !workgraph::graph::is_system_task(&task.id) && task.agent.is_none() {
             continue;
         }
 
@@ -1988,7 +1990,13 @@ fn spawn_agents_for_ready_tasks(
             "[coordinator] Spawning agent for: {} - {} (executor: {})",
             task.id, task.title, effective_executor
         );
-        match spawn::spawn_agent(dir, &task.id, &effective_executor, None, task_model.as_deref()) {
+        match spawn::spawn_agent(
+            dir,
+            &task.id,
+            &effective_executor,
+            None,
+            task_model.as_deref(),
+        ) {
             Ok((agent_id, pid)) => {
                 eprintln!("[coordinator] Spawned {} (PID {})", agent_id, pid);
                 spawned += 1;
@@ -2488,7 +2496,7 @@ mod tests {
             .unwrap_or_else(|| {
                 eval_task_id
                     .strip_prefix(".evaluate-")
-        .or_else(|| eval_task_id.strip_prefix("evaluate-"))
+                    .or_else(|| eval_task_id.strip_prefix("evaluate-"))
                     .unwrap_or(eval_task_id)
             });
         assert_eq!(source_id, "some-task");
@@ -3521,17 +3529,14 @@ mod tests {
 
         let config = Config::load_or_default(wg_dir);
         let result = spawn_agents_for_ready_tasks(
-            wg_dir,
-            &graph,
-            "shell",
-            &config,
-            None,
-            10,
-            true, // auto_assign = true
+            wg_dir, &graph, "shell", &config, None, 10, true, // auto_assign = true
         );
 
         // Task should be skipped (no agent), so nothing spawned
-        assert_eq!(result, 0, "unassigned task should NOT be spawned when auto_assign=true");
+        assert_eq!(
+            result, 0,
+            "unassigned task should NOT be spawned when auto_assign=true"
+        );
     }
 
     /// When auto_assign=true, a ready task WITH an agent field SHOULD be
@@ -3555,7 +3560,10 @@ mod tests {
         // The filter: skip if auto_assign && !is_system && agent.is_none()
         // For system tasks, !is_system is false, so the condition is false → not skipped
         let would_skip = true && !is_system && true; // auto_assign=true, agent=None
-        assert!(!would_skip, "system tasks should never be skipped by auto_assign filter");
+        assert!(
+            !would_skip,
+            "system tasks should never be skipped by auto_assign filter"
+        );
     }
 
     /// When auto_assign=false, tasks without agent field should still be spawned.

@@ -13,8 +13,8 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 
 use super::client::{
-    ContentBlock, Message, MessagesRequest, MessagesResponse, Role, StopReason,
-    ToolDefinition, Usage,
+    ContentBlock, Message, MessagesRequest, MessagesResponse, Role, StopReason, ToolDefinition,
+    Usage,
 };
 
 // ── OpenAI wire format types ────────────────────────────────────────────

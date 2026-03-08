@@ -1,6 +1,5 @@
 pub mod abandon;
 pub mod add;
-pub mod approve;
 pub mod agency_create;
 pub mod agency_init;
 pub mod agency_merge;
@@ -15,6 +14,7 @@ pub mod agent_crud;
 pub mod agents;
 pub mod aging;
 pub mod analyze;
+pub mod approve;
 pub mod archive;
 pub mod artifact;
 pub mod assign;

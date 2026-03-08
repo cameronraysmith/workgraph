@@ -298,9 +298,7 @@ For detailed pattern descriptions, see docs/research/organizational-patterns.md\
 /// Uses case-insensitive matching.
 pub fn description_has_pattern_keywords(description: &str) -> bool {
     let lower = description.to_lowercase();
-    PATTERN_TRIGGER_KEYWORDS
-        .iter()
-        .any(|kw| lower.contains(kw))
+    PATTERN_TRIGGER_KEYWORDS.iter().any(|kw| lower.contains(kw))
 }
 
 /// Additional context for scope-based prompt assembly beyond TemplateVars.
@@ -384,7 +382,6 @@ pub fn build_prompt(vars: &TemplateVars, scope: ContextScope, ctx: &ScopeContext
         "## Context from Dependencies\n{}",
         vars.task_context
     ));
-
 
     // All scopes: previous attempt context (injected on retry)
     if !ctx.previous_attempt_context.is_empty() {

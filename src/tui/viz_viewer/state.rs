@@ -51,7 +51,10 @@ pub fn editor_clear(state: &mut EditorState) {
 /// Normal-mode semantics (`append_str`) and leaves the cursor one position
 /// short.
 pub fn paste_insert_mode(text: &str, state: &mut EditorState) {
-    use edtui::actions::{Execute, insert::{InsertChar, LineBreak}};
+    use edtui::actions::{
+        Execute,
+        insert::{InsertChar, LineBreak},
+    };
     for ch in text.chars() {
         if ch == '\n' {
             LineBreak(1).execute(state);
@@ -93,10 +96,9 @@ pub fn create_editor_handler() -> EditorEventHandler {
         KeyEventRegister::i(vec![EdKeyEvent::Ctrl('n')]),
         MoveDown(1),
     );
-    handler.key_handler.insert(
-        KeyEventRegister::i(vec![EdKeyEvent::Ctrl('p')]),
-        MoveUp(1),
-    );
+    handler
+        .key_handler
+        .insert(KeyEventRegister::i(vec![EdKeyEvent::Ctrl('p')]), MoveUp(1));
     // Ctrl-U (kill to beginning of line) is already mapped by edtui default
     handler
 }
@@ -220,7 +222,7 @@ fn flash_color_for_status(status: &Status) -> (u8, u8, u8) {
         Status::Open => (200, 200, 80),       // yellow
         Status::Blocked => (180, 120, 60),    // orange
         Status::Abandoned => (140, 100, 160), // muted purple
-        Status::Waiting | Status::PendingValidation => (60, 160, 220),    // blue
+        Status::Waiting | Status::PendingValidation => (60, 160, 220), // blue
     }
 }
 
@@ -232,7 +234,7 @@ fn flash_color_for_kind(kind: AnimationKind) -> (u8, u8, u8) {
         AnimationKind::ContentChange => (160, 160, 200), // soft blue-gray
         AnimationKind::Assignment => (200, 120, 220), // magenta
         AnimationKind::EdgeChange => (100, 180, 200), // teal
-        AnimationKind::Revealed => (120, 120, 140),  // soft gray-blue
+        AnimationKind::Revealed => (120, 120, 140), // soft gray-blue
     }
 }
 
@@ -922,10 +924,18 @@ impl ControlPanelFocus {
             Self::PauseResume => Self::Restart,
             Self::Restart => Self::PanicKill,
             Self::PanicKill => {
-                if stuck_count > 0 { Self::StuckAgent(0) } else { Self::KillAllDead }
+                if stuck_count > 0 {
+                    Self::StuckAgent(0)
+                } else {
+                    Self::KillAllDead
+                }
             }
             Self::StuckAgent(i) => {
-                if *i + 1 < stuck_count { Self::StuckAgent(i + 1) } else { Self::KillAllDead }
+                if *i + 1 < stuck_count {
+                    Self::StuckAgent(i + 1)
+                } else {
+                    Self::KillAllDead
+                }
             }
             Self::KillAllDead => Self::RetryFailedEvals,
             Self::RetryFailedEvals => Self::StartStop,
@@ -938,10 +948,18 @@ impl ControlPanelFocus {
             Self::Restart => Self::PauseResume,
             Self::PanicKill => Self::Restart,
             Self::StuckAgent(i) => {
-                if *i > 0 { Self::StuckAgent(i - 1) } else { Self::PanicKill }
+                if *i > 0 {
+                    Self::StuckAgent(i - 1)
+                } else {
+                    Self::PanicKill
+                }
             }
             Self::KillAllDead => {
-                if stuck_count > 0 { Self::StuckAgent(stuck_count - 1) } else { Self::PanicKill }
+                if stuck_count > 0 {
+                    Self::StuckAgent(stuck_count - 1)
+                } else {
+                    Self::PanicKill
+                }
             }
             Self::RetryFailedEvals => Self::KillAllDead,
         }
@@ -1011,10 +1029,6 @@ impl Default for ServiceHealthState {
     }
 }
 
-
-
-
-
 // Time counters
 pub struct TimeCounters {
     pub service_uptime_secs: Option<u64>,
@@ -1032,11 +1046,16 @@ impl TimeCounters {
     pub fn new(config_counters: &str) -> Self {
         let parts: Vec<&str> = config_counters.split(',').map(|s| s.trim()).collect();
         Self {
-            service_uptime_secs: None, cumulative_secs: 0, active_secs: 0, active_agent_count: 0,
+            service_uptime_secs: None,
+            cumulative_secs: 0,
+            active_secs: 0,
+            active_agent_count: 0,
             session_start: Instant::now(),
             last_refresh: Instant::now() - std::time::Duration::from_secs(60),
-            show_uptime: parts.contains(&"uptime"), show_cumulative: parts.contains(&"cumulative"),
-            show_active: parts.contains(&"active"), show_session: parts.contains(&"session"),
+            show_uptime: parts.contains(&"uptime"),
+            show_cumulative: parts.contains(&"cumulative"),
+            show_active: parts.contains(&"active"),
+            show_session: parts.contains(&"session"),
         }
     }
     pub fn any_enabled(&self) -> bool {
@@ -1044,9 +1063,19 @@ impl TimeCounters {
     }
 }
 pub fn format_duration_compact(secs: u64) -> String {
-    if secs < 60 { format!("{}s", secs) }
-    else if secs < 3600 { format!("{}m", secs / 60) }
-    else { let h = secs / 3600; let m = (secs % 3600) / 60; if m > 0 { format!("{}h{}m", h, m) } else { format!("{}h", h) } }
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else {
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        if m > 0 {
+            format!("{}h{}m", h, m)
+        } else {
+            format!("{}h", h)
+        }
+    }
 }
 
 /// Live JSONL stream state for a single agent.
@@ -1431,10 +1460,7 @@ pub fn extract_section_name(line: &str) -> Option<String> {
     if !base.ends_with("──") {
         return None;
     }
-    let inner = base
-        .trim_start_matches('─')
-        .trim_end_matches('─')
-        .trim();
+    let inner = base.trim_start_matches('─').trim_end_matches('─').trim();
     // Section names are things like "Description", "Prompt", "Output", "Output (raw)", etc.
     if !inner.is_empty() {
         Some(inner.to_string())
@@ -4705,7 +4731,11 @@ impl VizApp {
                                                 let snippet =
                                                     trimmed.lines().last().unwrap_or(trimmed);
                                                 let snippet = if snippet.len() > 120 {
-                                                    format!("{}…", &snippet[..snippet.floor_char_boundary(120)])
+                                                    format!(
+                                                        "{}…",
+                                                        &snippet
+                                                            [..snippet.floor_char_boundary(120)]
+                                                    )
                                                 } else {
                                                     snippet.to_string()
                                                 };
@@ -4728,7 +4758,10 @@ impl VizApp {
                                                 .map(|c| {
                                                     let c = c.trim();
                                                     if c.len() > 80 {
-                                                        format!("{name}: {}…", &c[..c.floor_char_boundary(80)])
+                                                        format!(
+                                                            "{name}: {}…",
+                                                            &c[..c.floor_char_boundary(80)]
+                                                        )
                                                     } else {
                                                         format!("{name}: {c}")
                                                     }
@@ -4782,12 +4815,7 @@ impl VizApp {
             .agents
             .iter()
             .filter(|a| matches!(a.status, AgentStatus::Working))
-            .map(|a| {
-                (
-                    a.agent_id.clone(),
-                    a.task_id.clone().unwrap_or_default(),
-                )
-            })
+            .map(|a| (a.agent_id.clone(), a.task_id.clone().unwrap_or_default()))
             .collect();
 
         let mut new_lines: Vec<FirehoseLine> = Vec::new();
@@ -4979,34 +5007,37 @@ impl VizApp {
         // Evaluation phase
         let eval_task_id = format!(".evaluate-{}", task_id);
         let legacy_eval_id = format!("evaluate-{}", task_id);
-        let evaluation = graph.tasks().find(|t| t.id == eval_task_id || t.id == legacy_eval_id).map(|t| {
-            let mut phase = build_phase(t, "Evaluation");
+        let evaluation = graph
+            .tasks()
+            .find(|t| t.id == eval_task_id || t.id == legacy_eval_id)
+            .map(|t| {
+                let mut phase = build_phase(t, "Evaluation");
 
-            // Load evaluation results from agency/evaluations/
-            let evals_dir = self.workgraph_dir.join("agency").join("evaluations");
-            if evals_dir.exists() {
-                let prefix = format!("eval-{}-", task_id);
-                if let Ok(entries) = std::fs::read_dir(&evals_dir) {
-                    let mut eval_files: Vec<_> = entries
-                        .filter_map(|e| e.ok())
-                        .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
-                        .collect();
-                    eval_files.sort_by_key(|b| std::cmp::Reverse(b.file_name()));
-                    if let Some(entry) = eval_files.first()
-                        && let Ok(content) = std::fs::read_to_string(entry.path())
-                        && let Ok(eval) = serde_json::from_str::<serde_json::Value>(&content)
-                    {
-                        phase.eval_score = eval.get("score").and_then(|v| v.as_f64());
-                        phase.eval_notes = eval
-                            .get("notes")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.lines().take(5).collect::<Vec<_>>().join("\n"));
+                // Load evaluation results from agency/evaluations/
+                let evals_dir = self.workgraph_dir.join("agency").join("evaluations");
+                if evals_dir.exists() {
+                    let prefix = format!("eval-{}-", task_id);
+                    if let Ok(entries) = std::fs::read_dir(&evals_dir) {
+                        let mut eval_files: Vec<_> = entries
+                            .filter_map(|e| e.ok())
+                            .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
+                            .collect();
+                        eval_files.sort_by_key(|b| std::cmp::Reverse(b.file_name()));
+                        if let Some(entry) = eval_files.first()
+                            && let Ok(content) = std::fs::read_to_string(entry.path())
+                            && let Ok(eval) = serde_json::from_str::<serde_json::Value>(&content)
+                        {
+                            phase.eval_score = eval.get("score").and_then(|v| v.as_f64());
+                            phase.eval_notes = eval
+                                .get("notes")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.lines().take(5).collect::<Vec<_>>().join("\n"));
+                        }
                     }
                 }
-            }
 
-            phase
-        });
+                phase
+            });
 
         self.agency_lifecycle = Some(AgencyLifecycle {
             task_id,
@@ -5080,7 +5111,9 @@ impl VizApp {
             .ok()
             .map(|started| {
                 let now = chrono::Utc::now();
-                (now - started.with_timezone(&chrono::Utc)).num_seconds().max(0) as u64
+                (now - started.with_timezone(&chrono::Utc))
+                    .num_seconds()
+                    .max(0) as u64
             });
         self.service_health.uptime_secs = uptime_secs;
         self.service_health.uptime = uptime_secs.map(|s| {
@@ -5111,14 +5144,15 @@ impl VizApp {
             for task in graph.tasks() {
                 if task.status == workgraph::graph::Status::InProgress
                     && let Some(ref agent_id) = task.agent
-                        && let Some(agent) = registry.agents.get(agent_id)
-                            && !crate::commands::is_process_alive(agent.pid) {
-                                stuck.push(StuckTask {
-                                    task_id: task.id.clone(),
-                                    task_title: task.title.clone(),
-                                    agent_id: agent_id.clone(),
-                                });
-                            }
+                    && let Some(agent) = registry.agents.get(agent_id)
+                    && !crate::commands::is_process_alive(agent.pid)
+                {
+                    stuck.push(StuckTask {
+                        task_id: task.id.clone(),
+                        task_title: task.title.clone(),
+                        agent_id: agent_id.clone(),
+                    });
+                }
             }
         }
         self.service_health.stuck_tasks = stuck;
@@ -5156,23 +5190,34 @@ impl VizApp {
         self.service_health.last_poll = Instant::now();
     }
 
-
-
     pub fn update_time_counters(&mut self) {
-        if !self.time_counters.any_enabled() { return; }
+        if !self.time_counters.any_enabled() {
+            return;
+        }
         self.time_counters.service_uptime_secs = self.service_health.uptime_secs;
         let registry = workgraph::AgentRegistry::load_or_warn(&self.workgraph_dir);
         let now = chrono::Utc::now();
         let (mut cumulative, mut active, mut active_count) = (0i64, 0i64, 0usize);
         for agent in registry.agents.values() {
-            let start = chrono::DateTime::parse_from_rfc3339(&agent.started_at).ok().map(|dt| dt.with_timezone(&chrono::Utc));
+            let start = chrono::DateTime::parse_from_rfc3339(&agent.started_at)
+                .ok()
+                .map(|dt| dt.with_timezone(&chrono::Utc));
             let Some(start) = start else { continue };
             if agent.is_alive() {
-                let e = (now - start).num_seconds().max(0); cumulative += e; active += e; active_count += 1;
+                let e = (now - start).num_seconds().max(0);
+                cumulative += e;
+                active += e;
+                active_count += 1;
             } else if let Some(ref end_str) = agent.completed_at {
-                if let Ok(end) = chrono::DateTime::parse_from_rfc3339(end_str) { cumulative += (end.with_timezone(&chrono::Utc) - start).num_seconds().max(0); }
+                if let Ok(end) = chrono::DateTime::parse_from_rfc3339(end_str) {
+                    cumulative += (end.with_timezone(&chrono::Utc) - start)
+                        .num_seconds()
+                        .max(0);
+                }
             } else if let Ok(hb) = chrono::DateTime::parse_from_rfc3339(&agent.last_heartbeat) {
-                cumulative += (hb.with_timezone(&chrono::Utc) - start).num_seconds().max(0);
+                cumulative += (hb.with_timezone(&chrono::Utc) - start)
+                    .num_seconds()
+                    .max(0);
             }
         }
         self.time_counters.cumulative_secs = cumulative as u64;
@@ -5208,40 +5253,64 @@ impl VizApp {
         match health.panel_focus.clone() {
             ControlPanelFocus::StartStop => {
                 if is_running {
-                    self.exec_command(vec!["service".into(), "stop".into()], CommandEffect::RefreshAndNotify("Service stopped".into()));
+                    self.exec_command(
+                        vec!["service".into(), "stop".into()],
+                        CommandEffect::RefreshAndNotify("Service stopped".into()),
+                    );
                     self.set_service_feedback("Service stopped".into());
                 } else {
-                    self.exec_command(vec!["service".into(), "start".into()], CommandEffect::RefreshAndNotify("Service started".into()));
+                    self.exec_command(
+                        vec!["service".into(), "start".into()],
+                        CommandEffect::RefreshAndNotify("Service started".into()),
+                    );
                     self.set_service_feedback("Service starting...".into());
                 }
             }
             ControlPanelFocus::PauseResume => {
                 if health.paused {
-                    self.exec_command(vec!["service".into(), "resume".into()], CommandEffect::RefreshAndNotify("Launches resumed".into()));
+                    self.exec_command(
+                        vec!["service".into(), "resume".into()],
+                        CommandEffect::RefreshAndNotify("Launches resumed".into()),
+                    );
                     self.set_service_feedback("Resumed".into());
                 } else {
-                    self.exec_command(vec!["service".into(), "pause".into()], CommandEffect::RefreshAndNotify("Launches paused".into()));
+                    self.exec_command(
+                        vec!["service".into(), "pause".into()],
+                        CommandEffect::RefreshAndNotify("Launches paused".into()),
+                    );
                     self.set_service_feedback("Paused".into());
                 }
             }
             ControlPanelFocus::Restart => {
-                self.exec_command(vec!["service".into(), "restart".into()], CommandEffect::RefreshAndNotify("Service restarted".into()));
+                self.exec_command(
+                    vec!["service".into(), "restart".into()],
+                    CommandEffect::RefreshAndNotify("Service restarted".into()),
+                );
                 self.set_service_feedback("Restarting...".into());
             }
             ControlPanelFocus::PanicKill => {}
             ControlPanelFocus::StuckAgent(idx) => {
                 if let Some(st) = health.stuck_tasks.get(idx) {
                     let aid = st.agent_id.clone();
-                    self.exec_command(vec!["kill".into(), aid.clone(), "--force".into()], CommandEffect::RefreshAndNotify(format!("Killed {}", aid)));
+                    self.exec_command(
+                        vec!["kill".into(), aid.clone(), "--force".into()],
+                        CommandEffect::RefreshAndNotify(format!("Killed {}", aid)),
+                    );
                     self.set_service_feedback(format!("Killed {}", aid));
                 }
             }
             ControlPanelFocus::KillAllDead => {
-                self.exec_command(vec!["kill".into(), "--all".into(), "--force".into()], CommandEffect::RefreshAndNotify("Killed all dead agents".into()));
+                self.exec_command(
+                    vec!["kill".into(), "--all".into(), "--force".into()],
+                    CommandEffect::RefreshAndNotify("Killed all dead agents".into()),
+                );
                 self.set_service_feedback("Killed all dead agents".into());
             }
             ControlPanelFocus::RetryFailedEvals => {
-                self.exec_command(vec!["retry".into(), "--failed-evals".into()], CommandEffect::RefreshAndNotify("Retrying failed evals".into()));
+                self.exec_command(
+                    vec!["retry".into(), "--failed-evals".into()],
+                    CommandEffect::RefreshAndNotify("Retrying failed evals".into()),
+                );
                 self.set_service_feedback("Retrying failed evals...".into());
             }
         }
@@ -5249,7 +5318,15 @@ impl VizApp {
 
     pub fn execute_panic_kill(&mut self) {
         let n = self.service_health.agents_alive;
-        self.exec_command(vec!["service".into(), "stop".into(), "--force".into(), "--kill-agents".into()], CommandEffect::RefreshAndNotify(format!("PANIC: killed {} agents", n)));
+        self.exec_command(
+            vec![
+                "service".into(),
+                "stop".into(),
+                "--force".into(),
+                "--kill-agents".into(),
+            ],
+            CommandEffect::RefreshAndNotify(format!("PANIC: killed {} agents", n)),
+        );
         self.service_health.panic_confirm = false;
         self.set_service_feedback(format!("PANIC KILL: {} agents killed, service stopped", n));
     }
@@ -5644,7 +5721,11 @@ impl VizApp {
         let mask_env = |var: &str| -> String {
             match std::env::var(var).ok().filter(|k| !k.is_empty()) {
                 Some(key) if key.len() > 8 => {
-                    format!("{}****...{}", &key[..key.floor_char_boundary(3)], &key[key.ceil_char_boundary(key.len() - 4)..])
+                    format!(
+                        "{}****...{}",
+                        &key[..key.floor_char_boundary(3)],
+                        &key[key.ceil_char_boundary(key.len() - 4)..]
+                    )
                 }
                 Some(_) => "****".into(),
                 None => "(not set)".into(),
@@ -6935,10 +7016,7 @@ fn extract_assistant_text_from_log(content: &str) -> String {
                     }
                 }
                 "tool_use" => {
-                    let name = block
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("tool");
+                    let name = block.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
                     let detail = match name {
                         "Bash" => block
                             .get("input")
@@ -6947,10 +7025,7 @@ fn extract_assistant_text_from_log(content: &str) -> String {
                             .map(|c| {
                                 let c = c.trim();
                                 if c.len() > 80 {
-                                    format!(
-                                        "{}…",
-                                        &c[..c.floor_char_boundary(80)]
-                                    )
+                                    format!("{}…", &c[..c.floor_char_boundary(80)])
                                 } else {
                                     c.to_string()
                                 }
@@ -7884,9 +7959,12 @@ mod extract_assistant_text_tests {
     #[test]
     fn extracts_text_from_assistant_messages() {
         let log = concat!(
-            r#"{"type":"system","subtype":"init","cwd":"/tmp"}"#, "\n",
-            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Heading here\n\nThis is **bold** text."}]}}"#, "\n",
-            r#"{"type":"user","message":{"role":"user","content":[]}}"#, "\n",
+            r#"{"type":"system","subtype":"init","cwd":"/tmp"}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Heading here\n\nThis is **bold** text."}]}}"#,
+            "\n",
+            r#"{"type":"user","message":{"role":"user","content":[]}}"#,
+            "\n",
             r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Second message."}]}}"#,
         );
         let result = extract_assistant_text_from_log(log);
@@ -7931,8 +8009,7 @@ mod extract_assistant_text_tests {
 
     #[test]
     fn skips_empty_text_blocks() {
-        let log =
-            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"  \n  "}]}}"#;
+        let log = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"  \n  "}]}}"#;
         let result = extract_assistant_text_from_log(log);
         assert!(result.is_empty());
     }
@@ -8247,7 +8324,10 @@ mod remap_panel_tests {
             start: Instant::now() - std::time::Duration::from_millis(200),
             direction: SlideDirection::Forward,
         };
-        assert!(anim.is_done(), "animation should be done after 200ms (duration=150ms)");
+        assert!(
+            anim.is_done(),
+            "animation should be done after 200ms (duration=150ms)"
+        );
         assert!((anim.progress() - 1.0).abs() < f64::EPSILON);
     }
 
@@ -8259,7 +8339,10 @@ mod remap_panel_tests {
         };
         let offset = anim.x_offset(100);
         // At start, offset should be near panel_width (100)
-        assert!(offset > 80, "forward offset at start should be near panel_width, got {offset}");
+        assert!(
+            offset > 80,
+            "forward offset at start should be near panel_width, got {offset}"
+        );
     }
 }
 
@@ -8299,9 +8382,17 @@ mod firehose_tests {
         let tasks: Vec<_> = graph.tasks().collect();
         let task_ids: HashSet<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
         let viz = generate_ascii(
-            &graph, &tasks, &task_ids, &HashMap::new(), &HashMap::new(),
-            &HashMap::new(), &HashMap::new(), VizLayoutMode::Tree,
-            &HashSet::new(), "gray", &HashMap::new(),
+            &graph,
+            &tasks,
+            &task_ids,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            VizLayoutMode::Tree,
+            &HashSet::new(),
+            "gray",
+            &HashMap::new(),
         );
         let mut app = VizApp::from_viz_output_for_test(&viz);
         app.workgraph_dir = tmp.path().to_path_buf();
@@ -8386,15 +8477,33 @@ mod firehose_tests {
     #[test]
     fn firehose_distinct_colors_per_agent() {
         let mut app = build_test_app();
-        let c1 = *app.firehose.agent_colors.entry("a1".into()).or_insert_with(|| {
-            let i = app.firehose.next_color; app.firehose.next_color += 1; i
-        });
-        let c2 = *app.firehose.agent_colors.entry("a2".into()).or_insert_with(|| {
-            let i = app.firehose.next_color; app.firehose.next_color += 1; i
-        });
-        let c1b = *app.firehose.agent_colors.entry("a1".into()).or_insert_with(|| {
-            let i = app.firehose.next_color; app.firehose.next_color += 1; i
-        });
+        let c1 = *app
+            .firehose
+            .agent_colors
+            .entry("a1".into())
+            .or_insert_with(|| {
+                let i = app.firehose.next_color;
+                app.firehose.next_color += 1;
+                i
+            });
+        let c2 = *app
+            .firehose
+            .agent_colors
+            .entry("a2".into())
+            .or_insert_with(|| {
+                let i = app.firehose.next_color;
+                app.firehose.next_color += 1;
+                i
+            });
+        let c1b = *app
+            .firehose
+            .agent_colors
+            .entry("a1".into())
+            .or_insert_with(|| {
+                let i = app.firehose.next_color;
+                app.firehose.next_color += 1;
+                i
+            });
         assert_ne!(c1, c2);
         assert_eq!(c1, c1b);
     }
@@ -8409,16 +8518,37 @@ mod firehose_tests {
         let dir_b = agents_dir.join("agent-b");
         std::fs::create_dir_all(&dir_b).unwrap();
         std::fs::write(dir_b.join("output.log"), "B1\nB2\n").unwrap();
-        let entries = format!("{},{}", agent_entry("agent-a", "ta"), agent_entry("agent-b", "tb"));
+        let entries = format!(
+            "{},{}",
+            agent_entry("agent-a", "ta"),
+            agent_entry("agent-b", "tb")
+        );
         write_registry(&app.workgraph_dir, &entries);
         app.load_agent_monitor();
         app.update_firehose();
         assert_eq!(app.firehose.lines.len(), 4);
-        let ids: HashSet<&str> = app.firehose.lines.iter().map(|l| l.agent_id.as_str()).collect();
+        let ids: HashSet<&str> = app
+            .firehose
+            .lines
+            .iter()
+            .map(|l| l.agent_id.as_str())
+            .collect();
         assert!(ids.contains("agent-a"));
         assert!(ids.contains("agent-b"));
-        let ca = app.firehose.lines.iter().find(|l| l.agent_id == "agent-a").unwrap().color_idx;
-        let cb = app.firehose.lines.iter().find(|l| l.agent_id == "agent-b").unwrap().color_idx;
+        let ca = app
+            .firehose
+            .lines
+            .iter()
+            .find(|l| l.agent_id == "agent-a")
+            .unwrap()
+            .color_idx;
+        let cb = app
+            .firehose
+            .lines
+            .iter()
+            .find(|l| l.agent_id == "agent-b")
+            .unwrap()
+            .color_idx;
         assert_ne!(ca, cb);
     }
 }
@@ -8470,9 +8600,13 @@ mod service_health_tests {
     #[test]
     fn uptime_format_logic() {
         let fmt = |s: u64| -> String {
-            if s < 60 { format!("{}s", s) }
-            else if s < 3600 { format!("{}m{}s", s / 60, s % 60) }
-            else { format!("{}h{}m", s / 3600, (s % 3600) / 60) }
+            if s < 60 {
+                format!("{}s", s)
+            } else if s < 3600 {
+                format!("{}m{}s", s / 60, s % 60)
+            } else {
+                format!("{}h{}m", s / 3600, (s % 3600) / 60)
+            }
         };
         assert_eq!(fmt(0), "0s");
         assert_eq!(fmt(29), "29s");
@@ -8496,8 +8630,16 @@ mod service_health_tests {
     fn yellow_stuck_tasks() {
         let mut h = ServiceHealthState::default();
         h.stuck_tasks = vec![
-            StuckTask { task_id: "t1".into(), task_title: "T1".into(), agent_id: "a1".into() },
-            StuckTask { task_id: "t2".into(), task_title: "T2".into(), agent_id: "a2".into() },
+            StuckTask {
+                task_id: "t1".into(),
+                task_title: "T1".into(),
+                agent_id: "a1".into(),
+            },
+            StuckTask {
+                task_id: "t2".into(),
+                task_title: "T2".into(),
+                agent_id: "a2".into(),
+            },
         ];
         h.level = ServiceHealthLevel::Yellow;
         h.label = format!("OK ({} stuck)", h.stuck_tasks.len());

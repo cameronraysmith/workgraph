@@ -233,13 +233,13 @@ pub(crate) fn generate_ascii(
             return "";
         }
         match status {
-            Status::Done => "\x1b[32m",       // green
-            Status::InProgress => "\x1b[33m", // yellow
-            Status::Open => "\x1b[37m",       // white
-            Status::Blocked => "\x1b[90m",    // gray
-            Status::Failed => "\x1b[31m",     // red
-            Status::Abandoned => "\x1b[90m",  // gray
-            Status::Waiting | Status::PendingValidation => "\x1b[33m",    // yellow
+            Status::Done => "\x1b[32m",                                // green
+            Status::InProgress => "\x1b[33m",                          // yellow
+            Status::Open => "\x1b[37m",                                // white
+            Status::Blocked => "\x1b[90m",                             // gray
+            Status::Failed => "\x1b[31m",                              // red
+            Status::Abandoned => "\x1b[90m",                           // gray
+            Status::Waiting | Status::PendingValidation => "\x1b[33m", // yellow
         }
     };
     let reset = if use_color { "\x1b[0m" } else { "" };
@@ -308,9 +308,12 @@ pub(crate) fn generate_ascii(
         // Uses ANSI 256-color 219 (light pink) to be visually distinct from magenta/purple
         // which is used for upstream edge tracing.
         let is_agency_phase = use_color
-            && annotations
-                .get(id)
-                .is_some_and(|a| a.contains("assigning") || a.contains("evaluating") || a.contains("validating") || a.contains("verifying"));
+            && annotations.get(id).is_some_and(|a| {
+                a.contains("assigning")
+                    || a.contains("evaluating")
+                    || a.contains("validating")
+                    || a.contains("verifying")
+            });
         let phase_info = if is_agency_phase {
             annotations
                 .get(id)
@@ -4464,7 +4467,11 @@ mod tests {
         }
 
         let tasks: Vec<_> = graph.tasks().collect();
-        assert!(tasks.len() > 100, "Should have > 100 tasks, got {}", tasks.len());
+        assert!(
+            tasks.len() > 100,
+            "Should have > 100 tasks, got {}",
+            tasks.len()
+        );
         let task_ids: HashSet<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
 
         let result = generate_ascii(
@@ -4535,7 +4542,10 @@ mod tests {
         );
 
         // Arc dependent (C with forward skip from A) should have ← (left arrow)
-        let c_line = lines.iter().find(|l| l.contains("ccc")).expect("C should appear");
+        let c_line = lines
+            .iter()
+            .find(|l| l.contains("ccc"))
+            .expect("C should appear");
         assert!(
             c_line.contains("←"),
             "Arc dependent C should have ← arrowhead\nOutput:\n{}",

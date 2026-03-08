@@ -196,7 +196,9 @@ pub(crate) fn generate_mermaid(
             Status::Open => format!("  {}[\"{}\"]", task.id, label),
             Status::Failed => format!("  {}{{{{\"{}\"}}}}!", task.id, label),
             Status::Abandoned => format!("  {}[\"{}\"]:::abandoned", task.id, label),
-            Status::Waiting | Status::PendingValidation => format!("  {}[\"{}\"]:::waiting", task.id, label),
+            Status::Waiting | Status::PendingValidation => {
+                format!("  {}[\"{}\"]:::waiting", task.id, label)
+            }
         };
         lines.push(node);
     }

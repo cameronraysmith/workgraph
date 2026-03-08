@@ -103,11 +103,10 @@ pub fn create_provider_ext(
             let mut client = if let Some(key) = endpoint_key {
                 OpenAiClient::new(key, model, None)
             } else {
-                OpenAiClient::from_env(model)
-                    .or_else(|_| {
-                        let key = super::client::resolve_api_key_from_dir(workgraph_dir)?;
-                        OpenAiClient::new(key, model, None)
-                    })
+                OpenAiClient::from_env(model).or_else(|_| {
+                    let key = super::client::resolve_api_key_from_dir(workgraph_dir)?;
+                    OpenAiClient::new(key, model, None)
+                })
             }
             .context("Failed to initialize OpenAI-compatible client")?;
             if let Some(base) = api_base {

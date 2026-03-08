@@ -9,12 +9,7 @@ use super::graph_path;
 #[cfg(test)]
 use workgraph::parser::load_graph;
 
-pub fn run(
-    dir: &Path,
-    id: &str,
-    reason: Option<&str>,
-    superseded_by: &[String],
-) -> Result<()> {
+pub fn run(dir: &Path, id: &str, reason: Option<&str>, superseded_by: &[String]) -> Result<()> {
     let (mut graph, path) = super::load_workgraph_mut(dir)?;
 
     let task = graph.get_task_mut_or_err(id)?;
@@ -49,9 +44,7 @@ pub fn run(
     let cascade_targets: Vec<String> = graph
         .tasks()
         .filter(|t| {
-            t.id.starts_with('.')
-                && t.after.contains(&id.to_string())
-                && !t.status.is_terminal()
+            t.id.starts_with('.') && t.after.contains(&id.to_string()) && !t.status.is_terminal()
         })
         .map(|t| t.id.clone())
         .collect();
@@ -103,7 +96,11 @@ mod tests {
     use workgraph::parser::save_graph;
 
     fn make_task(id: &str, title: &str) -> Task {
-        Task { id: id.to_string(), title: title.to_string(), ..Task::default() }
+        Task {
+            id: id.to_string(),
+            title: title.to_string(),
+            ..Task::default()
+        }
     }
 
     fn setup_graph(dir: &Path, graph: &WorkGraph) {
@@ -120,7 +117,11 @@ mod tests {
         setup_graph(&dir, &graph);
         let result = run(&dir, "t1", Some("no longer needed"), &[]);
         assert!(result.is_ok());
-        let task = load_graph(graph_path(&dir)).unwrap().get_task("t1").unwrap().clone();
+        let task = load_graph(graph_path(&dir))
+            .unwrap()
+            .get_task("t1")
+            .unwrap()
+            .clone();
         assert_eq!(task.status, Status::Abandoned);
         assert_eq!(task.failure_reason.as_deref(), Some("no longer needed"));
     }
@@ -130,7 +131,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path().join(".workgraph");
         let mut graph = WorkGraph::new();
-        let mut t = make_task("t1", "Done"); t.status = Status::Done;
+        let mut t = make_task("t1", "Done");
+        t.status = Status::Done;
         graph.add_node(Node::Task(t));
         setup_graph(&dir, &graph);
         assert!(run(&dir, "t1", None, &[]).is_err());
@@ -141,7 +143,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path().join(".workgraph");
         let mut graph = WorkGraph::new();
-        let mut t = make_task("t1", "Abandoned"); t.status = Status::Abandoned;
+        let mut t = make_task("t1", "Abandoned");
+        t.status = Status::Abandoned;
         graph.add_node(Node::Task(t));
         setup_graph(&dir, &graph);
         assert!(run(&dir, "t1", None, &[]).is_ok());
@@ -167,8 +170,14 @@ mod tests {
         assert!(run(&dir, "t1", Some("decomposed"), &[]).is_ok());
         let g = load_graph(graph_path(&dir)).unwrap();
         assert_eq!(g.get_task("t1").unwrap().status, Status::Abandoned);
-        assert_eq!(g.get_task(".evaluate-t1").unwrap().status, Status::Abandoned);
-        assert_eq!(g.get_task(".verify-flip-t1").unwrap().status, Status::Abandoned);
+        assert_eq!(
+            g.get_task(".evaluate-t1").unwrap().status,
+            Status::Abandoned
+        );
+        assert_eq!(
+            g.get_task(".verify-flip-t1").unwrap().status,
+            Status::Abandoned
+        );
         assert_eq!(g.get_task("t2").unwrap().status, Status::Open);
     }
 
@@ -184,7 +193,14 @@ mod tests {
         graph.add_node(Node::Task(eval));
         setup_graph(&dir, &graph);
         run(&dir, "t1", None, &[]).unwrap();
-        assert_eq!(load_graph(graph_path(&dir)).unwrap().get_task(".evaluate-t1").unwrap().status, Status::Done);
+        assert_eq!(
+            load_graph(graph_path(&dir))
+                .unwrap()
+                .get_task(".evaluate-t1")
+                .unwrap()
+                .status,
+            Status::Done
+        );
     }
 
     #[test]
@@ -196,7 +212,11 @@ mod tests {
         setup_graph(&dir, &graph);
         let r = vec!["t2".to_string(), "t3".to_string()];
         run(&dir, "t1", Some("decomposed"), &r).unwrap();
-        let task = load_graph(graph_path(&dir)).unwrap().get_task("t1").unwrap().clone();
+        let task = load_graph(graph_path(&dir))
+            .unwrap()
+            .get_task("t1")
+            .unwrap()
+            .clone();
         assert_eq!(task.superseded_by, vec!["t2", "t3"]);
     }
 }

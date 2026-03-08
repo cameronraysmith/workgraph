@@ -50,7 +50,9 @@ fn wg_ok(wg_dir: &Path, args: &[&str]) -> String {
     assert!(
         output.status.success(),
         "wg {:?} failed.\nstdout: {}\nstderr: {}",
-        args, stdout, stderr
+        args,
+        stdout,
+        stderr
     );
     stdout
 }
@@ -208,10 +210,22 @@ fn test_context_md_3_layer_structure() {
     assert!(ctx_path.exists(), "context.md should exist");
 
     let text = fs::read_to_string(&ctx_path).unwrap();
-    assert!(text.contains("# Project Context"), "Should have top-level heading");
-    assert!(text.contains("## 1. Rolling Narrative"), "Should have Rolling Narrative section");
-    assert!(text.contains("## 2. Persistent Facts"), "Should have Persistent Facts section");
-    assert!(text.contains("## 3. Evaluation Digest"), "Should have Evaluation Digest section");
+    assert!(
+        text.contains("# Project Context"),
+        "Should have top-level heading"
+    );
+    assert!(
+        text.contains("## 1. Rolling Narrative"),
+        "Should have Rolling Narrative section"
+    );
+    assert!(
+        text.contains("## 2. Persistent Facts"),
+        "Should have Persistent Facts section"
+    );
+    assert!(
+        text.contains("## 3. Evaluation Digest"),
+        "Should have Evaluation Digest section"
+    );
 }
 
 #[test]
