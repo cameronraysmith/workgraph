@@ -59,6 +59,8 @@ fn extract_session_id(agent: &AgentEntry) -> Option<String> {
 enum DeadReason {
     /// Process is no longer running
     ProcessExited,
+    /// PID exists but belongs to a different process (PID reuse after daemon restart)
+    PidReused,
 }
 
 /// Check stream file activity for an agent. Returns the timestamp of the last
@@ -99,6 +101,16 @@ fn detect_dead_reason(agent: &AgentEntry) -> Option<DeadReason> {
     // Process not running is the only signal — heartbeat is no longer used for detection
     if !is_process_alive(agent.pid) {
         return Some(DeadReason::ProcessExited);
+    }
+
+    // PID exists but might belong to a different process (PID reuse).
+    // This happens when the daemon restarts after a crash and old PIDs have been
+    // recycled by the OS. We verify by comparing the actual process start time
+    // against the agent's registered start time.
+    if let Ok(agent_start) = agent.started_at.parse::<chrono::DateTime<chrono::Utc>>() {
+        if !workgraph::service::verify_process_identity(agent.pid, agent_start.timestamp()) {
+            return Some(DeadReason::PidReused);
+        }
     }
 
     None
@@ -215,6 +227,10 @@ pub(crate) fn cleanup_dead_agents(dir: &Path, graph_path: &Path) -> Result<Vec<S
                     let reason_msg = match reason {
                         DeadReason::ProcessExited => format!(
                             "Task unclaimed: agent '{}' (PID {}) process exited",
+                            agent_id, pid
+                        ),
+                        DeadReason::PidReused => format!(
+                            "Task unclaimed: agent '{}' (PID {}) dead (PID reused by different process)",
                             agent_id, pid
                         ),
                     };

@@ -1889,6 +1889,103 @@ exit $EXIT_CODE"#,
 
 /// Spawn agents on ready tasks, up to `slots_available`. Returns the number of
 /// agents successfully spawned.
+/// Maximum number of rapid respawns allowed before the task is failed.
+const RESPAWN_MAX_RAPID: usize = 5;
+
+/// Time window (seconds) within which respawns are considered "rapid".
+const RESPAWN_WINDOW_SECS: i64 = 300; // 5 minutes
+
+/// Minimum seconds of backoff between respawns when rapid respawning is detected.
+/// Each successive rapid respawn doubles the backoff (exponential).
+const RESPAWN_BASE_BACKOFF_SECS: i64 = 60;
+
+/// Check if a task is in a rapid respawn loop and should be throttled.
+///
+/// Examines the task's log for recent "process exited" / "Triage" entries
+/// that indicate the agent died without completing the task. Returns:
+/// - `Ok(())` if spawning should proceed
+/// - `Err(reason)` if spawning should be skipped (throttled or failed)
+fn check_respawn_throttle(
+    task: &Task,
+    graph_path: &Path,
+) -> std::result::Result<(), String> {
+    let now = Utc::now();
+
+    // Count recent agent death events within the respawn window
+    let recent_deaths: Vec<&LogEntry> = task
+        .log
+        .iter()
+        .filter(|entry| {
+            // Match log messages from triage/cleanup that indicate agent death
+            (entry.message.contains("process exited")
+                || entry.message.contains("PID reused")
+                || entry.message.contains("Triage:"))
+                && entry
+                    .timestamp
+                    .parse::<chrono::DateTime<chrono::Utc>>()
+                    .map(|t| {
+                        now.signed_duration_since(t).num_seconds() < RESPAWN_WINDOW_SECS
+                    })
+                    .unwrap_or(false)
+        })
+        .collect();
+
+    let death_count = recent_deaths.len();
+
+    // A single death is normal (OOM, signal, network hiccup).
+    // Only start throttling at 2+ rapid deaths in the window.
+    if death_count <= 1 {
+        return Ok(());
+    }
+
+    // Fail the task if too many rapid respawns
+    if death_count >= RESPAWN_MAX_RAPID {
+        // Save the failure to the graph
+        if let Ok(mut graph) = load_graph(graph_path) {
+            if let Some(t) = graph.get_task_mut(&task.id) {
+                t.status = Status::Failed;
+                t.assigned = None;
+                t.failure_reason = Some(format!(
+                    "Rapid respawn loop: {} agent deaths in {} seconds",
+                    death_count, RESPAWN_WINDOW_SECS
+                ));
+                t.log.push(LogEntry {
+                    timestamp: now.to_rfc3339(),
+                    actor: Some("coordinator".to_string()),
+                    message: format!(
+                        "Failed: rapid respawn loop detected ({} deaths in {}s window)",
+                        death_count, RESPAWN_WINDOW_SECS
+                    ),
+                });
+                let _ = save_graph(&graph, graph_path);
+            }
+        }
+        return Err(format!(
+            "rapid respawn loop ({} deaths), task failed",
+            death_count
+        ));
+    }
+
+    // Exponential backoff: base * 2^(death_count - 2)
+    // death_count=2 → 60s, 3 → 120s, 4 → 240s
+    let backoff_secs = RESPAWN_BASE_BACKOFF_SECS * (1i64 << (death_count - 2).min(6));
+
+    // Check time since last death
+    if let Some(last_death) = recent_deaths.last() {
+        if let Ok(last_time) = last_death.timestamp.parse::<chrono::DateTime<chrono::Utc>>() {
+            let elapsed = now.signed_duration_since(last_time).num_seconds();
+            if elapsed < backoff_secs {
+                return Err(format!(
+                    "respawn backoff: {} deaths, waiting {}s ({}s elapsed)",
+                    death_count, backoff_secs, elapsed
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn spawn_agents_for_ready_tasks(
     dir: &Path,
     graph: &workgraph::graph::WorkGraph,
@@ -1901,12 +1998,22 @@ fn spawn_agents_for_ready_tasks(
     let cycle_analysis = graph.compute_cycle_analysis();
     let final_ready = ready_tasks_with_peers_cycle_aware(graph, dir, &cycle_analysis);
     let agents_dir = dir.join("agency").join("cache/agents");
+    let gp = graph_path(dir);
     let mut spawned = 0;
 
     let to_spawn = final_ready.iter().take(slots_available);
     for task in to_spawn {
         // Skip if already claimed
         if task.assigned.is_some() {
+            continue;
+        }
+
+        // Respawn throttle: detect rapid respawn loops and back off
+        if let Err(reason) = check_respawn_throttle(task, &gp) {
+            eprintln!(
+                "[coordinator] Skipping '{}': {}",
+                task.id, reason
+            );
             continue;
         }
 
