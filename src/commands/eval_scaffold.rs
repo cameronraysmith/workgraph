@@ -118,6 +118,8 @@ pub fn scaffold_assign_task(
         status: Status::Open,
         before: vec![task_id.to_string()],
         tags: vec!["assignment".to_string(), "agency".to_string()],
+        exec: Some(format!("wg assign {} --auto", task_id)),
+        exec_mode: Some("bare".to_string()),
         visibility: "internal".to_string(),
         created_at: Some(Utc::now().to_rfc3339()),
         ..Task::default()

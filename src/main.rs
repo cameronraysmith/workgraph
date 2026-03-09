@@ -1167,7 +1167,8 @@ fn main() -> Result<()> {
             task,
             agent_hash,
             clear,
-        } => commands::assign::run(&workgraph_dir, &task, agent_hash.as_deref(), clear),
+            auto,
+        } => commands::assign::run(&workgraph_dir, &task, agent_hash.as_deref(), clear, auto),
         Commands::Match { task } => commands::match_cmd::run(&workgraph_dir, &task, cli.json),
         Commands::Heartbeat {
             agent,
@@ -1466,6 +1467,8 @@ fn main() -> Result<()> {
             role_provider,
             retry_context_tokens,
             check_key,
+            install_global,
+            force,
             max_coordinators,
         } => {
             // Derive scope from --global/--local flags
@@ -1480,6 +1483,11 @@ fn main() -> Result<()> {
             // Handle --check-key
             if check_key {
                 return commands::config_cmd::check_key(&workgraph_dir, cli.json);
+            }
+
+            // Handle --install-global
+            if install_global {
+                return commands::config_cmd::install_global(&workgraph_dir, force);
             }
 
             // Handle Matrix configuration

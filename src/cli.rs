@@ -898,6 +898,10 @@ pub enum Commands {
         /// Clear the agent assignment from the task
         #[arg(long)]
         clear: bool,
+
+        /// Automatically select an agent using LLM
+        #[arg(long)]
+        auto: bool,
     },
 
     /// Find agents capable of performing a task
@@ -1245,6 +1249,14 @@ pub enum Commands {
         /// Check OpenRouter API key validity and credit status
         #[arg(long, name = "check-key")]
         check_key: bool,
+
+        /// Install project config as global default (~/.workgraph/config.toml)
+        #[arg(long, name = "install-global")]
+        install_global: bool,
+
+        /// Skip confirmation when overwriting existing global config
+        #[arg(long)]
+        force: bool,
     },
 
     /// Detect and clean up dead agents

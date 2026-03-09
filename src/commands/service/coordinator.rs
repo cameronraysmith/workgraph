@@ -1776,6 +1776,132 @@ exit $EXIT_CODE"#,
     Ok((agent_id, pid))
 }
 
+/// Spawn an assignment inline task (similar to eval but for `wg assign --auto`).
+fn spawn_assign_inline(dir: &Path, assign_task_id: &str) -> Result<(String, u32)> {
+    use std::process::{Command, Stdio};
+
+    let graph_path = graph_path(dir);
+    let mut graph = load_graph(&graph_path).context("Failed to load graph for assign spawn")?;
+
+    // Extract needed fields from the assign task before releasing the mutable borrow.
+    let (assign_task_status, assign_task_exec) = {
+        let task = graph.get_task_or_err(assign_task_id)?;
+        (task.status, task.exec.clone())
+    };
+
+    if assign_task_status != Status::Open {
+        anyhow::bail!(
+            "Assignment task '{}' is not open (status: {:?})",
+            assign_task_id,
+            assign_task_status
+        );
+    }
+
+    // Extract source task ID from the assign task ID (strip ".assign-" prefix)
+    let source_task_id = assign_task_id
+        .strip_prefix(".assign-")
+        .unwrap_or(assign_task_id);
+
+    // Use the task's exec command directly if it starts with "wg assign".
+    // Fall back to constructing from task ID for backward compatibility.
+    let assign_cmd = if let Some(ref exec) = assign_task_exec
+        && exec.starts_with("wg assign")
+    {
+        exec.to_string()
+    } else {
+        format!("wg assign '{}' --auto", source_task_id.replace('\'', "'\\''"))
+    };
+
+    // Set up minimal agent tracking
+    let mut agent_registry = AgentRegistry::load(dir)?;
+    let agent_id = format!("agent-{}", agent_registry.next_agent_id);
+
+    // Create minimal output directory for log capture
+    let output_dir = dir.join("agents").join(&agent_id);
+    fs::create_dir_all(&output_dir)
+        .with_context(|| format!("Failed to create assign output dir: {:?}", output_dir))?;
+    let output_file = output_dir.join("output.log");
+    let output_file_str = output_file.to_string_lossy().to_string();
+
+    let escaped_assign_id = assign_task_id.replace('\'', "'\\''");
+    let escaped_output = output_file_str.replace('\'', "'\\''");
+
+    // Build the script: run assign, then mark done/failed
+    let script = format!(
+        r#"unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT
+{assign_cmd} >> '{escaped_output}' 2>&1
+EXIT_CODE=$?
+if [ $EXIT_CODE -eq 0 ]; then
+    wg done '{escaped_assign_id}' 2>> '{escaped_output}'
+else
+    wg fail '{escaped_assign_id}' --reason "wg assign exited with code $EXIT_CODE" 2>> '{escaped_output}'
+fi
+exit $EXIT_CODE"#,
+    );
+
+    // Claim the task before spawning
+    let task = graph.get_task_mut_or_err(assign_task_id)?;
+    task.status = Status::InProgress;
+    task.started_at = Some(Utc::now().to_rfc3339());
+    task.assigned = Some(agent_id.clone());
+    task.log.push(LogEntry {
+        timestamp: Utc::now().to_rfc3339(),
+        actor: Some(agent_id.clone()),
+        message: "Spawned assignment inline".to_string(),
+    });
+    save_graph(&graph, &graph_path).context("Failed to save graph after claiming assign task")?;
+
+    // Fork the process
+    let mut cmd = Command::new("bash");
+    cmd.arg("-c").arg(&script);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
+
+    // Detach into own session so it survives daemon restart
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+    }
+
+    let child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            // Rollback the claim
+            if let Ok(mut rollback_graph) = load_graph(&graph_path)
+                && let Some(t) = rollback_graph.get_task_mut(assign_task_id)
+            {
+                t.status = Status::Open;
+                t.started_at = None;
+                t.assigned = None;
+                t.log.push(LogEntry {
+                    timestamp: Utc::now().to_rfc3339(),
+                    actor: Some(agent_id.clone()),
+                    message: format!("Assignment spawn failed, reverting claim: {}", e),
+                });
+                let _ = save_graph(&rollback_graph, &graph_path);
+            }
+            return Err(anyhow::anyhow!("Failed to spawn assignment process: {}", e));
+        }
+    };
+
+    let pid = child.id();
+
+    // Register in agent registry for dead-agent detection
+    agent_registry.register_agent_with_model(pid, assign_task_id, "assign", &output_file_str, None);
+    agent_registry
+        .save(dir)
+        .context("Failed to save agent registry after assign spawn")?;
+
+    Ok((agent_id, pid))
+}
+
 /// Spawn agents on ready tasks, up to `slots_available`. Returns the number of
 /// agents successfully spawned.
 /// Maximum number of rapid respawns allowed before the task is failed.
@@ -1931,27 +2057,47 @@ fn spawn_agents_for_ready_tasks(
             continue;
         }
 
-        // Evaluation tasks run inline: fork `wg evaluate`
+        // Evaluation, flip, and assignment tasks run inline: fork `wg evaluate`, `wg flip`, or `wg assign`
         // directly instead of going through the full spawn machinery
         // (run.sh, executor config, etc.)
-        let is_inline_task = task.tags.iter().any(|t| t == "evaluation" || t == "flip") && task.exec.is_some();
+        let is_inline_task = task.tags.iter().any(|t| t == "evaluation" || t == "flip" || t == "assignment") && task.exec.is_some();
         if is_inline_task {
+            let is_assignment = task.tags.iter().any(|t| t == "assignment");
             let eval_model = task.model.as_deref();
-            eprintln!(
-                "[coordinator] Spawning eval inline for: {} - {}{}",
-                task.id,
-                task.title,
-                eval_model
-                    .map(|m| format!(" (model: {})", m))
-                    .unwrap_or_default(),
-            );
-            match spawn_eval_inline(dir, &task.id, eval_model) {
-                Ok((agent_id, pid)) => {
-                    eprintln!("[coordinator] Spawned eval {} (PID {})", agent_id, pid);
-                    spawned += 1;
+            let task_id = task.id.clone();
+            let title = task.title.clone();
+
+            if is_assignment {
+                eprintln!(
+                    "[coordinator] Spawning assignment inline for: {} - {}",
+                    task_id, title,
+                );
+                match spawn_assign_inline(dir, &task_id) {
+                    Ok((agent_id, pid)) => {
+                        eprintln!("[coordinator] Spawned assignment {} (PID {})", agent_id, pid);
+                        spawned += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("[coordinator] Failed to spawn assignment for {}: {}", task_id, e);
+                    }
                 }
-                Err(e) => {
-                    eprintln!("[coordinator] Failed to spawn eval for {}: {}", task.id, e);
+            } else {
+                eprintln!(
+                    "[coordinator] Spawning eval inline for: {} - {}{}",
+                    task_id,
+                    title,
+                    eval_model
+                        .map(|m| format!(" (model: {})", m))
+                        .unwrap_or_default(),
+                );
+                match spawn_eval_inline(dir, &task_id, eval_model) {
+                    Ok((agent_id, pid)) => {
+                        eprintln!("[coordinator] Spawned eval {} (PID {})", agent_id, pid);
+                        spawned += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("[coordinator] Failed to spawn eval for {}: {}", task_id, e);
+                    }
                 }
             }
             continue;
