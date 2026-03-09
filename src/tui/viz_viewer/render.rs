@@ -685,6 +685,20 @@ fn draw_viz_content(frame: &mut Frame, app: &VizApp, area: Rect) {
     // Precompute the selected task ID for the edge map lookups.
     let selected_id = app.selected_task_id().map(|s| s.to_string());
 
+    // Precompute coordinator line indices for chat-to-coordinator visual link.
+    // When the Chat tab is active, coordinator task lines get a subtle cyan highlight.
+    let chat_active = app.right_panel_visible
+        && app.right_panel_tab == RightPanelTab::Chat;
+    let coordinator_lines: HashSet<usize> = if chat_active {
+        app.node_line_map
+            .iter()
+            .filter(|(id, _)| id.starts_with(".coordinator"))
+            .map(|(_, &line)| line)
+            .collect()
+    } else {
+        HashSet::new()
+    };
+
     for visible_idx in start..end {
         let orig_idx = app.visible_to_original(visible_idx);
 
@@ -777,6 +791,16 @@ fn draw_viz_content(frame: &mut Frame, app: &VizApp, area: Rect) {
                 flash_color,
                 reduced,
                 anim_kind,
+            );
+        }
+
+        // Chat-to-coordinator visual link: apply a subtle cyan tint to coordinator
+        // task lines when the Chat tab is visible, connecting the two visually.
+        if coordinator_lines.contains(&orig_idx) {
+            let last = text_lines.last_mut().unwrap();
+            // Subtle dark cyan background to mark the coordinator row.
+            *last = std::mem::take(last).style(
+                Style::default().bg(Color::Rgb(0, 40, 50)),
             );
         }
     }
@@ -1195,7 +1219,10 @@ fn draw_right_panel(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         area
     } else {
         let is_focused = app.focused_panel == FocusedPanel::RightPanel;
-        let border_color = if is_focused {
+        let is_chat_tab = app.right_panel_tab == RightPanelTab::Chat;
+        let border_color = if is_chat_tab && app.chat.coordinator_active {
+            Color::Cyan
+        } else if is_focused {
             Color::White
         } else {
             Color::DarkGray
