@@ -903,6 +903,7 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Commands::Tokens { id, json } => commands::tokens::run(&workgraph_dir, &id, &json),
         Commands::Msg { command } => {
             let agent_id_from_env = std::env::var("WG_AGENT_ID").ok();
             match command {

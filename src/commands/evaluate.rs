@@ -456,14 +456,19 @@ pub fn run(
     }
 
     // Step 8.5: Persist token usage to the .evaluate-* task
-    if let Some(usage) = eval_token_usage {
+    if let Some(ref usage) = eval_token_usage {
         let eval_task_id = format!(".evaluate-{}", task_id);
         let graph_path = super::graph_path(dir);
         if let Ok(mut graph) = load_graph(&graph_path)
             && let Some(eval_task) = graph.get_task_mut(&eval_task_id)
         {
-            eval_task.token_usage = Some(usage);
+            eval_task.token_usage = Some(usage.clone());
             let _ = workgraph::parser::save_graph(&graph, &graph_path);
+        }
+        // Emit machine-readable token summary for inline eval capture.
+        // The spawn_eval_inline script greps for this line and calls `wg tokens`.
+        if let Ok(json) = serde_json::to_string(usage) {
+            eprintln!("__WG_TOKENS__:{}", json);
         }
     }
 
@@ -884,14 +889,18 @@ pub fn run_flip(
     // Persist combined token usage from both FLIP phases to the .evaluate-* task
     let combined_usage =
         combine_token_usage(&[inference_token_usage, comparison_token_usage]);
-    if let Some(usage) = combined_usage {
+    if let Some(ref usage) = combined_usage {
         let eval_task_id = format!(".evaluate-{}", task_id);
         let graph_path = super::graph_path(dir);
         if let Ok(mut graph) = load_graph(&graph_path)
             && let Some(eval_task) = graph.get_task_mut(&eval_task_id)
         {
-            eval_task.token_usage = Some(usage);
+            eval_task.token_usage = Some(usage.clone());
             let _ = workgraph::parser::save_graph(&graph, &graph_path);
+        }
+        // Emit machine-readable token summary for inline eval capture.
+        if let Ok(json) = serde_json::to_string(usage) {
+            eprintln!("__WG_TOKENS__:{}", json);
         }
     }
 

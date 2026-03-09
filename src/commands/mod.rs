@@ -88,6 +88,7 @@ pub mod stats;
 pub mod status;
 pub mod structure;
 pub mod telegram;
+pub mod tokens;
 pub mod trace;
 pub mod trace_animate;
 pub mod trace_export;

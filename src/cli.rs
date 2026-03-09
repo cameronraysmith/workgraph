@@ -758,6 +758,16 @@ pub enum Commands {
         operations: bool,
     },
 
+    /// Set or accumulate token usage on a task
+    #[command(hide = true)]
+    Tokens {
+        /// Task ID
+        id: String,
+
+        /// Token usage JSON (e.g. '{"cost_usd":0.1,"input_tokens":500,"output_tokens":200}')
+        json: String,
+    },
+
     /// Send and receive messages to/from tasks and agents
     Msg {
         #[command(subcommand)]
@@ -2650,6 +2660,7 @@ pub fn command_name(cmd: &Commands) -> &'static str {
         Commands::Replay { .. } => "replay",
         Commands::Runs { .. } => "runs",
         Commands::Log { .. } => "log",
+        Commands::Tokens { .. } => "tokens",
         Commands::Msg { .. } => "msg",
         Commands::Resource { .. } => "resource",
         Commands::Skill { .. } => "skill",
@@ -2722,6 +2733,7 @@ pub fn supports_json(cmd: &Commands) -> bool {
             | Commands::Replay { .. }
             | Commands::Runs { .. }
             | Commands::Log { .. }
+            | Commands::Tokens { .. }
             | Commands::Msg { .. }
             | Commands::Resource { .. }
             | Commands::Skill { .. }

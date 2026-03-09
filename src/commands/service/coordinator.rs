@@ -1675,6 +1675,16 @@ fn spawn_eval_inline(
         .map(|cmd| format!("\n    {cmd} >> '{escaped_output}' 2>&1 || true"))
         .unwrap_or_default();
 
+    // Fragment: after wg done/fail, capture __WG_TOKENS__ lines from the output log
+    // and record them on the eval task. wg tokens accumulates, so multiple lines (e.g.
+    // standard eval + FLIP) are summed.
+    let token_capture = format!(
+        r#"
+grep '__WG_TOKENS__:' '{escaped_output}' 2>/dev/null | sed 's/.*__WG_TOKENS__://' | while IFS= read -r _tokens; do
+    wg tokens '{escaped_eval_id}' "$_tokens" 2>> '{escaped_output}' || true
+done"#
+    );
+
     // Single script: run eval, optionally run FLIP, record special agent perf, then mark done/failed
     let script = if let Some(ref sa_id) = special_agent_verified {
         let escaped_sa_id = sa_id.replace('\'', "'\\''");
@@ -1688,7 +1698,7 @@ if [ $EXIT_CODE -eq 0 ]; then{flip_fragment}
 else
     wg evaluate record '{escaped_eval_id}' 0.0 --source system --notes "Inline evaluation failed with exit code $EXIT_CODE (agent: {escaped_sa_id})" 2>> '{escaped_output}' || true
     wg fail '{escaped_eval_id}' --reason "wg evaluate exited with code $EXIT_CODE" 2>> '{escaped_output}'
-fi
+fi{token_capture}
 exit $EXIT_CODE"#,
         )
     } else {
@@ -1700,7 +1710,7 @@ if [ $EXIT_CODE -eq 0 ]; then{flip_fragment}
     wg done '{escaped_eval_id}' 2>> '{escaped_output}'
 else
     wg fail '{escaped_eval_id}' --reason "wg evaluate exited with code $EXIT_CODE" 2>> '{escaped_output}'
-fi
+fi{token_capture}
 exit $EXIT_CODE"#,
         )
     };
