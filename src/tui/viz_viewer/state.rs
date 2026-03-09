@@ -732,6 +732,16 @@ pub struct ChatState {
     pub viewport_height: usize,
     /// Scroll offset from top (set each frame by renderer for scrollbar dragging).
     pub scroll_from_top: usize,
+    /// Index of the message currently being edited (None = not in edit mode).
+    pub editing_index: Option<usize>,
+    /// Saved text from the input box before entering edit mode (restored on cancel).
+    pub edit_saved_input: String,
+    /// History navigation cursor: index into the list of editable user messages.
+    /// None = not navigating history (fresh input).
+    pub history_cursor: Option<usize>,
+    /// Mapping from rendered line index to message index (set each frame by renderer).
+    /// Used for click-to-edit: determines which message a clicked line belongs to.
+    pub line_to_message: Vec<Option<usize>>,
 }
 
 impl Default for ChatState {
@@ -748,6 +758,10 @@ impl Default for ChatState {
             total_rendered_lines: 0,
             viewport_height: 0,
             scroll_from_top: 0,
+            editing_index: None,
+            edit_saved_input: String::new(),
+            history_cursor: None,
+            line_to_message: Vec::new(),
         }
     }
 }
@@ -773,6 +787,11 @@ pub struct ChatMessage {
     pub full_text: Option<String>,
     /// Attachment filenames for display (just the filename portion).
     pub attachments: Vec<String>,
+    /// Whether this message was edited by the user.
+    pub edited: bool,
+    /// Inbox message ID (for user messages loaded from chat history).
+    /// Used to edit/delete the message in the inbox JSONL file.
+    pub inbox_id: Option<u64>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -792,6 +811,8 @@ struct PersistedChatMessage {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     attachments: Vec<String>,
     timestamp: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    edited: bool,
 }
 
 /// Path to the persisted chat history file.
@@ -819,6 +840,7 @@ fn save_chat_history(workgraph_dir: &std::path::Path, messages: &[ChatMessage]) 
             full_text: m.full_text.clone(),
             attachments: m.attachments.clone(),
             timestamp: chrono::Utc::now().to_rfc3339(),
+            edited: m.edited,
         })
         .collect();
     let path = chat_history_path(workgraph_dir);
@@ -853,6 +875,8 @@ fn load_persisted_chat_history(workgraph_dir: &std::path::Path) -> Vec<ChatMessa
             text: p.text,
             full_text: p.full_text,
             attachments: p.attachments,
+            edited: p.edited,
+            inbox_id: None,
         })
         .collect()
 }
@@ -1550,6 +1574,8 @@ pub struct VizApp {
     // ── System task visibility ──
     /// When true, show system tasks (dot-prefixed) in the graph view.
     pub show_system_tasks: bool,
+    /// When true, show only running (in-progress/open) system tasks in the graph view.
+    pub show_running_system_tasks: bool,
     /// Set to true when system task visibility was just toggled, so that
     /// newly appearing tasks get a `Revealed` animation instead of `NewTask`.
     pub system_tasks_just_toggled: bool,
@@ -1557,6 +1583,9 @@ pub struct VizApp {
     // ── Mouse capture ──
     /// Whether mouse capture is currently enabled.
     pub mouse_enabled: bool,
+    /// Whether mode 1003 (any-event tracking) is enabled for touch support.
+    /// Auto-set when running in Termux without mosh.
+    pub any_motion_mouse: bool,
 
     // ── Layout areas (set each frame by the renderer, for mouse hit-testing) ──
     /// The graph/viz content area from the last render frame.
@@ -1860,8 +1889,10 @@ impl VizApp {
             show_total_tokens: false,
             show_help: false,
             show_system_tasks: false,
+            show_running_system_tasks: config.tui.show_running_system_tasks,
             system_tasks_just_toggled: false,
             mouse_enabled,
+            any_motion_mouse: super::event::detect_termux_touch(),
             last_graph_area: Rect::default(),
             last_right_panel_area: Rect::default(),
             last_tab_bar_area: Rect::default(),
@@ -2172,6 +2203,7 @@ impl VizApp {
     fn generate_viz(&self) -> Result<VizOutput> {
         let mut opts = self.viz_options.clone();
         opts.show_internal = self.show_system_tasks;
+        opts.show_internal_running_only = !self.show_system_tasks && self.show_running_system_tasks;
         crate::commands::viz::generate_viz_output(&self.workgraph_dir, &opts)
     }
 
@@ -4201,8 +4233,10 @@ impl VizApp {
             show_total_tokens: false,
             show_help: false,
             show_system_tasks: false,
+            show_running_system_tasks: false,
             system_tasks_just_toggled: false,
             mouse_enabled: false,
+            any_motion_mouse: false,
             last_graph_area: Rect::default(),
             last_right_panel_area: Rect::default(),
             last_tab_bar_area: Rect::default(),
@@ -4601,6 +4635,8 @@ impl VizApp {
                             text: format!("Error: {}", error_line),
                             full_text: None,
                             attachments: vec![],
+                            edited: false,
+                            inbox_id: None,
                         });
                         save_chat_history(&self.workgraph_dir, &self.chat.messages);
                     }
@@ -5452,11 +5488,18 @@ impl VizApp {
                             .to_string()
                     })
                     .collect();
+                let inbox_id = if role == ChatRole::User {
+                    Some(msg.id)
+                } else {
+                    None
+                };
                 self.chat.messages.push(ChatMessage {
                     role,
                     text: msg.content.clone(),
                     full_text: msg.full_response.clone(),
                     attachments: att_names,
+                    edited: false,
+                    inbox_id,
                 });
             }
 
@@ -5505,6 +5548,8 @@ impl VizApp {
                 text: msg.content.clone(),
                 full_text: msg.full_response.clone(),
                 attachments: att_names,
+                edited: false,
+                inbox_id: None,
             });
         }
 
@@ -5559,6 +5604,8 @@ impl VizApp {
             text: text.clone(),
             full_text: None,
             attachments: att_names,
+            edited: false,
+            inbox_id: None,
         });
 
         // Persist updated chat history.
@@ -5617,6 +5664,184 @@ impl VizApp {
                 self.notification =
                     Some((format!("Attach failed: {}", e), std::time::Instant::now()));
             }
+        }
+    }
+
+    /// Check whether a user message at the given index has been consumed by the coordinator.
+    /// A message is consumed if there's any coordinator message after it in the display list.
+    pub fn is_chat_message_consumed(&self, index: usize) -> bool {
+        if index >= self.chat.messages.len() {
+            return true;
+        }
+        if self.chat.messages[index].role != ChatRole::User {
+            return true; // only user messages can be unconsumed
+        }
+        // If any coordinator message follows this one, it's consumed.
+        self.chat.messages[index + 1..]
+            .iter()
+            .any(|m| m.role == ChatRole::Coordinator)
+    }
+
+    /// Enter edit mode for a user message at the given index.
+    /// Loads the message text into the editor and saves the current input.
+    pub fn enter_chat_edit_mode(&mut self, index: usize) {
+        if index >= self.chat.messages.len() {
+            return;
+        }
+        if self.chat.messages[index].role != ChatRole::User {
+            return;
+        }
+        if self.is_chat_message_consumed(index) {
+            return;
+        }
+        // Save current input
+        self.chat.edit_saved_input = editor_text(&self.chat.editor);
+        self.chat.editing_index = Some(index);
+        // Load the message text into the editor
+        self.chat.editor = new_emacs_editor_with(&self.chat.messages[index].text);
+        // Reset scroll to bottom so the input is visible
+        self.chat.scroll = 0;
+    }
+
+    /// Cancel edit mode, restoring the previous input.
+    pub fn cancel_chat_edit_mode(&mut self) {
+        if self.chat.editing_index.is_some() {
+            let saved = std::mem::take(&mut self.chat.edit_saved_input);
+            if saved.is_empty() {
+                editor_clear(&mut self.chat.editor);
+            } else {
+                self.chat.editor = new_emacs_editor_with(&saved);
+            }
+            self.chat.editing_index = None;
+            self.chat.history_cursor = None;
+        }
+    }
+
+    /// Commit the edit: update the original message with the editor text.
+    pub fn commit_chat_edit(&mut self) {
+        if let Some(idx) = self.chat.editing_index {
+            let new_text = editor_text(&self.chat.editor);
+            if new_text.trim().is_empty() {
+                // Empty edit = delete the message
+                self.delete_chat_message(idx);
+            } else if idx < self.chat.messages.len() {
+                let old_text = self.chat.messages[idx].text.clone();
+                if new_text != old_text {
+                    self.chat.messages[idx].text = new_text.clone();
+                    self.chat.messages[idx].edited = true;
+                    // Update inbox if we have an ID
+                    if let Some(inbox_id) = self.chat.messages[idx].inbox_id {
+                        let _ = workgraph::chat::edit_inbox_message_for(
+                            &self.workgraph_dir,
+                            self.active_coordinator_id,
+                            inbox_id,
+                            &new_text,
+                        );
+                    }
+                    save_chat_history(&self.workgraph_dir, &self.chat.messages);
+                }
+            }
+            editor_clear(&mut self.chat.editor);
+            self.chat.editing_index = None;
+            self.chat.history_cursor = None;
+            self.chat.edit_saved_input.clear();
+        }
+    }
+
+    /// Delete a chat message at the given index.
+    pub fn delete_chat_message(&mut self, index: usize) {
+        if index >= self.chat.messages.len() {
+            return;
+        }
+        if self.is_chat_message_consumed(index) {
+            return;
+        }
+        // Delete from inbox if we have an ID
+        if let Some(inbox_id) = self.chat.messages[index].inbox_id {
+            let _ = workgraph::chat::delete_inbox_message_for(
+                &self.workgraph_dir,
+                self.active_coordinator_id,
+                inbox_id,
+            );
+        }
+        self.chat.messages.remove(index);
+        save_chat_history(&self.workgraph_dir, &self.chat.messages);
+        // Clear edit state
+        self.chat.editing_index = None;
+        self.chat.history_cursor = None;
+        editor_clear(&mut self.chat.editor);
+        self.notification = Some(("Message deleted".to_string(), std::time::Instant::now()));
+    }
+
+    /// Get the indices of editable (unconsumed) user messages, in order.
+    pub fn editable_user_message_indices(&self) -> Vec<usize> {
+        self.chat
+            .messages
+            .iter()
+            .enumerate()
+            .filter(|(i, m)| m.role == ChatRole::User && !self.is_chat_message_consumed(*i))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Navigate to the previous user message in history (Up arrow).
+    /// Returns true if navigation happened.
+    pub fn chat_history_up(&mut self) -> bool {
+        let editable = self.editable_user_message_indices();
+        if editable.is_empty() {
+            return false;
+        }
+        match self.chat.history_cursor {
+            None => {
+                // Save current input and start from the most recent editable message
+                self.chat.edit_saved_input = editor_text(&self.chat.editor);
+                let msg_idx = *editable.last().unwrap();
+                self.chat.history_cursor = Some(editable.len() - 1);
+                self.chat.editing_index = Some(msg_idx);
+                self.chat.editor = new_emacs_editor_with(&self.chat.messages[msg_idx].text);
+                true
+            }
+            Some(cursor) => {
+                if cursor > 0 {
+                    let new_cursor = cursor - 1;
+                    let msg_idx = editable[new_cursor];
+                    self.chat.history_cursor = Some(new_cursor);
+                    self.chat.editing_index = Some(msg_idx);
+                    self.chat.editor = new_emacs_editor_with(&self.chat.messages[msg_idx].text);
+                    true
+                } else {
+                    false // already at oldest
+                }
+            }
+        }
+    }
+
+    /// Navigate to the next user message in history (Down arrow).
+    /// Returns true if navigation happened.
+    pub fn chat_history_down(&mut self) -> bool {
+        let editable = self.editable_user_message_indices();
+        if let Some(cursor) = self.chat.history_cursor {
+            if cursor + 1 < editable.len() {
+                let new_cursor = cursor + 1;
+                let msg_idx = editable[new_cursor];
+                self.chat.history_cursor = Some(new_cursor);
+                self.chat.editing_index = Some(msg_idx);
+                self.chat.editor = new_emacs_editor_with(&self.chat.messages[msg_idx].text);
+                true
+            } else {
+                // Past the end: restore original input
+                self.chat.history_cursor = None;
+                self.chat.editing_index = None;
+                let saved = std::mem::take(&mut self.chat.edit_saved_input);
+                if saved.is_empty() {
+                    editor_clear(&mut self.chat.editor);
+                } else {
+                    self.chat.editor = new_emacs_editor_with(&saved);
+                }
+                true
+            }
+        } else {
+            false
         }
     }
 
@@ -6127,6 +6352,17 @@ impl VizApp {
             label: "Counters".into(),
             value: config.tui.counters.clone(),
             edit_kind: ConfigEditKind::TextInput,
+            section: ConfigSection::TuiSettings,
+        });
+        entries.push(ConfigEntry {
+            key: "tui.show_running_system_tasks".into(),
+            label: "Show running system tasks".into(),
+            value: if config.tui.show_running_system_tasks {
+                "on".into()
+            } else {
+                "off".into()
+            },
+            edit_kind: ConfigEditKind::Toggle,
             section: ConfigSection::TuiSettings,
         });
 
@@ -6690,6 +6926,9 @@ impl VizApp {
                 }
             }
             "tui.counters" => config.tui.counters = new_value,
+            "tui.show_running_system_tasks" => {
+                config.tui.show_running_system_tasks = new_value == "on";
+            }
             "agency.flip_enabled" => config.agency.flip_enabled = new_value == "on",
             "agency.flip_verification_threshold" => {
                 config.agency.flip_verification_threshold =
@@ -6867,6 +7106,9 @@ impl VizApp {
             "agency.auto_create" => config.agency.auto_create = new_val == "on",
             "tui.show_token_counts" => config.tui.show_token_counts = new_val == "on",
             "tui.chat_history" => config.tui.chat_history = new_val == "on",
+            "tui.show_running_system_tasks" => {
+                config.tui.show_running_system_tasks = new_val == "on";
+            }
             "agency.flip_enabled" => config.agency.flip_enabled = new_val == "on",
             "agency.eval_gate_all" => config.agency.eval_gate_all = new_val == "on",
             _ => {}
@@ -9373,6 +9615,7 @@ mod tui_config_panel_tests {
             "tui.chat_history",
             "tui.chat_history_max",
             "tui.counters",
+            "tui.show_running_system_tasks",
             // Agent
             "agent.heartbeat_timeout",
             "agent.executor",

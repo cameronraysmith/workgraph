@@ -23,29 +23,43 @@ const INPUT_POLL: Duration = Duration::from_millis(50);
 /// Uses modes 1002 (button-event tracking) and 1006 (SGR extended coordinates)
 /// instead of crossterm's EnableMouseCapture which also enables 1003 (any-event).
 /// Mode 1003 breaks mosh compatibility because mosh disables earlier modes when
-/// a new mode arrives, and Termux doesn't support 1003 — leaving no tracking
-/// mode active. Mode 1002 adds drag reporting (motion while button held) on top
-/// of 1000 (button tracking), which is needed for scrollbar dragging.
-fn set_mouse_capture(enabled: bool) -> Result<()> {
+/// a new mode arrives — leaving no tracking mode active. Mode 1002 adds drag
+/// reporting (motion while button held) on top of 1000 (button tracking), which
+/// is needed for scrollbar dragging.
+///
+/// When `any_motion` is true (auto-set for Termux without mosh), mode 1003 is
+/// also enabled so that all motion events are reported. This helps with touch
+/// environments where drag events may lack the button-held flag.
+fn set_mouse_capture(enabled: bool, any_motion: bool) -> Result<()> {
     use io::Write;
     let mut stdout = io::stdout();
     if enabled {
         stdout.write_all(b"\x1b[?1002h\x1b[?1006h")?;
+        if any_motion {
+            stdout.write_all(b"\x1b[?1003h")?;
+        }
     } else {
-        stdout.write_all(b"\x1b[?1006l\x1b[?1002l")?;
+        stdout.write_all(b"\x1b[?1003l\x1b[?1006l\x1b[?1002l")?;
     }
     stdout.flush()?;
     Ok(())
 }
 
+/// Returns true when the terminal is Termux and we're NOT behind mosh.
+/// In that case, enabling mode 1003 (any-event tracking) is safe and helps
+/// with touch drag events that may lack the button-held flag.
+pub(super) fn detect_termux_touch() -> bool {
+    std::env::var_os("TERMUX_VERSION").is_some() && std::env::var_os("MOSH_SERVER_PID").is_none()
+}
+
 pub fn run_event_loop(terminal: &mut DefaultTerminal, app: &mut VizApp) -> Result<()> {
     // Set initial mouse capture state
-    set_mouse_capture(app.mouse_enabled)?;
+    set_mouse_capture(app.mouse_enabled, app.any_motion_mouse)?;
 
     let result = run_event_loop_inner(terminal, app);
 
     // Always disable mouse capture on exit
-    let _ = set_mouse_capture(false);
+    let _ = set_mouse_capture(false, false);
 
     result
 }
@@ -560,33 +574,67 @@ fn handle_task_form_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
 fn handle_chat_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
     use super::state::{editor_clear, editor_text};
     use crossterm::event::KeyEvent;
+    let in_edit_mode = app.chat.editing_index.is_some();
     match code {
         KeyCode::Esc => {
-            app.input_mode = InputMode::Normal;
-            app.chat_input_dismissed = true;
-            app.inspector_sub_focus = InspectorSubFocus::ChatHistory;
+            if in_edit_mode {
+                app.cancel_chat_edit_mode();
+            } else {
+                app.input_mode = InputMode::Normal;
+                app.chat_input_dismissed = true;
+                app.inspector_sub_focus = InspectorSubFocus::ChatHistory;
+            }
             return;
         }
         KeyCode::Enter
             if !modifiers.contains(KeyModifiers::SHIFT)
                 && !modifiers.contains(KeyModifiers::ALT) =>
         {
-            let text = editor_text(&app.chat.editor);
-            editor_clear(&mut app.chat.editor);
-            if !text.trim().is_empty() {
-                app.send_chat_message(text);
+            if in_edit_mode {
+                app.commit_chat_edit();
+            } else {
+                let text = editor_text(&app.chat.editor);
+                editor_clear(&mut app.chat.editor);
+                if !text.trim().is_empty() {
+                    app.send_chat_message(text);
+                }
             }
             return;
         }
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-            editor_clear(&mut app.chat.editor);
-            app.input_mode = InputMode::Normal;
-            app.inspector_sub_focus = InspectorSubFocus::ChatHistory;
+            if in_edit_mode {
+                app.cancel_chat_edit_mode();
+            } else {
+                editor_clear(&mut app.chat.editor);
+                app.input_mode = InputMode::Normal;
+                app.inspector_sub_focus = InspectorSubFocus::ChatHistory;
+            }
+            return;
+        }
+        KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) && in_edit_mode => {
+            // Ctrl+D in edit mode: delete the message
+            if let Some(idx) = app.chat.editing_index {
+                app.delete_chat_message(idx);
+            }
             return;
         }
         KeyCode::Char('v') if modifiers.contains(KeyModifiers::CONTROL) => {
             app.try_paste_clipboard_image();
             return;
+        }
+        KeyCode::Up if !modifiers.contains(KeyModifiers::ALT) && !modifiers.contains(KeyModifiers::SHIFT) => {
+            // Up arrow: navigate to previous user message (history)
+            // Only trigger when input is empty (for fresh history nav) or already in history mode
+            let is_empty = editor_text(&app.chat.editor).is_empty();
+            if (is_empty || app.chat.history_cursor.is_some()) && app.chat_history_up() {
+                return;
+            }
+        }
+        KeyCode::Down if !modifiers.contains(KeyModifiers::ALT) && !modifiers.contains(KeyModifiers::SHIFT) => {
+            // Down arrow: navigate to next user message or back to fresh input
+            if app.chat.history_cursor.is_some() && app.chat_history_down() {
+                return;
+            }
         }
         KeyCode::Up if modifiers.contains(KeyModifiers::ALT) => {
             app.record_panel_scroll_activity();
@@ -749,6 +797,13 @@ fn handle_graph_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
             app.force_refresh();
         }
 
+        // Shift+Period (<): toggle showing only running system tasks
+        KeyCode::Char('<') => {
+            app.show_running_system_tasks = !app.show_running_system_tasks;
+            app.system_tasks_just_toggled = true;
+            app.force_refresh();
+        }
+
         // Backslash: toggle right panel visibility
         KeyCode::Char('\\') => {
             app.toggle_right_panel();
@@ -869,7 +924,7 @@ fn handle_graph_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
         // Toggle mouse capture
         KeyCode::Char('m') => {
             app.toggle_mouse();
-            let _ = set_mouse_capture(app.mouse_enabled);
+            let _ = set_mouse_capture(app.mouse_enabled, app.any_motion_mouse);
         }
 
         // Toggle coordinator log view
@@ -1550,8 +1605,32 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
                 && app.last_chat_message_area.height > 0
                 && app.last_chat_message_area.contains(pos)
             {
-                // Click on chat message history area: focus history, exit text editing.
+                // Click on chat message history area.
                 app.focused_panel = FocusedPanel::RightPanel;
+                // Determine which rendered line was clicked.
+                let click_row = (row.saturating_sub(app.last_chat_message_area.y)) as usize;
+                let rendered_line_idx = app.chat.scroll_from_top + click_row;
+                // Check if the clicked line maps to an editable user message.
+                let clicked_msg_idx = app
+                    .chat
+                    .line_to_message
+                    .get(rendered_line_idx)
+                    .copied()
+                    .flatten();
+                if let Some(msg_idx) = clicked_msg_idx
+                    && !app.is_chat_message_consumed(msg_idx)
+                    && app.chat.messages.get(msg_idx).is_some_and(|m| {
+                        m.role == super::state::ChatRole::User
+                    })
+                {
+                    // Click on an editable user message: enter edit mode.
+                    app.enter_chat_edit_mode(msg_idx);
+                    app.input_mode = InputMode::ChatInput;
+                    app.chat_input_dismissed = false;
+                    app.inspector_sub_focus = InspectorSubFocus::TextEntry;
+                    return;
+                }
+                // Default: focus history, exit text editing.
                 app.inspector_sub_focus = InspectorSubFocus::ChatHistory;
                 if app.input_mode == InputMode::ChatInput {
                     app.input_mode = InputMode::Normal;
@@ -1714,6 +1793,31 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
                 app.scrollbar_drag = None;
             }
             app.graph_pan_last = None;
+        }
+        // Moved events (mode 1003): treat as drag-to-pan when a touch/click is
+        // active.  Termux touch-to-mouse translation may report motion without
+        // the button-held flag, producing Moved instead of Drag(Left).  With
+        // mode 1003 enabled (auto for Termux), these events keep panning alive.
+        MouseEventKind::Moved if app.graph_pan_last.is_some() => {
+            if let Some((prev_col, prev_row)) = app.graph_pan_last {
+                let dx = prev_col as i32 - column as i32;
+                let dy = prev_row as i32 - row as i32;
+                if dx > 0 {
+                    app.record_graph_hscroll_activity();
+                    app.scroll.scroll_right(dx as usize);
+                } else if dx < 0 {
+                    app.record_graph_hscroll_activity();
+                    app.scroll.scroll_left((-dx) as usize);
+                }
+                if dy > 0 {
+                    app.record_graph_scroll_activity();
+                    app.scroll.scroll_down(dy as usize);
+                } else if dy < 0 {
+                    app.record_graph_scroll_activity();
+                    app.scroll.scroll_up((-dy) as usize);
+                }
+                app.graph_pan_last = Some((column, row));
+            }
         }
         _ => {}
     }
@@ -3352,6 +3456,57 @@ mod scrollbar_tests {
         assert_eq!(
             app.scroll.offset_y, 0,
             "Mouse wheel ScrollUp should scroll back"
+        );
+    }
+
+    #[test]
+    fn moved_event_pans_when_graph_pan_last_set() {
+        let (mut app, _tmp) = build_test_app();
+        setup_graph_scroll(&mut app, 100, 20);
+        app.scroll.content_width = 200;
+        app.scroll.viewport_width = 80;
+        app.last_graph_area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 20,
+        };
+        app.last_graph_scrollbar_area = Rect::default();
+        app.last_panel_scrollbar_area = Rect::default();
+        app.last_graph_hscrollbar_area = Rect::default();
+
+        // Simulate touch down in graph area — sets graph_pan_last.
+        handle_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), 10, 40);
+        assert!(
+            app.graph_pan_last.is_some(),
+            "Pan anchor should be set on mouse down in graph"
+        );
+
+        // Moved event (Termux touch drag without button flag) should pan.
+        handle_mouse(&mut app, MouseEventKind::Moved, 5, 30);
+        // Dragged up by 5 rows: dy = 10-5 = 5 > 0 → scroll_down(5)
+        assert_eq!(app.scroll.offset_y, 5, "Vertical pan via Moved event");
+        // Dragged left by 10 cols: dx = 40-30 = 10 > 0 → scroll_right(10)
+        assert_eq!(app.scroll.offset_x, 10, "Horizontal pan via Moved event");
+
+        // Mouse up clears pan state.
+        handle_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), 5, 30);
+        assert!(
+            app.graph_pan_last.is_none(),
+            "Pan state should be cleared on mouse up"
+        );
+
+        // Moved event without prior mouse down should NOT pan.
+        let prev_y = app.scroll.offset_y;
+        let prev_x = app.scroll.offset_x;
+        handle_mouse(&mut app, MouseEventKind::Moved, 0, 0);
+        assert_eq!(
+            app.scroll.offset_y, prev_y,
+            "Moved without graph_pan_last should not scroll vertically"
+        );
+        assert_eq!(
+            app.scroll.offset_x, prev_x,
+            "Moved without graph_pan_last should not scroll horizontally"
         );
     }
 }
