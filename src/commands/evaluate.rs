@@ -237,6 +237,39 @@ pub fn run(
         })
         .collect();
 
+    // Step 3.8: Load FLIP score and verify-flip findings (if available)
+    let flip_score = {
+        let evals_dir = agency_dir.join("evaluations");
+        let all_evals = load_all_evaluations_or_warn(&evals_dir);
+        all_evals
+            .iter()
+            .find(|e| e.task_id == task_id && e.source == eval_source::FLIP)
+            .map(|e| e.score)
+    };
+
+    let verify_task_id = format!(".verify-flip-{}", task_id);
+    let verify_task_data = graph.get_task(&verify_task_id);
+    let verify_status_owned: Option<String> = verify_task_data.and_then(|vt| match vt.status {
+        Status::Done => Some("passed".to_string()),
+        Status::Failed => Some("failed".to_string()),
+        _ => None,
+    });
+    let verify_findings_owned: Option<String> = verify_task_data.and_then(|vt| {
+        if vt.log.is_empty() {
+            None
+        } else {
+            let entries: Vec<String> = vt
+                .log
+                .iter()
+                .map(|entry| {
+                    let actor = entry.actor.as_deref().unwrap_or("system");
+                    format!("[{}] ({}): {}", entry.timestamp, actor, entry.message)
+                })
+                .collect();
+            Some(entries.join("\n"))
+        }
+    });
+
     // Step 4: Build evaluator prompt
     let evaluator_input = EvaluatorInput {
         task_title: &task.title,
@@ -253,6 +286,9 @@ pub fn run(
         artifact_diff: artifact_diff.as_deref(),
         evaluator_identity: evaluator_identity.as_deref(),
         downstream_tasks: &downstream_tasks,
+        flip_score,
+        verify_status: verify_status_owned.as_deref(),
+        verify_findings: verify_findings_owned.as_deref(),
     };
 
     let prompt = render_evaluator_prompt(&evaluator_input);

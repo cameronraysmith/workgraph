@@ -1384,6 +1384,14 @@ fn build_flip_verification_tasks(
             verify_task_id, eval.score, threshold,
         );
 
+        // Add verify as additional dep on .evaluate-<task>
+        let eval_task_id = format!(".evaluate-{}", source_task_id);
+        if let Some(eval_task) = graph.get_task_mut(&eval_task_id) {
+            if !eval_task.after.contains(&verify_task_id) {
+                eval_task.after.push(verify_task_id.clone());
+            }
+        }
+
         // Eagerly scaffold the eval task for the verification task
         let verify_title = format!("Verify (FLIP {:.2}): {}", eval.score, source_title);
         crate::commands::eval_scaffold::scaffold_eval_task(
@@ -1617,22 +1625,7 @@ fn spawn_eval_inline(
         )
     };
 
-    // Determine if FLIP evaluation should also run after standard eval.
-    // FLIP runs when: flip_enabled is true globally, OR the source task has the 'flip-eval' tag.
     let config = Config::load_or_default(dir);
-    let source_has_flip_tag = graph
-        .get_task(source_task_id)
-        .map(|t| t.tags.iter().any(|tag| tag == "flip-eval"))
-        .unwrap_or(false);
-    let run_flip = config.agency.flip_enabled || source_has_flip_tag;
-    let flip_cmd = if run_flip {
-        Some(format!(
-            "wg evaluate run '{}' --flip",
-            source_task_id.replace('\'', "'\\''")
-        ))
-    } else {
-        None
-    };
 
     // Resolve the special agent (evaluator) hash for performance recording.
     // After the inline eval completes, we record an Evaluation against this
@@ -1667,17 +1660,8 @@ fn spawn_eval_inline(
             .map(|a| a.id)
     });
 
-    // Build the optional FLIP command fragment. FLIP runs after standard eval
-    // succeeds. FLIP failure is non-fatal (|| true) — it produces supplementary
-    // 'source: flip' evaluation records but should not block the eval task.
-    let flip_fragment = flip_cmd
-        .as_ref()
-        .map(|cmd| format!("\n    {cmd} >> '{escaped_output}' 2>&1 || true"))
-        .unwrap_or_default();
-
     // Fragment: after wg done/fail, capture __WG_TOKENS__ lines from the output log
-    // and record them on the eval task. wg tokens accumulates, so multiple lines (e.g.
-    // standard eval + FLIP) are summed.
+    // and record them on the eval task.
     let token_capture = format!(
         r#"
 grep '__WG_TOKENS__:' '{escaped_output}' 2>/dev/null | sed 's/.*__WG_TOKENS__://' | while IFS= read -r _tokens; do
@@ -1685,14 +1669,14 @@ grep '__WG_TOKENS__:' '{escaped_output}' 2>/dev/null | sed 's/.*__WG_TOKENS__://
 done"#
     );
 
-    // Single script: run eval, optionally run FLIP, record special agent perf, then mark done/failed
+    // Single script: run eval, record special agent perf, then mark done/failed
     let script = if let Some(ref sa_id) = special_agent_verified {
         let escaped_sa_id = sa_id.replace('\'', "'\\''");
         format!(
             r#"unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT
 {eval_cmd} >> '{escaped_output}' 2>&1
 EXIT_CODE=$?
-if [ $EXIT_CODE -eq 0 ]; then{flip_fragment}
+if [ $EXIT_CODE -eq 0 ]; then
     wg evaluate record '{escaped_eval_id}' 1.0 --source system --notes "Inline evaluation completed successfully (agent: {escaped_sa_id})" 2>> '{escaped_output}' || true
     wg done '{escaped_eval_id}' 2>> '{escaped_output}'
 else
@@ -1706,7 +1690,7 @@ exit $EXIT_CODE"#,
             r#"unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT
 {eval_cmd} >> '{escaped_output}' 2>&1
 EXIT_CODE=$?
-if [ $EXIT_CODE -eq 0 ]; then{flip_fragment}
+if [ $EXIT_CODE -eq 0 ]; then
     wg done '{escaped_eval_id}' 2>> '{escaped_output}'
 else
     wg fail '{escaped_eval_id}' --reason "wg evaluate exited with code $EXIT_CODE" 2>> '{escaped_output}'
@@ -1947,8 +1931,8 @@ fn spawn_agents_for_ready_tasks(
         // Evaluation tasks run inline: fork `wg evaluate`
         // directly instead of going through the full spawn machinery
         // (run.sh, executor config, etc.)
-        let is_eval_task = task.tags.iter().any(|t| t == "evaluation") && task.exec.is_some();
-        if is_eval_task {
+        let is_inline_task = task.tags.iter().any(|t| t == "evaluation" || t == "flip") && task.exec.is_some();
+        if is_inline_task {
             let eval_model = task.model.as_deref();
             eprintln!(
                 "[coordinator] Spawning eval inline for: {} - {}{}",

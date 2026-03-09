@@ -182,6 +182,9 @@ fn snapshot_evaluator_prompt_full() {
         artifact_diff: Some("diff --git a/src/widget.rs\n+pub fn create_widget() {}"),
         evaluator_identity: None,
         downstream_tasks: &[],
+        flip_score: None,
+        verify_status: None,
+        verify_findings: None,
     };
 
     let output = render_evaluator_prompt(&input);
@@ -205,6 +208,9 @@ fn snapshot_evaluator_prompt_minimal() {
         artifact_diff: None,
         evaluator_identity: None,
         downstream_tasks: &[],
+        flip_score: None,
+        verify_status: None,
+        verify_findings: None,
     };
 
     let output = render_evaluator_prompt(&input);
@@ -230,6 +236,9 @@ fn snapshot_evaluator_prompt_with_evaluator_identity() {
             "## Custom Evaluator\n\nYou are a specialized code quality evaluator.",
         ),
         downstream_tasks: &[],
+        flip_score: None,
+        verify_status: None,
+        verify_findings: None,
     };
 
     let output = render_evaluator_prompt(&input);
@@ -267,6 +276,9 @@ fn snapshot_evaluator_prompt_with_downstream_tasks() {
         artifact_diff: None,
         evaluator_identity: None,
         downstream_tasks: &downstream,
+        flip_score: None,
+        verify_status: None,
+        verify_findings: None,
     };
 
     let output = render_evaluator_prompt(&input);
