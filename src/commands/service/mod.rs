@@ -1362,6 +1362,10 @@ pub fn run_daemon(
     // This flag bypasses both the settling delay and the paused state, because
     // chat is a user-facing interaction that expects sub-second acknowledgement.
     let mut urgent_wake = false;
+    let mut pending_coordinator_ids: Vec<u32> = Vec::new();
+
+    // Load max_coordinators limit from config
+    let max_coordinators = config.coordinator.max_coordinators;
 
     while running {
         // Reap zombie child processes (agents that have exited).
@@ -1381,6 +1385,7 @@ pub fn run_daemon(
                     &mut running,
                     &mut wake_coordinator,
                     &mut conn_urgent_wake,
+                    &mut pending_coordinator_ids,
                     &mut daemon_cfg,
                     &logger,
                 ) {
@@ -1429,28 +1434,77 @@ pub fn run_daemon(
         if urgent_wake {
             urgent_wake = false;
 
-            if !coordinator_agents.is_empty() {
-                // Route chat messages to all active coordinator agents.
-                // Each coordinator checks its own inbox for pending messages.
-                match route_chat_to_all_agents(&dir, &coordinator_agents, &logger) {
-                    Ok(count) if count > 0 => {
+            if enable_coordinator_agent {
+                // Lazy-spawn coordinator agents for any pending coordinator IDs
+                // that don't already have a running agent.
+                for &cid in &pending_coordinator_ids {
+                    if !coordinator_agents.contains_key(&cid) {
+                        if coordinator_agents.len() >= max_coordinators {
+                            logger.warn(&format!(
+                                "Cannot spawn coordinator {}: at max_coordinators limit ({})",
+                                cid, max_coordinators
+                            ));
+                            continue;
+                        }
                         logger.info(&format!(
-                            "Routed {} chat message(s) to coordinator agent(s)",
-                            count
+                            "Lazy-spawning coordinator agent {} (first message received)",
+                            cid
                         ));
-                    }
-                    Ok(_) => {} // No new messages
-                    Err(e) => {
-                        logger.error(&format!("Failed to route chat to agents: {}", e));
-                        // Fall through to tick for stub response
-                        should_tick = true;
+                        match coordinator_agent::CoordinatorAgent::spawn(
+                            &dir,
+                            cid,
+                            daemon_cfg.model.as_deref(),
+                            &logger,
+                            event_log.clone(),
+                        ) {
+                            Ok(agent) => {
+                                logger.info(&format!(
+                                    "Coordinator agent {} spawned successfully ({}/{} coordinators)",
+                                    cid,
+                                    coordinator_agents.len() + 1,
+                                    max_coordinators
+                                ));
+                                coordinator_agents.insert(cid, agent);
+                            }
+                            Err(e) => {
+                                logger.warn(&format!(
+                                    "Failed to lazy-spawn coordinator agent {}: {}",
+                                    cid, e
+                                ));
+                            }
+                        }
                     }
                 }
+                pending_coordinator_ids.clear();
+
+                if !coordinator_agents.is_empty() {
+                    // Route chat messages to all active coordinator agents.
+                    // Each coordinator checks its own inbox for pending messages.
+                    match route_chat_to_all_agents(&dir, &coordinator_agents, &logger) {
+                        Ok(count) if count > 0 => {
+                            logger.info(&format!(
+                                "Routed {} chat message(s) to coordinator agent(s)",
+                                count
+                            ));
+                        }
+                        Ok(_) => {} // No new messages
+                        Err(e) => {
+                            logger.error(&format!("Failed to route chat to agents: {}", e));
+                            // Fall through to tick for stub response
+                            should_tick = true;
+                        }
+                    }
+                } else {
+                    // All coordinator agent spawns failed — fall through to stub
+                    should_tick = true;
+                    logger.info("Urgent wake (all coordinator spawns failed): using stub response");
+                }
             } else {
+                pending_coordinator_ids.clear();
                 // No coordinator agents — fall through to coordinator tick
                 // which will use the stub response via process_chat_inbox.
                 should_tick = true;
-                logger.info("Urgent wake (no coordinator agents): running coordinator tick");
+                logger.info("Urgent wake (coordinator agents disabled): running coordinator tick");
             }
         }
 
@@ -2061,6 +2115,41 @@ pub fn run_resume(dir: &Path, json: bool) -> Result<()> {
 
 #[cfg(not(unix))]
 pub fn run_resume(_dir: &Path, _json: bool) -> Result<()> {
+    anyhow::bail!("Service daemon is only supported on Unix systems")
+}
+
+/// Create a new coordinator session via IPC
+#[cfg(unix)]
+pub fn run_create_coordinator(dir: &Path, name: Option<&str>, json: bool) -> Result<()> {
+    let response = send_request(
+        dir,
+        &IpcRequest::CreateCoordinator {
+            name: name.map(|s| s.to_string()),
+        },
+    )?;
+
+    if !response.ok {
+        let msg = response
+            .error
+            .unwrap_or_else(|| "Unknown error".to_string());
+        if json {
+            let output = serde_json::json!({ "error": msg });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            eprintln!("Error: {}", msg);
+        }
+        anyhow::bail!("{}", msg);
+    }
+
+    if let Some(data) = &response.data {
+        println!("{}", serde_json::to_string_pretty(data)?);
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn run_create_coordinator(_dir: &Path, _name: Option<&str>, _json: bool) -> Result<()> {
     anyhow::bail!("Service daemon is only supported on Unix systems")
 }
 

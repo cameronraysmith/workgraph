@@ -37,6 +37,7 @@ pub fn show(dir: &Path, scope: Option<ConfigScope>, json: bool) -> Result<()> {
         println!();
         println!("[coordinator]");
         println!("  max_agents = {}", config.coordinator.max_agents);
+        println!("  max_coordinators = {}", config.coordinator.max_coordinators);
         println!("  interval = {}", config.coordinator.interval);
         println!("  poll_interval = {}", config.coordinator.poll_interval);
         println!("  executor = \"{}\"", config.coordinator.executor);
@@ -207,6 +208,7 @@ pub fn update(
     model: Option<&str>,
     interval: Option<u64>,
     max_agents: Option<usize>,
+    max_coordinators: Option<usize>,
     coordinator_interval: Option<u64>,
     poll_interval: Option<u64>,
     coordinator_executor: Option<&str>,
@@ -269,6 +271,12 @@ pub fn update(
     if let Some(max) = max_agents {
         config.coordinator.max_agents = max;
         println!("Set coordinator.max_agents = {}", max);
+        changed = true;
+    }
+
+    if let Some(max) = max_coordinators {
+        config.coordinator.max_coordinators = max;
+        println!("Set coordinator.max_coordinators = {}", max);
         changed = true;
     }
 
@@ -1061,7 +1069,8 @@ mod tests {
             Some("opencode"),
             Some("gpt-4"),
             Some(30),
-            None,
+            None, // max_agents
+            None, // max_coordinators
             None,
             None,
             None,
@@ -1114,7 +1123,8 @@ mod tests {
             None,
             None,
             None,
-            Some(8),
+            Some(8),  // max_agents
+            None,      // max_coordinators
             Some(60),
             None,
             Some("shell"),
@@ -1167,7 +1177,8 @@ mod tests {
             None,
             None,
             None,
-            None,
+            None, // max_agents
+            None, // max_coordinators
             None,
             Some(120),
             None,
@@ -1218,7 +1229,8 @@ mod tests {
             None,
             None,
             None,
-            None,
+            None, // max_agents
+            None, // max_coordinators
             None,
             None,
             None,

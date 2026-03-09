@@ -1050,6 +1050,10 @@ pub enum Commands {
         #[arg(long)]
         max_agents: Option<usize>,
 
+        /// Set max concurrent coordinator agents (LLM sessions). Default: 4.
+        #[arg(long)]
+        max_coordinators: Option<usize>,
+
         /// Set coordinator poll interval in seconds
         #[arg(long)]
         coordinator_interval: Option<u64>,
@@ -2494,6 +2498,13 @@ pub enum ServiceCommands {
         /// Model to use for spawned agents (overrides config.toml)
         #[arg(long)]
         model: Option<String>,
+    },
+
+    /// Create a new coordinator session
+    CreateCoordinator {
+        /// Optional name for the coordinator
+        #[arg(long)]
+        name: Option<String>,
     },
 
     /// Run the daemon (internal, called by start)

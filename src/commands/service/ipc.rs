@@ -163,6 +163,7 @@ pub(crate) fn handle_connection(
     running: &mut bool,
     wake_coordinator: &mut bool,
     urgent_wake: &mut bool,
+    pending_coordinator_ids: &mut Vec<u32>,
     daemon_cfg: &mut DaemonConfig,
     logger: &DaemonLogger,
 ) -> Result<()> {
@@ -207,6 +208,7 @@ pub(crate) fn handle_connection(
             running,
             wake_coordinator,
             urgent_wake,
+            pending_coordinator_ids,
             daemon_cfg,
             logger,
         );
@@ -236,6 +238,7 @@ fn handle_request(
     running: &mut bool,
     wake_coordinator: &mut bool,
     urgent_wake: &mut bool,
+    pending_coordinator_ids: &mut Vec<u32>,
     daemon_cfg: &mut DaemonConfig,
     logger: &DaemonLogger,
 ) -> IpcResponse {
@@ -396,6 +399,8 @@ fn handle_request(
                 Ok(msg_id) => {
                     // Signal urgent wake — bypasses settling delay entirely
                     *urgent_wake = true;
+                    // Track which coordinator was targeted for lazy spawning
+                    pending_coordinator_ids.push(cid);
                     IpcResponse::success(serde_json::json!({
                         "status": "accepted",
                         "request_id": request_id,
@@ -1280,6 +1285,7 @@ poll_interval = 120
         let mut running = true;
         let mut wake_coordinator = false;
         let mut urgent_wake = false;
+        let mut pending_coordinator_ids = Vec::new();
         let mut cfg = DaemonConfig {
             max_agents: 4,
             executor: "claude".to_string(),
@@ -1301,6 +1307,7 @@ poll_interval = 120
             &mut running,
             &mut wake_coordinator,
             &mut urgent_wake,
+            &mut pending_coordinator_ids,
             &mut cfg,
             &logger,
         );
@@ -1318,6 +1325,9 @@ poll_interval = 120
             !wake_coordinator,
             "wake_coordinator should NOT be set by UserChat"
         );
+
+        // Verify pending_coordinator_ids was populated
+        assert_eq!(pending_coordinator_ids, vec![0]);
 
         // Verify message was written to inbox (coordinator 0)
         let msgs = workgraph::chat::read_inbox(dir).unwrap();
@@ -1337,6 +1347,7 @@ poll_interval = 120
         let mut running = true;
         let mut wake_coordinator = false;
         let mut urgent_wake = false;
+        let mut pending_coordinator_ids = Vec::new();
         let mut cfg = DaemonConfig {
             max_agents: 4,
             executor: "claude".to_string(),
@@ -1359,6 +1370,7 @@ poll_interval = 120
             &mut running,
             &mut wake_coordinator,
             &mut urgent_wake,
+            &mut pending_coordinator_ids,
             &mut cfg,
             &logger,
         );
@@ -1366,6 +1378,9 @@ poll_interval = 120
         assert!(resp.ok);
         let data = resp.data.unwrap();
         assert_eq!(data["coordinator_id"], 1);
+
+        // Verify pending_coordinator_ids tracks the targeted coordinator
+        assert_eq!(pending_coordinator_ids, vec![1]);
 
         // Message should be in coordinator 1's inbox, not coordinator 0's
         let msgs0 = workgraph::chat::read_inbox(dir).unwrap();
@@ -1385,6 +1400,7 @@ poll_interval = 120
         let mut running = true;
         let mut wake_coordinator = false;
         let mut urgent_wake = false;
+        let mut pending_coordinator_ids = Vec::new();
         let mut cfg = DaemonConfig {
             max_agents: 4,
             executor: "claude".to_string(),
@@ -1401,6 +1417,7 @@ poll_interval = 120
             &mut running,
             &mut wake_coordinator,
             &mut urgent_wake,
+            &mut pending_coordinator_ids,
             &mut cfg,
             &logger,
         );

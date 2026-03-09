@@ -1463,6 +1463,7 @@ fn main() -> Result<()> {
             role_provider,
             retry_context_tokens,
             check_key,
+            max_coordinators,
         } => {
             // Derive scope from --global/--local flags
             let scope = if global {
@@ -1552,6 +1553,7 @@ fn main() -> Result<()> {
                     && model.is_none()
                     && set_interval.is_none()
                     && max_agents.is_none()
+                    && max_coordinators.is_none()
                     && coordinator_interval.is_none()
                     && poll_interval.is_none()
                     && coordinator_executor.is_none()
@@ -1596,6 +1598,7 @@ fn main() -> Result<()> {
                     model.as_deref(),
                     set_interval,
                     max_agents,
+                    max_coordinators,
                     coordinator_interval,
                     poll_interval,
                     coordinator_executor.as_deref(),
@@ -1733,6 +1736,9 @@ fn main() -> Result<()> {
                 executor.as_deref(),
                 model.as_deref(),
             ),
+            ServiceCommands::CreateCoordinator { name } => {
+                commands::service::run_create_coordinator(&workgraph_dir, name.as_deref(), cli.json)
+            }
             ServiceCommands::Daemon {
                 socket,
                 max_agents,
