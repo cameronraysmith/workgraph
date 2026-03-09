@@ -1398,6 +1398,88 @@ pub enum Commands {
 }
 
 #[derive(Subcommand)]
+pub enum ModelsCommands {
+    /// List models from the local registry
+    List {
+        /// Filter by tier (frontier, mid, budget)
+        #[arg(long)]
+        tier: Option<String>,
+    },
+
+    /// Search models from OpenRouter by name, ID, or description
+    Search {
+        /// Search query (matches against model ID, name, and description)
+        query: String,
+
+        /// Only show models that support tool use (function calling)
+        #[arg(long)]
+        tools: bool,
+
+        /// Skip the local cache and fetch fresh data from the API
+        #[arg(long)]
+        no_cache: bool,
+
+        /// Maximum number of results to show (default: 50)
+        #[arg(long, default_value = "50")]
+        limit: usize,
+    },
+
+    /// List all models available on OpenRouter (remote API)
+    Remote {
+        /// Only show models that support tool use (function calling)
+        #[arg(long)]
+        tools: bool,
+
+        /// Skip the local cache and fetch fresh data from the API
+        #[arg(long)]
+        no_cache: bool,
+
+        /// Maximum number of results to show (default: 100)
+        #[arg(long, default_value = "100")]
+        limit: usize,
+    },
+
+    /// Add a custom model to the local registry
+    Add {
+        /// Model ID (e.g. "anthropic/claude-opus-4-6")
+        id: String,
+
+        /// Provider name
+        #[arg(long)]
+        provider: Option<String>,
+
+        /// Cost per 1M input tokens (USD)
+        #[arg(long, name = "cost-in")]
+        cost_in: f64,
+
+        /// Cost per 1M output tokens (USD)
+        #[arg(long, name = "cost-out")]
+        cost_out: f64,
+
+        /// Context window size in tokens
+        #[arg(long)]
+        context_window: Option<u64>,
+
+        /// Capability tags (e.g. coding, analysis, tool_use)
+        #[arg(long, short)]
+        capability: Vec<String>,
+
+        /// Tier classification (frontier, mid, budget)
+        #[arg(long, default_value = "mid")]
+        tier: String,
+    },
+
+    /// Set the default model
+    SetDefault {
+        /// Model ID to set as default
+        id: String,
+    },
+
+    /// Initialize the models.yaml with defaults
+    Init,
+}
+
+#[derive(Subcommand)]
 pub enum MsgCommands {
     /// Send a message to a task/agent
     Send {
@@ -2595,6 +2677,7 @@ pub fn command_name(cmd: &Commands) -> &'static str {
         Commands::Matrix { .. } => "matrix",
         Commands::Telegram { .. } => "telegram",
         Commands::Chat { .. } => "chat",
+        Commands::Models { .. } => "models",
         Commands::NativeExec { .. } => "native-exec",
     }
 }
@@ -2660,6 +2743,7 @@ pub fn supports_json(cmd: &Commands) -> bool {
             | Commands::Stats
             | Commands::Chat { .. }
             | Commands::Telegram { .. }
+            | Commands::Models { .. }
     ) || {
         #[cfg(any(feature = "matrix", feature = "matrix-lite"))]
         {

@@ -1808,6 +1808,44 @@ fn main() -> Result<()> {
             }
             TelegramCommands::Status => commands::telegram::run_status(cli.json),
         },
+        Commands::Models { command } => match command {
+            ModelsCommands::List { tier } => {
+                commands::models::run_list(&workgraph_dir, tier.as_deref(), cli.json)
+            }
+            ModelsCommands::Search {
+                query,
+                tools,
+                no_cache,
+                limit,
+            } => commands::models::run_search(&workgraph_dir, &query, tools, no_cache, limit, cli.json),
+            ModelsCommands::Remote {
+                tools,
+                no_cache,
+                limit,
+            } => commands::models::run_list_remote(&workgraph_dir, tools, no_cache, limit, cli.json),
+            ModelsCommands::Add {
+                id,
+                provider,
+                cost_in,
+                cost_out,
+                context_window,
+                capability,
+                tier,
+            } => commands::models::run_add(
+                &workgraph_dir,
+                &id,
+                provider.as_deref(),
+                cost_in,
+                cost_out,
+                context_window,
+                &capability,
+                &tier,
+            ),
+            ModelsCommands::SetDefault { id } => {
+                commands::models::run_set_default(&workgraph_dir, &id)
+            }
+            ModelsCommands::Init => commands::models::run_init(&workgraph_dir),
+        },
         Commands::NativeExec {
             prompt_file,
             exec_mode,

@@ -58,6 +58,7 @@ pub mod log;
 pub mod match_cmd;
 #[cfg(any(feature = "matrix", feature = "matrix-lite"))]
 pub mod matrix;
+pub mod models;
 pub mod msg;
 pub mod native_exec;
 pub mod next;
