@@ -794,8 +794,10 @@ fn handle_add_task(
         return IpcResponse::error(&format!("Failed to save graph: {}", e));
     }
 
-    // Notify TUI to auto-focus on the new task
-    crate::commands::notify_new_task_focus(dir, &task_id);
+    // Notify TUI to auto-focus on the new task (skip internal/system tasks)
+    if !task_id.starts_with('.') {
+        crate::commands::notify_new_task_focus(dir, &task_id);
+    }
 
     // Record provenance
     let origin_str = origin.unwrap_or("unknown");
