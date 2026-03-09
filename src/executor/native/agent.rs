@@ -43,6 +43,8 @@ pub struct AgentLoop {
     max_turns: usize,
     output_log: PathBuf,
     stream_writer: Option<StreamWriter>,
+    /// Whether the model supports tool use. When false, tools are omitted from requests.
+    supports_tools: bool,
 }
 
 /// NDJSON log entry types for the output file.
@@ -106,6 +108,18 @@ impl AgentLoop {
         max_turns: usize,
         output_log: PathBuf,
     ) -> Self {
+        Self::with_tool_support(client, tools, system_prompt, max_turns, output_log, true)
+    }
+
+    /// Create a new agent loop, specifying whether the model supports tool use.
+    pub fn with_tool_support(
+        client: Box<dyn Provider>,
+        tools: ToolRegistry,
+        system_prompt: String,
+        max_turns: usize,
+        output_log: PathBuf,
+        supports_tools: bool,
+    ) -> Self {
         // Derive stream.jsonl path from output_log (same directory)
         let stream_path = output_log
             .parent()
@@ -119,6 +133,7 @@ impl AgentLoop {
             max_turns,
             output_log,
             stream_writer,
+            supports_tools,
         }
     }
 
@@ -154,7 +169,11 @@ impl AgentLoop {
                 max_tokens: self.client.max_tokens(),
                 system: Some(self.system_prompt.clone()),
                 messages: messages.clone(),
-                tools: self.tools.definitions(),
+                tools: if self.supports_tools {
+                    self.tools.definitions()
+                } else {
+                    vec![]
+                },
                 stream: false,
             };
 

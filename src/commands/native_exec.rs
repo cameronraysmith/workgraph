@@ -18,6 +18,7 @@ use workgraph::executor::native::agent::AgentLoop;
 use workgraph::executor::native::bundle::resolve_bundle;
 use workgraph::executor::native::provider::create_provider_ext;
 use workgraph::executor::native::tools::ToolRegistry;
+use workgraph::models::ModelRegistry;
 
 const DEFAULT_MODEL: &str = "claude-sonnet-4-5-20250514";
 
@@ -83,8 +84,19 @@ pub fn run(
     // Create the LLM provider (auto-selects by model name)
     let client = create_provider_ext(workgraph_dir, &effective_model, provider)?;
 
+    // Check if the model supports tool use
+    let model_registry = ModelRegistry::load(workgraph_dir).unwrap_or_default();
+    let supports_tools = model_registry.supports_tool_use(&effective_model);
+    if !supports_tools {
+        eprintln!(
+            "[native-exec] Model '{}' does not support tool use, sending requests without tools",
+            effective_model
+        );
+    }
+
     // Create and run the agent loop
-    let agent = AgentLoop::new(client, registry, system_prompt, max_turns, output_log);
+    let agent =
+        AgentLoop::with_tool_support(client, registry, system_prompt, max_turns, output_log, supports_tools);
 
     // Run the async agent loop
     let rt = tokio::runtime::Runtime::new().context("Failed to create tokio runtime")?;
