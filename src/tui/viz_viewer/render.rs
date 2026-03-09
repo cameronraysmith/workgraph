@@ -1999,7 +1999,7 @@ fn draw_chat_input(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         // Separator line — show edit mode hint.
         let sep_text = if is_editing && in_edit_mode {
             let w = area.width as usize;
-            let hint = " Editing (Enter=save, Esc=cancel, Ctrl+D=delete) ";
+            let hint = " Editing (Enter=save, Esc=cancel) ";
             if w > hint.len() + 2 {
                 let left = (w - hint.len()) / 2;
                 let right = w - hint.len() - left;

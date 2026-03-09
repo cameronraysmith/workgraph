@@ -611,13 +611,6 @@ fn handle_chat_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
             }
             return;
         }
-        KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) && in_edit_mode => {
-            // Ctrl+D in edit mode: delete the message
-            if let Some(idx) = app.chat.editing_index {
-                app.delete_chat_message(idx);
-            }
-            return;
-        }
         KeyCode::Char('v') if modifiers.contains(KeyModifiers::CONTROL) => {
             app.try_paste_clipboard_image();
             return;
