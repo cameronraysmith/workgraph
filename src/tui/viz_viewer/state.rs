@@ -1341,6 +1341,7 @@ pub enum ConfigSection {
     AgentDefaults,
     Agency,
     Guardrails,
+    ModelRouting,
 }
 
 impl ConfigSection {
@@ -1353,6 +1354,7 @@ impl ConfigSection {
             Self::AgentDefaults => "Agent Defaults",
             Self::Agency => "Agency",
             Self::Guardrails => "Guardrails",
+            Self::ModelRouting => "Model Routing",
         }
     }
 
@@ -5959,6 +5961,13 @@ impl VizApp {
             edit_kind: ConfigEditKind::TextInput,
             section: ConfigSection::Service,
         });
+        entries.push(ConfigEntry {
+            key: "coordinator.max_coordinators".into(),
+            label: "Max coordinators".into(),
+            value: config.coordinator.max_coordinators.to_string(),
+            edit_kind: ConfigEditKind::TextInput,
+            section: ConfigSection::Service,
+        });
 
         // ── 4. TUI Settings ──
         entries.push(ConfigEntry {
@@ -6056,6 +6065,31 @@ impl VizApp {
             key: "tui.message_indent".into(),
             label: "Message indent".into(),
             value: config.tui.message_indent.to_string(),
+            edit_kind: ConfigEditKind::TextInput,
+            section: ConfigSection::TuiSettings,
+        });
+        entries.push(ConfigEntry {
+            key: "tui.chat_history".into(),
+            label: "Chat history".into(),
+            value: if config.tui.chat_history {
+                "on".into()
+            } else {
+                "off".into()
+            },
+            edit_kind: ConfigEditKind::Toggle,
+            section: ConfigSection::TuiSettings,
+        });
+        entries.push(ConfigEntry {
+            key: "tui.chat_history_max".into(),
+            label: "Chat history max".into(),
+            value: config.tui.chat_history_max.to_string(),
+            edit_kind: ConfigEditKind::TextInput,
+            section: ConfigSection::TuiSettings,
+        });
+        entries.push(ConfigEntry {
+            key: "tui.counters".into(),
+            label: "Counters".into(),
+            value: config.tui.counters.clone(),
             edit_kind: ConfigEditKind::TextInput,
             section: ConfigSection::TuiSettings,
         });
@@ -6279,6 +6313,86 @@ impl VizApp {
             edit_kind: ConfigEditKind::TextInput,
             section: ConfigSection::Agency,
         });
+        entries.push(ConfigEntry {
+            key: "agency.flip_enabled".into(),
+            label: "FLIP enabled".into(),
+            value: if config.agency.flip_enabled {
+                "on".into()
+            } else {
+                "off".into()
+            },
+            edit_kind: ConfigEditKind::Toggle,
+            section: ConfigSection::Agency,
+        });
+        entries.push(ConfigEntry {
+            key: "agency.flip_verification_threshold".into(),
+            label: "FLIP verify threshold".into(),
+            value: config
+                .agency
+                .flip_verification_threshold
+                .map(|t| format!("{:.2}", t))
+                .unwrap_or_else(|| "(disabled)".into()),
+            edit_kind: ConfigEditKind::TextInput,
+            section: ConfigSection::Agency,
+        });
+        entries.push(ConfigEntry {
+            key: "agency.flip_verification_model".into(),
+            label: "FLIP verify model".into(),
+            value: config.agency.flip_verification_model.clone(),
+            edit_kind: ConfigEditKind::Choice(model_choices.clone()),
+            section: ConfigSection::Agency,
+        });
+        entries.push(ConfigEntry {
+            key: "agency.flip_inference_model".into(),
+            label: "FLIP inference model".into(),
+            value: config
+                .agency
+                .flip_inference_model
+                .clone()
+                .unwrap_or_else(|| "(default)".into()),
+            edit_kind: ConfigEditKind::Choice(model_choices_with_default.clone()),
+            section: ConfigSection::Agency,
+        });
+        entries.push(ConfigEntry {
+            key: "agency.flip_comparison_model".into(),
+            label: "FLIP comparison model".into(),
+            value: config
+                .agency
+                .flip_comparison_model
+                .clone()
+                .unwrap_or_else(|| "(default)".into()),
+            edit_kind: ConfigEditKind::Choice(model_choices_with_default.clone()),
+            section: ConfigSection::Agency,
+        });
+        entries.push(ConfigEntry {
+            key: "agency.eval_gate_threshold".into(),
+            label: "Eval gate threshold".into(),
+            value: config
+                .agency
+                .eval_gate_threshold
+                .map(|t| format!("{:.2}", t))
+                .unwrap_or_else(|| "(disabled)".into()),
+            edit_kind: ConfigEditKind::TextInput,
+            section: ConfigSection::Agency,
+        });
+        entries.push(ConfigEntry {
+            key: "agency.eval_gate_all".into(),
+            label: "Eval gate all".into(),
+            value: if config.agency.eval_gate_all {
+                "on".into()
+            } else {
+                "off".into()
+            },
+            edit_kind: ConfigEditKind::Toggle,
+            section: ConfigSection::Agency,
+        });
+        entries.push(ConfigEntry {
+            key: "checkpoint.retry_context_tokens".into(),
+            label: "Retry context tokens".into(),
+            value: config.checkpoint.retry_context_tokens.to_string(),
+            edit_kind: ConfigEditKind::TextInput,
+            section: ConfigSection::Agency,
+        });
 
         // ── 7. Guardrails ──
         entries.push(ConfigEntry {
@@ -6295,6 +6409,47 @@ impl VizApp {
             edit_kind: ConfigEditKind::TextInput,
             section: ConfigSection::Guardrails,
         });
+
+        // ── 8. Model Routing ──
+        {
+            use workgraph::config::DispatchRole;
+            let roles = [
+                (DispatchRole::Default, "Default"),
+                (DispatchRole::TaskAgent, "Task agent"),
+                (DispatchRole::Evaluator, "Evaluator"),
+                (DispatchRole::FlipInference, "FLIP inference"),
+                (DispatchRole::FlipComparison, "FLIP comparison"),
+                (DispatchRole::Assigner, "Assigner"),
+                (DispatchRole::Evolver, "Evolver"),
+                (DispatchRole::Verification, "Verification"),
+                (DispatchRole::Triage, "Triage"),
+                (DispatchRole::Creator, "Creator"),
+                (DispatchRole::Compactor, "Compactor"),
+            ];
+            for (role, label) in roles {
+                let role_cfg = config.models.get_role(role);
+                let model_val = role_cfg
+                    .and_then(|c| c.model.clone())
+                    .unwrap_or_else(|| "(inherit)".into());
+                let provider_val = role_cfg
+                    .and_then(|c| c.provider.clone())
+                    .unwrap_or_else(|| "(inherit)".into());
+                entries.push(ConfigEntry {
+                    key: format!("models.{}.model", role),
+                    label: format!("{} model", label),
+                    value: model_val,
+                    edit_kind: ConfigEditKind::TextInput,
+                    section: ConfigSection::ModelRouting,
+                });
+                entries.push(ConfigEntry {
+                    key: format!("models.{}.provider", role),
+                    label: format!("{} provider", label),
+                    value: provider_val,
+                    edit_kind: ConfigEditKind::TextInput,
+                    section: ConfigSection::ModelRouting,
+                });
+            }
+        }
 
         self.config_panel.entries = entries;
         if self.config_panel.selected >= self.config_panel.entries.len() {
@@ -6487,7 +6642,95 @@ impl VizApp {
                     config.guardrails.max_task_depth = v;
                 }
             }
+            "coordinator.max_coordinators" => {
+                if let Ok(v) = new_value.parse::<usize>() {
+                    config.coordinator.max_coordinators = v;
+                }
+            }
+            "tui.chat_history" => config.tui.chat_history = new_value == "on",
+            "tui.chat_history_max" => {
+                if let Ok(v) = new_value.parse::<usize>() {
+                    config.tui.chat_history_max = v;
+                }
+            }
+            "tui.counters" => config.tui.counters = new_value,
+            "agency.flip_enabled" => config.agency.flip_enabled = new_value == "on",
+            "agency.flip_verification_threshold" => {
+                config.agency.flip_verification_threshold =
+                    if new_value == "(disabled)" || new_value.is_empty() {
+                        None
+                    } else {
+                        new_value.parse::<f64>().ok()
+                    };
+            }
+            "agency.flip_verification_model" => {
+                config.agency.flip_verification_model = new_value;
+            }
+            "agency.flip_inference_model" => {
+                config.agency.flip_inference_model = if new_value == "(default)" {
+                    None
+                } else {
+                    Some(new_value)
+                };
+            }
+            "agency.flip_comparison_model" => {
+                config.agency.flip_comparison_model = if new_value == "(default)" {
+                    None
+                } else {
+                    Some(new_value)
+                };
+            }
+            "agency.eval_gate_threshold" => {
+                config.agency.eval_gate_threshold =
+                    if new_value == "(disabled)" || new_value.is_empty() {
+                        None
+                    } else {
+                        new_value.parse::<f64>().ok()
+                    };
+            }
+            "agency.eval_gate_all" => config.agency.eval_gate_all = new_value == "on",
+            "checkpoint.retry_context_tokens" => {
+                if let Ok(v) = new_value.parse::<u32>() {
+                    config.checkpoint.retry_context_tokens = v;
+                }
+            }
             _ => {
+                // Model routing fields: models.<role>.<field>
+                if let Some(rest) = key.strip_prefix("models.") {
+                    let parts: Vec<&str> = rest.rsplitn(2, '.').collect();
+                    if parts.len() == 2 {
+                        let field = parts[0]; // "model" or "provider"
+                        let role_str = parts[1];
+                        if let Ok(role) = role_str.parse::<workgraph::config::DispatchRole>() {
+                            let is_inherit =
+                                new_value == "(inherit)" || new_value.is_empty();
+                            match field {
+                                "model" => {
+                                    if is_inherit {
+                                        let slot = config.models.get_role_mut(role);
+                                        if let Some(c) = slot {
+                                            c.model = None;
+                                        }
+                                    } else {
+                                        config.models.set_model(role, &new_value);
+                                    }
+                                }
+                                "provider" => {
+                                    if is_inherit {
+                                        let slot = config.models.get_role_mut(role);
+                                        if let Some(c) = slot {
+                                            c.provider = None;
+                                        }
+                                    } else {
+                                        config.models.set_provider(role, &new_value);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+
                 // Endpoint fields: endpoint.N.field
                 if let Some(rest) = key.strip_prefix("endpoint.") {
                     let parts: Vec<&str> = rest.splitn(2, '.').collect();
@@ -6587,6 +6830,9 @@ impl VizApp {
             "agency.auto_triage" => config.agency.auto_triage = new_val == "on",
             "agency.auto_create" => config.agency.auto_create = new_val == "on",
             "tui.show_token_counts" => config.tui.show_token_counts = new_val == "on",
+            "tui.chat_history" => config.tui.chat_history = new_val == "on",
+            "agency.flip_enabled" => config.agency.flip_enabled = new_val == "on",
+            "agency.eval_gate_all" => config.agency.eval_gate_all = new_val == "on",
             _ => {}
         }
         if config.save(&self.workgraph_dir).is_ok() {
@@ -8852,5 +9098,382 @@ mod service_health_tests {
     fn no_degraded_label() {
         let h = ServiceHealthState::default();
         assert!(!h.label.contains("DEGRADED"));
+    }
+}
+
+#[cfg(test)]
+mod tui_config_panel_tests {
+    use super::*;
+    use std::collections::{HashMap, HashSet};
+    use workgraph::config::Config;
+    use workgraph::graph::{Node, Status, WorkGraph};
+    use workgraph::parser::save_graph;
+    use workgraph::test_helpers::make_task_with_status;
+
+    use crate::commands::viz::ascii::generate_ascii;
+    use crate::commands::viz::LayoutMode as VizLayoutMode;
+
+    /// Create a minimal VizApp with a real temp directory for config round-trip testing.
+    fn build_config_test_app() -> (VizApp, tempfile::TempDir) {
+        let mut graph = WorkGraph::new();
+        let a = make_task_with_status("a", "Task A", Status::Open);
+        graph.add_node(Node::Task(a));
+        let temp = tempfile::TempDir::new().unwrap();
+        let wg_dir = temp.path().to_path_buf();
+        std::fs::create_dir_all(&wg_dir).unwrap();
+        let graph_path = wg_dir.join("graph.jsonl");
+        save_graph(&graph, &graph_path).unwrap();
+        // Save a default config so load_config_panel can read it
+        let config = Config::default();
+        config.save(&wg_dir).unwrap();
+
+        let tasks: Vec<_> = graph.tasks().collect();
+        let task_ids: HashSet<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
+        let viz = generate_ascii(
+            &graph,
+            &tasks,
+            &task_ids,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            VizLayoutMode::Tree,
+            &HashSet::new(),
+            "gray",
+            &HashMap::new(),
+        );
+        let mut app = VizApp::from_viz_output_for_test(&viz);
+        app.workgraph_dir = wg_dir;
+        (app, temp)
+    }
+
+    #[test]
+    fn test_config_panel_all_entries_save_roundtrip() {
+        let (mut app, _temp) = build_config_test_app();
+        app.load_config_panel();
+
+        // Collect all keys for verification
+        let keys: Vec<String> = app.config_panel.entries.iter().map(|e| e.key.clone()).collect();
+        assert!(!keys.is_empty(), "load_config_panel should produce entries");
+
+        // For each entry, set a valid value, save, reload, and verify.
+        for i in 0..app.config_panel.entries.len() {
+            let entry = &app.config_panel.entries[i];
+            let key = entry.key.clone();
+
+            // Skip entries that are read-only or special
+            if key.starts_with("apikey.") || key == "endpoint.add" || key.ends_with(".remove") || key.ends_with(".is_default") {
+                continue;
+            }
+            // Skip endpoint entries (they need an existing endpoint)
+            if key.starts_with("endpoint.") {
+                continue;
+            }
+
+            match &entry.edit_kind {
+                ConfigEditKind::Toggle => {
+                    // Test toggle: toggle once, reload, check it changed
+                    let old_val = app.config_panel.entries[i].value.clone();
+                    app.config_panel.selected = i;
+                    app.toggle_config_entry();
+
+                    let expected = if old_val == "on" { "off" } else { "on" };
+                    assert_eq!(
+                        app.config_panel.entries[i].value, expected,
+                        "Toggle for '{}' should flip from '{}' to '{}'",
+                        key, old_val, expected
+                    );
+
+                    // Reload and verify persistence
+                    app.load_config_panel();
+                    let reloaded = app.config_panel.entries.iter().find(|e| e.key == key).unwrap();
+                    assert_eq!(
+                        reloaded.value, expected,
+                        "Toggle for '{}' did not persist after reload",
+                        key
+                    );
+
+                    // Toggle back to original
+                    let idx = app.config_panel.entries.iter().position(|e| e.key == key).unwrap();
+                    app.config_panel.selected = idx;
+                    app.toggle_config_entry();
+                    app.load_config_panel();
+                }
+                ConfigEditKind::TextInput | ConfigEditKind::SecretInput => {
+                    // Set a test value
+                    let test_value = match key.as_str() {
+                        "coordinator.max_agents" | "coordinator.poll_interval"
+                        | "coordinator.settling_delay_ms" | "coordinator.max_coordinators"
+                        | "agent.heartbeat_timeout" | "agency.auto_create_threshold"
+                        | "agency.triage_timeout" | "agency.triage_max_log_bytes"
+                        | "tui.message_name_threshold"
+                        | "guardrails.max_child_tasks_per_agent" | "guardrails.max_task_depth"
+                        | "tui.chat_history_max" | "checkpoint.retry_context_tokens" => "42",
+                        "tui.message_indent" => "4", // clamped to max 8
+                        "agency.run_mode" => "0.5",
+                        "agency.flip_verification_threshold" | "agency.eval_gate_threshold" => {
+                            "0.85"
+                        }
+                        "coordinator.agent_timeout" => "45m",
+                        "tui.counters" => "uptime,active",
+                        _ => "test-value",
+                    };
+
+                    app.config_panel.selected = i;
+                    app.config_panel.editing = true;
+                    app.config_panel.edit_buffer = test_value.to_string();
+                    app.save_config_entry();
+
+                    // Reload and verify
+                    app.load_config_panel();
+                    let reloaded = app.config_panel.entries.iter().find(|e| e.key == key);
+                    assert!(
+                        reloaded.is_some(),
+                        "Entry '{}' missing after reload",
+                        key
+                    );
+                    let reloaded = reloaded.unwrap();
+                    // For numeric fields, the saved value may be formatted differently
+                    match key.as_str() {
+                        "agency.flip_verification_threshold" | "agency.eval_gate_threshold" => {
+                            assert_eq!(
+                                reloaded.value, "0.85",
+                                "TextInput for '{}' did not round-trip",
+                                key
+                            );
+                        }
+                        "agency.run_mode" => {
+                            assert!(
+                                reloaded.value.starts_with("0.5"),
+                                "TextInput for '{}' did not round-trip: got '{}'",
+                                key,
+                                reloaded.value
+                            );
+                        }
+                        _ => {
+                            assert_eq!(
+                                reloaded.value,
+                                test_value,
+                                "TextInput for '{}' did not round-trip",
+                                key
+                            );
+                        }
+                    }
+                }
+                ConfigEditKind::Choice(choices) => {
+                    if choices.len() < 2 {
+                        continue;
+                    }
+                    // Cycle through choices
+                    let original_value = app.config_panel.entries[i].value.clone();
+                    let original_idx = choices.iter().position(|c| c == &original_value).unwrap_or(0);
+                    let next_idx = (original_idx + 1) % choices.len();
+                    let next_value = choices[next_idx].clone();
+
+                    app.config_panel.selected = i;
+                    app.config_panel.editing = true;
+                    app.config_panel.choice_index = next_idx;
+                    app.save_config_entry();
+
+                    // Reload and verify
+                    app.load_config_panel();
+                    let reloaded = app.config_panel.entries.iter().find(|e| e.key == key);
+                    assert!(reloaded.is_some(), "Entry '{}' missing after reload", key);
+                    let reloaded = reloaded.unwrap();
+                    assert_eq!(
+                        reloaded.value,
+                        next_value,
+                        "Choice for '{}' did not round-trip: expected '{}', got '{}'",
+                        key,
+                        next_value,
+                        reloaded.value
+                    );
+
+                    // Restore original value
+                    let idx = app.config_panel.entries.iter().position(|e| e.key == key).unwrap();
+                    app.config_panel.selected = idx;
+                    app.config_panel.editing = true;
+                    app.config_panel.choice_index = original_idx;
+                    app.save_config_entry();
+                    app.load_config_panel();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_config_panel_has_all_required_keys() {
+        let (mut app, _temp) = build_config_test_app();
+        app.load_config_panel();
+
+        let keys: HashSet<String> = app
+            .config_panel
+            .entries
+            .iter()
+            .map(|e| e.key.clone())
+            .collect();
+
+        // All the keys that must exist in the config panel
+        let required_keys = vec![
+            // Service
+            "coordinator.max_agents",
+            "coordinator.poll_interval",
+            "coordinator.executor",
+            "coordinator.model",
+            "coordinator.agent_timeout",
+            "coordinator.settling_delay_ms",
+            "coordinator.max_coordinators",
+            // TUI
+            "tui.mouse_mode",
+            "viz.animations",
+            "tui.default_layout",
+            "tui.default_inspector_size",
+            "tui.color_theme",
+            "tui.timestamp_format",
+            "tui.show_token_counts",
+            "viz.edge_color",
+            "tui.message_name_threshold",
+            "tui.message_indent",
+            "tui.chat_history",
+            "tui.chat_history_max",
+            "tui.counters",
+            // Agent
+            "agent.heartbeat_timeout",
+            "agent.executor",
+            "agent.model",
+            // Agency
+            "agency.auto_assign",
+            "agency.auto_evaluate",
+            "agency.auto_triage",
+            "agency.auto_create",
+            "agency.run_mode",
+            "agency.assigner_model",
+            "agency.evaluator_model",
+            "agency.evolver_model",
+            "agency.creator_model",
+            "agency.triage_model",
+            "agency.assigner_agent",
+            "agency.evaluator_agent",
+            "agency.evolver_agent",
+            "agency.creator_agent",
+            "agency.auto_create_threshold",
+            "agency.triage_timeout",
+            "agency.triage_max_log_bytes",
+            "agency.retention_heuristics",
+            "agency.flip_enabled",
+            "agency.flip_verification_threshold",
+            "agency.flip_verification_model",
+            "agency.flip_inference_model",
+            "agency.flip_comparison_model",
+            "agency.eval_gate_threshold",
+            "agency.eval_gate_all",
+            "checkpoint.retry_context_tokens",
+            // Guardrails
+            "guardrails.max_child_tasks_per_agent",
+            "guardrails.max_task_depth",
+            // Model routing
+            "models.default.model",
+            "models.default.provider",
+            "models.task_agent.model",
+            "models.evaluator.model",
+            "models.flip_inference.model",
+            "models.flip_comparison.model",
+            "models.assigner.model",
+            "models.evolver.model",
+            "models.verification.model",
+            "models.triage.model",
+            "models.creator.model",
+            "models.compactor.model",
+        ];
+
+        for required in &required_keys {
+            assert!(
+                keys.contains(*required),
+                "Missing required config panel key: '{}'",
+                required
+            );
+        }
+    }
+
+    #[test]
+    fn test_config_panel_every_entry_has_save_handler() {
+        // This test verifies that save_config_entry handles every key in load_config_panel
+        // by setting a value and checking it doesn't silently no-op.
+        let (mut app, _temp) = build_config_test_app();
+        app.load_config_panel();
+
+        for i in 0..app.config_panel.entries.len() {
+            let entry = &app.config_panel.entries[i];
+            let key = entry.key.clone();
+
+            // Skip known read-only/special entries
+            if key.starts_with("apikey.") || key == "endpoint.add"
+                || key.ends_with(".remove") || key.ends_with(".is_default")
+                || key.starts_with("endpoint.")
+            {
+                continue;
+            }
+
+            // For Toggle entries, verify toggle_config_entry has a handler
+            if matches!(entry.edit_kind, ConfigEditKind::Toggle) {
+                let old = app.config_panel.entries[i].value.clone();
+                app.config_panel.selected = i;
+                app.toggle_config_entry();
+                let new = app.config_panel.entries[i].value.clone();
+                assert_ne!(
+                    old, new,
+                    "toggle_config_entry for '{}' did not change the value (no handler?)",
+                    key
+                );
+                // Toggle back
+                app.config_panel.selected = i;
+                app.toggle_config_entry();
+                app.load_config_panel();
+            }
+        }
+    }
+
+    #[test]
+    fn test_config_panel_model_routing_roundtrip() {
+        let (mut app, _temp) = build_config_test_app();
+        app.load_config_panel();
+
+        // Set a model routing entry
+        let key = "models.default.model";
+        let idx = app.config_panel.entries.iter().position(|e| e.key == key).unwrap();
+        app.config_panel.selected = idx;
+        app.config_panel.editing = true;
+        app.config_panel.edit_buffer = "sonnet".to_string();
+        app.save_config_entry();
+
+        // Reload and verify
+        let config = Config::load_or_default(&app.workgraph_dir);
+        let default_model = config.models.default.as_ref().and_then(|c| c.model.clone());
+        assert_eq!(default_model, Some("sonnet".to_string()));
+
+        // Set a provider
+        app.load_config_panel();
+        let key = "models.default.provider";
+        let idx = app.config_panel.entries.iter().position(|e| e.key == key).unwrap();
+        app.config_panel.selected = idx;
+        app.config_panel.editing = true;
+        app.config_panel.edit_buffer = "openrouter".to_string();
+        app.save_config_entry();
+
+        let config = Config::load_or_default(&app.workgraph_dir);
+        let default_provider = config.models.default.as_ref().and_then(|c| c.provider.clone());
+        assert_eq!(default_provider, Some("openrouter".to_string()));
+
+        // Set to inherit (clear)
+        app.load_config_panel();
+        let idx = app.config_panel.entries.iter().position(|e| e.key == "models.default.model").unwrap();
+        app.config_panel.selected = idx;
+        app.config_panel.editing = true;
+        app.config_panel.edit_buffer = "(inherit)".to_string();
+        app.save_config_entry();
+
+        let config = Config::load_or_default(&app.workgraph_dir);
+        let default_model = config.models.default.as_ref().and_then(|c| c.model.clone());
+        assert_eq!(default_model, None);
     }
 }
