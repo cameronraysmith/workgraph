@@ -700,19 +700,44 @@ fn resurrect_done_tasks(graph: &mut workgraph::graph::WorkGraph, dir: &Path) -> 
                 );
                 modified = true;
             }
+
+            // Reopen .assign-* dependency so reassignment can happen
+            let assign_id = format!(".assign-{}", task_id);
+            if let Some(assign_task) = graph.get_task_mut(&assign_id) {
+                if assign_task.status == Status::Done {
+                    assign_task.status = Status::Open;
+                    assign_task.assigned = None;
+                    assign_task.completed_at = None;
+                    assign_task.description = None;
+                    assign_task.log.push(LogEntry {
+                        timestamp: Utc::now().to_rfc3339(),
+                        actor: Some("coordinator".to_string()),
+                        message: "Reopened for reassignment (source task resurrected)"
+                            .to_string(),
+                    });
+                    eprintln!(
+                        "[coordinator] Resurrection: reopened '{}' for reassignment",
+                        assign_id,
+                    );
+                }
+            }
         }
     }
 
     modified
 }
 
-/// Auto-assign: run lightweight LLM assignment for unassigned ready tasks.
+/// Auto-assign: scaffold `.assign-*` tasks and run lightweight LLM assignment.
 ///
-/// Uses a single `run_lightweight_llm_call()` to select the best agent for each
-/// task (replaces the old multi-turn Claude Code session approach). The LLM
-/// receives the full agent catalog and task context, and returns a JSON verdict
-/// with agent_hash, exec_mode, and context_scope. A `.assign-*` task is created
-/// (marked Done) for audit trail only — no blocking edge or agent spawn needed.
+/// Phase 1 — Scaffold: For ready unassigned non-system tasks without an
+/// `.assign-*` task, create one as a blocking dependency. This handles tasks
+/// created via `wg add`; published tasks already have `.assign-*` from
+/// publish-time scaffolding. Also reopens stale Done `.assign-*` tasks when
+/// the source task was resurrected.
+///
+/// Phase 2 — Process: For each Open `.assign-*` task, run a lightweight LLM
+/// call to select the best agent, set the agent on the source task, and mark
+/// `.assign-*` as Done (which unblocks the source task via graph edges).
 ///
 /// Returns `true` if the graph was modified.
 fn build_auto_assign_tasks(
@@ -724,97 +749,108 @@ fn build_auto_assign_tasks(
 
     let grace_seconds = config.agency.auto_assign_grace_seconds;
 
-    // Collect task data to avoid holding references while mutating graph
-    let ready_task_data: Vec<_> = {
-        let cycle_analysis = graph.compute_cycle_analysis();
-        let ready = ready_tasks_with_peers_cycle_aware(graph, dir, &cycle_analysis);
-        ready
-            .iter()
-            .map(|t| {
-                (
-                    t.id.clone(),
-                    t.title.clone(),
-                    t.description.clone(),
-                    t.skills.clone(),
-                    t.agent.clone(),
-                    t.assigned.clone(),
-                    t.tags.clone(),
-                    t.after.clone(),
-                    t.context_scope.clone(),
-                    t.created_at.clone(),
-                )
-            })
-            .collect()
-    };
+    // Phase 1: Scaffold .assign-* for ready unassigned tasks that don't have one.
+    // Also reopens stale Done .assign-* tasks for resurrected source tasks.
+    {
+        let ready_task_data: Vec<_> = {
+            let cycle_analysis = graph.compute_cycle_analysis();
+            let ready = ready_tasks_with_peers_cycle_aware(graph, dir, &cycle_analysis);
+            ready
+                .iter()
+                .filter(|t| t.agent.is_none() && t.assigned.is_none())
+                .filter(|t| !workgraph::graph::is_system_task(&t.id))
+                .map(|t| (t.id.clone(), t.title.clone(), t.created_at.clone()))
+                .collect()
+        };
 
-    // Compute total assignments for run mode routing
+        for (task_id, task_title, task_created_at) in ready_task_data {
+            // Grace period: skip tasks created less than `auto_assign_grace_seconds` ago.
+            if grace_seconds > 0
+                && let Some(ref created_str) = task_created_at
+                && let Ok(created) = created_str.parse::<chrono::DateTime<chrono::Utc>>()
+            {
+                let age = Utc::now().signed_duration_since(created);
+                if age.num_seconds() < grace_seconds as i64 {
+                    eprintln!(
+                        "[coordinator] Skipping auto-assign for '{}': created {}s ago (grace period: {}s)",
+                        task_id, age.num_seconds(), grace_seconds,
+                    );
+                    continue;
+                }
+            }
+
+            let assign_task_id = format!(".assign-{}", task_id);
+
+            if let Some(existing) = graph.get_task(&assign_task_id) {
+                if existing.status == Status::Done {
+                    // Stale: source is ready but unassigned, old .assign is Done.
+                    // Reopen for fresh assignment.
+                    if let Some(t) = graph.get_task_mut(&assign_task_id) {
+                        t.status = Status::Open;
+                        t.assigned = None;
+                        t.completed_at = None;
+                        t.description = None;
+                        t.log.push(LogEntry {
+                            timestamp: Utc::now().to_rfc3339(),
+                            actor: Some("coordinator".to_string()),
+                            message: "Reopened for reassignment (source task resurrected)"
+                                .to_string(),
+                        });
+                    }
+                    // Ensure blocking edge exists (may be missing for pre-migration tasks)
+                    if let Some(source) = graph.get_task_mut(&task_id) {
+                        if !source.after.iter().any(|a| a == &assign_task_id) {
+                            source.after.push(assign_task_id.clone());
+                        }
+                    }
+                    modified = true;
+                }
+                // Already exists (Open or just reopened) — Phase 2 will process it
+                continue;
+            }
+
+            // Create .assign-* with blocking edge via shared scaffold helper
+            crate::commands::eval_scaffold::scaffold_assign_task(
+                graph, &task_id, &task_title,
+            );
+            modified = true;
+        }
+    }
+
+    // Phase 2: Process ready .assign-* tasks (run lightweight LLM assignment).
+    // These may have been created at publish time or in Phase 1 above.
     let agency_dir = dir.join("agency");
     let total_assignments = count_assignment_records(&agency_dir.join("assignments")) as u32;
 
-    for (
-        task_id,
-        task_title,
-        task_desc,
-        task_skills,
-        task_agent,
-        task_assigned,
-        task_tags,
-        task_after,
-        task_context_scope,
-        task_created_at,
-    ) in ready_task_data
-    {
-        // Skip tasks that already have an agent or are already claimed
-        if task_agent.is_some() || task_assigned.is_some() {
-            continue;
-        }
+    let assign_task_ids: Vec<String> = graph
+        .tasks()
+        .filter(|t| t.id.starts_with(".assign-") && t.status == Status::Open && !t.paused)
+        .map(|t| t.id.clone())
+        .collect();
 
-        // Skip system tasks (dot-prefixed) to prevent infinite regress
-        if workgraph::graph::is_system_task(&task_id) {
-            continue;
-        }
+    for assign_task_id in assign_task_ids {
+        let source_id = match assign_task_id.strip_prefix(".assign-") {
+            Some(id) => id.to_string(),
+            None => continue,
+        };
 
-        // Grace period: skip tasks created less than `auto_assign_grace_seconds` ago.
-        // This prevents premature assignment when tasks are created and then have
-        // dependencies wired shortly after (e.g., `wg add` then `wg edit --add-after`).
-        if grace_seconds > 0
-            && let Some(ref created_str) = task_created_at
-            && let Ok(created) = created_str.parse::<chrono::DateTime<chrono::Utc>>()
-        {
-            let age = Utc::now().signed_duration_since(created);
-            if age.num_seconds() < grace_seconds as i64 {
-                eprintln!(
-                    "[coordinator] Skipping auto-assign for '{}': created {}s ago (grace period: {}s)",
-                    task_id,
-                    age.num_seconds(),
-                    grace_seconds,
-                );
-                continue;
-            }
-        }
-
-        let assign_task_id = format!(".assign-{}", task_id);
-
-        // Skip if assignment task already exists (idempotent).
-        // However, if the source task was resurrected (reopened after completion)
-        // while the old .assign-* is still Done, the assignment is stale — remove
-        // the old one so a fresh assignment can be created.
-        if let Some(existing) = graph.get_task(&assign_task_id) {
-            if existing.status == Status::Done {
-                // Stale assignment: source is ready but .assign is done.
-                // Remove it so we can create a new one below.
-                graph.remove_node(&assign_task_id);
-                modified = true;
-            } else {
-                continue;
-            }
-        }
+        // Get source task data for the LLM call
+        let (task_title, task_desc, task_skills, task_tags, task_after, task_context_scope) =
+            match graph.get_task(&source_id) {
+                Some(t) => (
+                    t.title.clone(),
+                    t.description.clone(),
+                    t.skills.clone(),
+                    t.tags.clone(),
+                    t.after.clone(),
+                    t.context_scope.clone(),
+                ),
+                None => continue,
+            };
 
         // Determine assignment path via run mode continuum
         let rng_value: f64 = {
-            // Simple deterministic pseudo-random from task_id hash to avoid
-            // requiring rand crate. Provides adequate entropy for routing.
-            let hash = task_id
+            let hash = source_id
                 .bytes()
                 .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
             (hash % 10000) as f64 / 10000.0
@@ -837,7 +873,6 @@ fn build_auto_assign_tasks(
         };
 
         let cached_agents: Vec<(String, f64)> = if assignment_path == AssignmentPath::Performance {
-            // Gather top cached agents for the performance mode context
             let agents_dir = agency_dir.join("cache/agents");
             let mut agents_with_scores: Vec<(String, f64)> =
                 agency::load_all_agents_or_warn(&agents_dir)
@@ -853,7 +888,7 @@ fn build_auto_assign_tasks(
                     .collect();
             agents_with_scores
                 .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            agents_with_scores.truncate(5); // Top 5
+            agents_with_scores.truncate(5);
             agents_with_scores
         } else {
             vec![]
@@ -874,7 +909,7 @@ fn build_auto_assign_tasks(
 
         eprintln!(
             "[coordinator] Assignment path for '{}': {:?} (run_mode={:.2}, total_assignments={})",
-            task_id, assignment_path, config.agency.run_mode, total_assignments,
+            source_id, assignment_path, config.agency.run_mode, total_assignments,
         );
 
         // Detect task underspecification
@@ -907,7 +942,7 @@ fn build_auto_assign_tasks(
 
         // Build a temporary Task with the gathered data for the prompt builder
         let task_snapshot = Task {
-            id: task_id.clone(),
+            id: source_id.clone(),
             title: task_title.clone(),
             description: task_desc.clone(),
             skills: task_skills.clone(),
@@ -917,7 +952,7 @@ fn build_auto_assign_tasks(
             ..Default::default()
         };
 
-        // Run lightweight LLM call for assignment (replaces full Claude Code session)
+        // Run lightweight LLM call for assignment
         let (verdict, assign_token_usage) = match super::assignment::run_lightweight_assignment(
             config,
             &task_snapshot,
@@ -931,7 +966,7 @@ fn build_auto_assign_tasks(
             Err(e) => {
                 eprintln!(
                     "[coordinator] Lightweight assignment failed for '{}': {}, will retry next tick",
-                    task_id, e
+                    source_id, e
                 );
                 continue;
             }
@@ -943,30 +978,28 @@ fn build_auto_assign_tasks(
             Err(e) => {
                 eprintln!(
                     "[coordinator] Assignment verdict agent '{}' not found for '{}': {}",
-                    verdict.agent_hash, task_id, e
+                    verdict.agent_hash, source_id, e
                 );
                 continue;
             }
         };
 
-        // Apply assignment to the original task
-        if let Some(task) = graph.get_task_mut(&task_id) {
+        // Apply assignment to the source task
+        if let Some(task) = graph.get_task_mut(&source_id) {
             task.agent = Some(resolved_agent.id.clone());
             if let Some(ref mode) = verdict.exec_mode
                 && mode.parse::<workgraph::config::ExecMode>().is_ok()
             {
                 task.exec_mode = Some(mode.clone());
             }
-            // else: invalid value, keep default
             if let Some(ref scope) = verdict.context_scope {
                 match scope.as_str() {
                     "clean" | "task" | "graph" | "full" => {
-                        // Only set if not already pre-set
                         if task.context_scope.is_none() {
                             task.context_scope = Some(scope.clone());
                         }
                     }
-                    _ => {} // invalid, keep default
+                    _ => {}
                 }
             }
             task.log.push(LogEntry {
@@ -983,79 +1016,39 @@ fn build_auto_assign_tasks(
             });
         }
 
-        // Create .assign-* task marked Done for audit trail (no blocking edge needed)
+        // Mark the .assign-* task as Done (unblocks source task via graph edge)
         let now = Utc::now().to_rfc3339();
-        let assign_task = Task {
-            id: assign_task_id.clone(),
-            title: format!("Assign agent for: {}", task_title),
-            description: Some(format!(
+        if let Some(assign_task) = graph.get_task_mut(&assign_task_id) {
+            assign_task.status = Status::Done;
+            assign_task.description = Some(format!(
                 "Lightweight assignment: {} ({}) → '{}'\nReason: {}",
                 resolved_agent.name,
                 agency::short_hash(&resolved_agent.id),
-                task_id,
+                source_id,
                 verdict.reason,
-            )),
-            status: Status::Done,
-            assigned: None,
-            estimate: None,
-            before: vec![task_id.clone()],
-            after: vec![],
-            requires: vec![],
-            tags: vec!["assignment".to_string(), "agency".to_string()],
-            skills: vec![],
-            inputs: vec![],
-            deliverables: vec![],
-            artifacts: vec![],
-            exec: None,
-            not_before: None,
-            created_at: Some(now.clone()),
-            started_at: Some(now.clone()),
-            completed_at: Some(now),
-            log: vec![LogEntry {
+            ));
+            assign_task.started_at = Some(now.clone());
+            assign_task.completed_at = Some(now);
+            assign_task.model = Some(
+                config
+                    .resolve_model_for_role(workgraph::config::DispatchRole::Assigner)
+                    .model,
+            );
+            assign_task.provider = config
+                .resolve_model_for_role(workgraph::config::DispatchRole::Assigner)
+                .provider;
+            assign_task.agent = config.agency.assigner_agent.clone();
+            assign_task.token_usage = assign_token_usage;
+            assign_task.exec_mode = Some("bare".to_string());
+            assign_task.log.push(LogEntry {
                 timestamp: Utc::now().to_rfc3339(),
                 actor: Some("coordinator".to_string()),
                 message: format!(
                     "Completed via lightweight LLM call (path: {:?})",
                     assignment_path,
                 ),
-            }],
-            retry_count: 0,
-            max_retries: None,
-            failure_reason: None,
-            model: Some(
-                config
-                    .resolve_model_for_role(workgraph::config::DispatchRole::Assigner)
-                    .model,
-            ),
-            provider: config
-                .resolve_model_for_role(workgraph::config::DispatchRole::Assigner)
-                .provider,
-            verify: None,
-            agent: config.agency.assigner_agent.clone(),
-            loop_iteration: 0,
-            cycle_failure_restarts: 0,
-            ready_after: None,
-            paused: false,
-            visibility: "internal".to_string(),
-            context_scope: None,
-            cycle_config: None,
-            token_usage: assign_token_usage,
-            session_id: None,
-            wait_condition: None,
-            checkpoint: None,
-            resurrection_count: 0,
-            last_resurrected_at: None,
-            validation: None,
-            validation_commands: vec![],
-            test_required: false,
-            rejection_count: 0,
-            max_rejections: None,
-            exec_mode: Some("bare".to_string()),
-            superseded_by: vec![],
-            supersedes: None,
-        };
-
-        graph.add_node(Node::Task(assign_task));
+            });
+        }
 
         // Persist TaskAssignmentRecord with actual agent info
         let assignment_mode = match assignment_path {
@@ -1078,7 +1071,7 @@ fn build_auto_assign_tasks(
         };
 
         let record = TaskAssignmentRecord {
-            task_id: task_id.clone(),
+            task_id: source_id.clone(),
             agent_id: resolved_agent.id.clone(),
             composition_id: resolved_agent.id.clone(),
             timestamp: Utc::now().to_rfc3339(),
@@ -1090,13 +1083,13 @@ fn build_auto_assign_tasks(
         if let Err(e) = save_assignment_record(&record, &assignments_dir) {
             eprintln!(
                 "[coordinator] Warning: failed to save assignment record for '{}': {}",
-                task_id, e,
+                source_id, e,
             );
         }
 
         eprintln!(
             "[coordinator] Lightweight assignment for '{}': {} ({}) [path={:?}]",
-            task_id,
+            source_id,
             resolved_agent.name,
             agency::short_hash(&resolved_agent.id),
             assignment_path,
@@ -1929,11 +1922,11 @@ fn spawn_agents_for_ready_tasks(
             }
         }
 
-        // When auto_assign is enabled, non-system tasks must go through the
-        // assignment flow (build_auto_assign_tasks → .assign-* task → wg assign)
-        // before being spawned.  The assignment flow sets `task.agent`; if it's
-        // still None the task hasn't been assigned yet — skip it so the next
-        // tick's Phase 3 can create the .assign-* task.
+        // Defense-in-depth: when auto_assign is enabled, non-system tasks
+        // should have an agent set before being spawned. Normally the graph
+        // dependency on `.assign-*` prevents reaching here without an agent,
+        // but this gate catches edge cases (e.g., pre-migration tasks without
+        // the `.assign-*` blocking edge).
         if auto_assign && !workgraph::graph::is_system_task(&task.id) && task.agent.is_none() {
             continue;
         }
@@ -3641,14 +3634,14 @@ mod tests {
         let config = Config::load_or_default(wg_dir);
         let _modified = build_auto_assign_tasks(&mut graph, &config, wg_dir);
 
-        // The stale Done .assign should be removed, unblocking re-assignment.
-        // (The LLM call to create a new assignment will fail in tests, but
-        // the critical fix is that the stale guard no longer blocks progress —
-        // on the next coordinator tick a fresh assignment attempt will proceed.)
+        // The stale Done .assign should be reopened for fresh assignment.
+        // (The LLM call will fail in tests, but the critical fix is that the
+        // stale guard no longer blocks progress — the reopened .assign-* will
+        // be processed on the next coordinator tick.)
         let assign = graph.get_task(".assign-my-task");
         assert!(
             assign.is_none() || assign.unwrap().status != Status::Done,
-            "stale Done .assign-my-task should be removed after resurrection"
+            "stale Done .assign-my-task should be reopened after resurrection"
         );
     }
 

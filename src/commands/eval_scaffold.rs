@@ -1,8 +1,13 @@
-//! Eager evaluation-task scaffolding.
+//! Eager lifecycle-task scaffolding.
 //!
-//! Creates `.evaluate-<task>` tasks at publish time (rather than lazily during
-//! coordinator ticks) so every published task is guaranteed to have an eval
-//! pipeline regardless of daemon crashes or restarts.
+//! Creates `.assign-<task>`, `.evaluate-<task>`, and `.flip-<task>` tasks at
+//! publish time so every published task has a full lifecycle chain as real
+//! graph edges:
+//!
+//! ```text
+//! .assign-foo → foo → .evaluate-foo
+//!                   → .flip-foo
+//! ```
 
 use chrono::Utc;
 use std::path::Path;
@@ -70,6 +75,84 @@ pub fn scaffold_flip_task(
     );
 
     true
+}
+
+/// Create a `.assign-<task_id>` task in `graph` that blocks `task_id`.
+///
+/// The assign task is created Open with no dependencies (immediately ready).
+/// The source task gets `.assign-<task_id>` added to its `after` list,
+/// making it blocked until assignment completes.
+///
+/// Returns `true` if the graph was modified.
+/// Idempotent: returns `false` if the assign task already exists.
+pub fn scaffold_assign_task(
+    graph: &mut WorkGraph,
+    task_id: &str,
+    task_title: &str,
+) -> bool {
+    let assign_task_id = format!(".assign-{}", task_id);
+
+    // Idempotent: skip if assign task already exists
+    if graph.get_task(&assign_task_id).is_some() {
+        return false;
+    }
+
+    // Skip system tasks (no assign for .evaluate, .flip, etc.)
+    if workgraph::graph::is_system_task(task_id) {
+        return false;
+    }
+
+    // Skip tasks that are part of the evaluation/assignment infrastructure
+    if let Some(task) = graph.get_task(task_id)
+        && task
+            .tags
+            .iter()
+            .any(|tag| DOMINATED_TAGS.contains(&tag.as_str()))
+    {
+        return false;
+    }
+
+    let assign_task = Task {
+        id: assign_task_id.clone(),
+        title: format!("Assign agent for: {}", task_title),
+        status: Status::Open,
+        before: vec![task_id.to_string()],
+        tags: vec!["assignment".to_string(), "agency".to_string()],
+        visibility: "internal".to_string(),
+        created_at: Some(Utc::now().to_rfc3339()),
+        ..Task::default()
+    };
+
+    graph.add_node(Node::Task(assign_task));
+
+    // Add blocking edge: source task depends on .assign-*
+    if let Some(source) = graph.get_task_mut(task_id)
+        && !source.after.iter().any(|a| a == &assign_task_id)
+    {
+        source.after.push(assign_task_id.clone());
+    }
+
+    eprintln!(
+        "[eval-scaffold] Created assignment task '{}' blocking '{}'",
+        assign_task_id, task_id,
+    );
+
+    true
+}
+
+/// Scaffold assign tasks for multiple task IDs at once (batch mode for publish).
+/// Returns the number of assign tasks created.
+pub fn scaffold_assign_tasks_batch(
+    graph: &mut WorkGraph,
+    task_ids: &[(String, String)], // (id, title) pairs
+) -> usize {
+    let mut count = 0;
+    for (task_id, task_title) in task_ids {
+        if scaffold_assign_task(graph, task_id, task_title) {
+            count += 1;
+        }
+    }
+    count
 }
 
 /// Create a `.evaluate-<task_id>` task in `graph`, blocked by `task_id`.
@@ -466,5 +549,115 @@ mod tests {
             &config
         ));
         assert!(graph.get_task(".evaluate-flip-infra").is_none());
+    }
+
+    // --- Assign scaffolding tests ---
+
+    #[test]
+    fn test_scaffold_assign_creates_assign_task() {
+        let mut graph = WorkGraph::new();
+        graph.add_node(Node::Task(make_task("my-task", "My Task")));
+
+        let modified = scaffold_assign_task(&mut graph, "my-task", "My Task");
+        assert!(modified);
+
+        let assign = graph.get_task(".assign-my-task").unwrap();
+        assert_eq!(assign.title, "Assign agent for: My Task");
+        assert_eq!(assign.status, Status::Open);
+        assert_eq!(assign.before, vec!["my-task".to_string()]);
+        assert!(assign.tags.contains(&"assignment".to_string()));
+        assert!(assign.tags.contains(&"agency".to_string()));
+        assert_eq!(assign.visibility, "internal");
+
+        // Source task should have .assign-* as a blocker
+        let source = graph.get_task("my-task").unwrap();
+        assert!(source.after.contains(&".assign-my-task".to_string()));
+    }
+
+    #[test]
+    fn test_scaffold_assign_idempotent() {
+        let mut graph = WorkGraph::new();
+        graph.add_node(Node::Task(make_task("my-task", "My Task")));
+
+        assert!(scaffold_assign_task(&mut graph, "my-task", "My Task"));
+        assert!(!scaffold_assign_task(&mut graph, "my-task", "My Task"));
+    }
+
+    #[test]
+    fn test_scaffold_assign_skips_system_tasks() {
+        let mut graph = WorkGraph::new();
+        graph.add_node(Node::Task(make_task(".evaluate-foo", "Eval Foo")));
+
+        assert!(!scaffold_assign_task(
+            &mut graph,
+            ".evaluate-foo",
+            "Eval Foo"
+        ));
+        assert!(graph.get_task(".assign-.evaluate-foo").is_none());
+    }
+
+    #[test]
+    fn test_scaffold_assign_skips_dominated_tags() {
+        let mut graph = WorkGraph::new();
+        let mut task = make_task("assign-infra", "Assign Infra");
+        task.tags = vec!["assignment".to_string()];
+        graph.add_node(Node::Task(task));
+
+        assert!(!scaffold_assign_task(
+            &mut graph,
+            "assign-infra",
+            "Assign Infra"
+        ));
+    }
+
+    #[test]
+    fn test_scaffold_assign_batch() {
+        let mut graph = WorkGraph::new();
+        graph.add_node(Node::Task(make_task("a", "Task A")));
+        graph.add_node(Node::Task(make_task("b", "Task B")));
+
+        let ids = vec![
+            ("a".to_string(), "Task A".to_string()),
+            ("b".to_string(), "Task B".to_string()),
+        ];
+        let count = scaffold_assign_tasks_batch(&mut graph, &ids);
+        assert_eq!(count, 2);
+        assert!(graph.get_task(".assign-a").is_some());
+        assert!(graph.get_task(".assign-b").is_some());
+    }
+
+    // --- Full lifecycle chain test ---
+
+    #[test]
+    fn test_publish_creates_full_lifecycle_chain() {
+        let dir = tempdir().unwrap();
+        let mut config = Config::default();
+        config.agency.flip_enabled = true;
+        let mut graph = WorkGraph::new();
+        graph.add_node(Node::Task(make_task("foo", "Foo Task")));
+
+        // Scaffold the full lifecycle chain
+        scaffold_assign_task(&mut graph, "foo", "Foo Task");
+        scaffold_eval_task(dir.path(), &mut graph, "foo", "Foo Task", &config);
+
+        // Verify .assign-foo exists and blocks foo
+        let assign = graph.get_task(".assign-foo").unwrap();
+        assert_eq!(assign.status, Status::Open);
+        assert_eq!(assign.before, vec!["foo".to_string()]);
+
+        // Verify foo has .assign-foo in its after list
+        let foo = graph.get_task("foo").unwrap();
+        assert!(foo.after.contains(&".assign-foo".to_string()));
+
+        // Verify .flip-foo exists and depends on foo
+        let flip = graph.get_task(".flip-foo").unwrap();
+        assert_eq!(flip.after, vec!["foo".to_string()]);
+
+        // Verify .evaluate-foo exists and depends on .flip-foo
+        let eval = graph.get_task(".evaluate-foo").unwrap();
+        assert_eq!(eval.after, vec![".flip-foo".to_string()]);
+
+        // Full chain: .assign-foo → foo → .flip-foo → .evaluate-foo
+        //                              → (also visible in .flip-foo.after)
     }
 }
