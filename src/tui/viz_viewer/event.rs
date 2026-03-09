@@ -1110,12 +1110,30 @@ fn handle_right_panel_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
             app.cycle_inspector_view_forward();
         }
 
-        // Left/Right cycle tabs
+        // Left/Right: on Chat tab, cycle coordinators; otherwise cycle tabs
         KeyCode::Left => {
-            app.right_panel_tab = app.right_panel_tab.prev();
+            if app.right_panel_tab == RightPanelTab::Chat {
+                let ids = app.list_coordinator_ids();
+                if ids.len() > 1 {
+                    let pos = ids.iter().position(|&id| id == app.active_coordinator_id).unwrap_or(0);
+                    let prev = if pos == 0 { ids.len() - 1 } else { pos - 1 };
+                    app.switch_coordinator(ids[prev]);
+                }
+            } else {
+                app.right_panel_tab = app.right_panel_tab.prev();
+            }
         }
         KeyCode::Right => {
-            app.right_panel_tab = app.right_panel_tab.next();
+            if app.right_panel_tab == RightPanelTab::Chat {
+                let ids = app.list_coordinator_ids();
+                if ids.len() > 1 {
+                    let pos = ids.iter().position(|&id| id == app.active_coordinator_id).unwrap_or(0);
+                    let next = (pos + 1) % ids.len();
+                    app.switch_coordinator(ids[next]);
+                }
+            } else {
+                app.right_panel_tab = app.right_panel_tab.next();
+            }
         }
 
         // Up/Down/k/j scroll the active panel content

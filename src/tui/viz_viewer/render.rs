@@ -4314,9 +4314,9 @@ fn action_hints_parts(app: &VizApp) -> (&str, &str, Color, Vec<(&str, &str)>) {
                 Color::Magenta,
                 vec![
                     ("Enter", "send"),
+                    ("Esc", "cancel"),
+                    ("↑↓", "history"),
                     ("S-Enter", "newline"),
-                    ("Ctrl+K/Y", "kill/yank"),
-                    ("Esc", "exit"),
                 ],
             )
         }
@@ -4398,7 +4398,10 @@ fn action_hints_parts(app: &VizApp) -> (&str, &str, Color, Vec<(&str, &str)>) {
                 let mut hints: Vec<(&str, &str)> = Vec::new();
                 match tab {
                     RightPanelTab::Chat => {
-                        hints.push(("Enter", "type"));
+                        hints.push(("←→", "coordinators"));
+                        hints.push(("+", "new"));
+                        hints.push(("-", "close"));
+                        hints.push(("Enter", "chat"));
                         hints.push(("↑↓", "scroll"));
                     }
                     RightPanelTab::Detail => {
