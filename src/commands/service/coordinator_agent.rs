@@ -1858,7 +1858,7 @@ mod tests {
         let dir = tmp.path();
         std::fs::create_dir_all(dir.join("chat")).unwrap();
 
-        let summary = build_crash_recovery_summary(dir).unwrap();
+        let summary = build_crash_recovery_summary(dir, 0).unwrap();
         assert!(summary.contains("restarted after a crash"));
         assert!(summary.contains("No previous conversation history"));
     }
@@ -1875,7 +1875,7 @@ mod tests {
         chat::append_inbox(dir, "what's the status?", "req-2").unwrap();
         chat::append_outbox(dir, "3 tasks in progress", "req-2").unwrap();
 
-        let summary = build_crash_recovery_summary(dir).unwrap();
+        let summary = build_crash_recovery_summary(dir, 0).unwrap();
         assert!(summary.contains("restarted after a crash"));
         assert!(summary.contains("help me plan auth"));
         assert!(summary.contains("create tasks for auth"));
@@ -1893,7 +1893,7 @@ mod tests {
         let long_msg = "x".repeat(1000);
         chat::append_inbox(dir, &long_msg, "req-1").unwrap();
 
-        let summary = build_crash_recovery_summary(dir).unwrap();
+        let summary = build_crash_recovery_summary(dir, 0).unwrap();
         // The summary should contain the truncated version (500 chars + "...")
         assert!(summary.contains("..."));
         assert!(!summary.contains(&long_msg));
@@ -1911,7 +1911,7 @@ mod tests {
             chat::append_outbox(dir, &format!("response-{}", i), &format!("req-{}", i)).unwrap();
         }
 
-        let summary = build_crash_recovery_summary(dir).unwrap();
+        let summary = build_crash_recovery_summary(dir, 0).unwrap();
         // Should only contain the last RECOVERY_HISTORY_COUNT messages
         // The earliest messages should NOT be present
         assert!(!summary.contains("msg-0"));
