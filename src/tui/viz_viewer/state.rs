@@ -9793,8 +9793,8 @@ mod tui_config_panel_tests {
         app.config_panel.edit_buffer = "sonnet".to_string();
         app.save_config_entry();
 
-        // Reload and verify
-        let config = Config::load_or_default(&app.workgraph_dir);
+        // Use Config::load (local-only) to avoid global config bleeding in
+        let config = Config::load(&app.workgraph_dir).unwrap();
         let default_model = config.models.default.as_ref().and_then(|c| c.model.clone());
         assert_eq!(default_model, Some("sonnet".to_string()));
 
@@ -9807,7 +9807,7 @@ mod tui_config_panel_tests {
         app.config_panel.edit_buffer = "openrouter".to_string();
         app.save_config_entry();
 
-        let config = Config::load_or_default(&app.workgraph_dir);
+        let config = Config::load(&app.workgraph_dir).unwrap();
         let default_provider = config.models.default.as_ref().and_then(|c| c.provider.clone());
         assert_eq!(default_provider, Some("openrouter".to_string()));
 
@@ -9819,7 +9819,7 @@ mod tui_config_panel_tests {
         app.config_panel.edit_buffer = "(inherit)".to_string();
         app.save_config_entry();
 
-        let config = Config::load_or_default(&app.workgraph_dir);
+        let config = Config::load(&app.workgraph_dir).unwrap();
         let default_model = config.models.default.as_ref().and_then(|c| c.model.clone());
         assert_eq!(default_model, None);
     }
