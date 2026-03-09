@@ -2389,21 +2389,48 @@ fn process_chat_inbox(dir: &Path) {
         return;
     }
 
-    let inbox_cursor = match chat::read_coordinator_cursor(dir) {
+    // Iterate over all coordinator subdirectories (0, 1, 2, ...)
+    let entries = match std::fs::read_dir(&chat_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        let coordinator_id: u32 = match name_str.parse() {
+            Ok(id) => id,
+            Err(_) => continue, // skip non-numeric directories
+        };
+
+        if !entry.path().is_dir() {
+            continue;
+        }
+
+        process_chat_inbox_for(dir, coordinator_id);
+    }
+}
+
+/// Process pending chat inbox messages for a specific coordinator.
+fn process_chat_inbox_for(dir: &Path, coordinator_id: u32) {
+    let inbox_cursor = match chat::read_coordinator_cursor_for(dir, coordinator_id) {
         Ok(c) => c,
         Err(e) => {
             eprintln!(
-                "[coordinator] Failed to read chat coordinator cursor: {}",
-                e
+                "[coordinator] Failed to read chat coordinator cursor for {}: {}",
+                coordinator_id, e
             );
             return;
         }
     };
 
-    let new_messages = match chat::read_inbox_since(dir, inbox_cursor) {
+    let new_messages = match chat::read_inbox_since_for(dir, coordinator_id, inbox_cursor) {
         Ok(msgs) => msgs,
         Err(e) => {
-            eprintln!("[coordinator] Failed to read chat inbox: {}", e);
+            eprintln!(
+                "[coordinator] Failed to read chat inbox for {}: {}",
+                coordinator_id, e
+            );
             return;
         }
     };
@@ -2413,8 +2440,9 @@ fn process_chat_inbox(dir: &Path) {
     }
 
     eprintln!(
-        "[coordinator] Processing {} chat message(s)",
-        new_messages.len()
+        "[coordinator] Processing {} chat message(s) for coordinator {}",
+        new_messages.len(),
+        coordinator_id
     );
 
     for msg in &new_messages {
@@ -2423,20 +2451,20 @@ fn process_chat_inbox(dir: &Path) {
              intelligent responses. For now, your message has been logged: \"{}\"",
             msg.content
         );
-        if let Err(e) = chat::append_outbox(dir, &response, &msg.request_id) {
+        if let Err(e) = chat::append_outbox_for(dir, coordinator_id, &response, &msg.request_id) {
             eprintln!(
-                "[coordinator] Failed to write chat outbox for request_id={}: {}",
-                msg.request_id, e
+                "[coordinator] Failed to write chat outbox for coordinator={}, request_id={}: {}",
+                coordinator_id, msg.request_id, e
             );
         }
     }
 
     if let Some(last) = new_messages.last()
-        && let Err(e) = chat::write_coordinator_cursor(dir, last.id)
+        && let Err(e) = chat::write_coordinator_cursor_for(dir, coordinator_id, last.id)
     {
         eprintln!(
-            "[coordinator] Failed to update chat coordinator cursor: {}",
-            e
+            "[coordinator] Failed to update chat coordinator cursor for {}: {}",
+            coordinator_id, e
         );
     }
 }
