@@ -270,6 +270,7 @@ fn build_assign_subgraph(dir: &Path) {
             max_rejections: None,
             superseded_by: vec![],
             supersedes: None,
+            unplaced: false,
         };
 
         mutable_graph.add_node(Node::Task(assign_task));
