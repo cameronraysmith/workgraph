@@ -179,6 +179,7 @@ mod tests {
             None,
             None,
             false,
+            false,
             None,
             None,
         )
@@ -211,6 +212,7 @@ mod tests {
             None,
             None,
             false,
+            false,
             None,
             None,
         )
@@ -242,6 +244,7 @@ mod tests {
             "internal",
             None,
             None,
+            false,
             false,
             None,
             None,

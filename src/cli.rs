@@ -147,9 +147,9 @@ pub enum Commands {
         #[arg(long)]
         paused: bool,
 
-        /// Skip draft mode and make task immediately available for dispatch
-        #[arg(long, alias = "ready")]
-        immediate: bool,
+        /// Skip automatic placement — make task immediately available for dispatch
+        #[arg(long = "no-place", alias = "immediate", alias = "ready")]
+        no_place: bool,
 
         /// Delay before task becomes ready (e.g., 30s, 5m, 1h, 1d)
         #[arg(long)]

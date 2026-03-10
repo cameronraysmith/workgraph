@@ -69,6 +69,7 @@ pub fn run(
     context_scope: Option<&str>,
     exec_mode: Option<&str>,
     paused: bool,
+    no_place: bool,
     delay: Option<&str>,
     not_before: Option<&str>,
 ) -> Result<()> {
@@ -308,6 +309,7 @@ pub fn run(
         max_rejections: None,
         superseded_by: vec![],
         supersedes: None,
+        unplaced: no_place,
     };
 
     // Add task to graph
@@ -570,6 +572,7 @@ fn add_task_directly(
         max_rejections: None,
         superseded_by: vec![],
         supersedes: None,
+        unplaced: false,
     };
 
     graph.add_node(Node::Task(task));
@@ -1002,6 +1005,7 @@ mod tests {
             None,
             None,
             false,
+            false,
             None,
             None,
         );
@@ -1045,6 +1049,7 @@ mod tests {
             None,
             None,
             false,
+            false,
             None,
             None,
         );
@@ -1087,6 +1092,7 @@ mod tests {
             "internal",
             None,
             None,
+            false,
             false,
             None,
             None,
@@ -1138,6 +1144,7 @@ mod tests {
             None,
             None,
             false,
+            false,
             None,
             None,
         );
@@ -1184,6 +1191,7 @@ mod tests {
             "internal",
             None,
             None,
+            false,
             false,
             None,
             None,

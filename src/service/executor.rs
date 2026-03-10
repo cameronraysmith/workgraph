@@ -983,6 +983,7 @@ mod tests {
             max_rejections: None,
             superseded_by: vec![],
             supersedes: None,
+            unplaced: false,
         }
     }
 

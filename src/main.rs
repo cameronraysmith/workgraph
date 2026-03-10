@@ -324,21 +324,27 @@ fn main() -> Result<()> {
             context_scope,
             exec_mode,
             paused,
-            immediate,
+            no_place,
             delay,
             not_before,
         } => {
-            // Determine effective paused state:
-            // - --paused always pauses
-            // - --immediate always skips draft mode
-            // - Default: paused (draft) in interactive mode, immediate in agent context
+            // Determine effective paused/unplaced state:
+            // - --paused always pauses (user-managed draft, skips placement)
+            // - --no-place: unplaced=true, paused=false (immediate dispatch)
+            // - System tasks (dot-prefix): never draft, never placed
+            // - Agent context (WG_TASK_ID set): default to --no-place behavior
+            // - Default (interactive): paused=true (draft-by-default, needs placement)
+            let is_system_task = title.starts_with('.');
+            let is_agent_context = std::env::var("WG_TASK_ID").is_ok()
+                || std::env::var("WG_AGENT_ID").is_ok();
+            let effective_no_place = no_place || is_system_task || is_agent_context;
             let effective_paused = if paused {
                 true
-            } else if immediate {
+            } else if effective_no_place {
                 false
             } else {
-                // Draft by default for interactive use; agents get immediate mode
-                std::env::var("WG_AGENT_ID").is_err()
+                // Draft by default for interactive use
+                true
             };
             if let Some(ref peer_ref) = repo {
                 commands::add::run_remote(
@@ -383,6 +389,7 @@ fn main() -> Result<()> {
                     context_scope.as_deref(),
                     exec_mode.as_deref(),
                     effective_paused,
+                    effective_no_place,
                     delay.as_deref(),
                     not_before.as_deref(),
                 )
