@@ -140,6 +140,8 @@ pub(crate) fn defer_self_mutation(
         superseded_by: vec![],
         supersedes: None,
         unplaced: false,
+        place_before: vec![],
+        place_near: vec![],
     };
 
     graph.add_node(Node::Task(task));

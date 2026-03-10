@@ -325,6 +325,8 @@ fn main() -> Result<()> {
             exec_mode,
             paused,
             no_place,
+            place_near,
+            place_before,
             delay,
             not_before,
         } => {
@@ -390,6 +392,8 @@ fn main() -> Result<()> {
                     exec_mode.as_deref(),
                     effective_paused,
                     effective_no_place,
+                    &place_near,
+                    &place_before,
                     delay.as_deref(),
                     not_before.as_deref(),
                 )
@@ -1482,6 +1486,19 @@ fn main() -> Result<()> {
             chat_history,
             chat_history_max,
             tui_counters,
+            show_registry,
+            registry_add,
+            registry_remove,
+            show_tiers,
+            set_tier,
+            reg_id,
+            reg_provider,
+            reg_model,
+            reg_tier,
+            reg_endpoint,
+            reg_context_window,
+            cost_input,
+            cost_output,
             show_models,
             set_model,
             set_provider,
@@ -1510,6 +1527,67 @@ fn main() -> Result<()> {
             // Handle --install-global
             if install_global {
                 return commands::config_cmd::install_global(&workgraph_dir, force);
+            }
+
+            // Handle --registry (list)
+            if show_registry {
+                return commands::config_cmd::show_registry(&workgraph_dir, cli.json);
+            }
+
+            // Handle --registry-add
+            if registry_add {
+                let id = reg_id.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("--registry-add requires --id <ID>")
+                })?;
+                let provider = reg_provider.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("--registry-add requires --provider <PROVIDER>")
+                })?;
+                let model_name = reg_model.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("--registry-add requires --reg-model <MODEL>")
+                })?;
+                let tier = reg_tier.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("--registry-add requires --reg-tier <TIER>")
+                })?;
+                let write_scope = scope.unwrap_or(commands::config_cmd::ConfigScope::Local);
+                return commands::config_cmd::add_registry_entry(
+                    &workgraph_dir,
+                    write_scope,
+                    id,
+                    provider,
+                    model_name,
+                    tier,
+                    reg_endpoint.as_deref(),
+                    reg_context_window,
+                    cost_input,
+                    cost_output,
+                );
+            }
+
+            // Handle --registry-remove
+            if let Some(ref id) = registry_remove {
+                let write_scope = scope.unwrap_or(commands::config_cmd::ConfigScope::Local);
+                return commands::config_cmd::remove_registry_entry(
+                    &workgraph_dir,
+                    write_scope,
+                    id,
+                    force,
+                    cli.json,
+                );
+            }
+
+            // Handle --tiers (show)
+            if show_tiers {
+                return commands::config_cmd::show_tiers(&workgraph_dir, cli.json);
+            }
+
+            // Handle --tier <tier>=<model-id>
+            if let Some(ref tier_spec) = set_tier {
+                let write_scope = scope.unwrap_or(commands::config_cmd::ConfigScope::Local);
+                return commands::config_cmd::set_tier(
+                    &workgraph_dir,
+                    write_scope,
+                    tier_spec,
+                );
             }
 
             // Handle Matrix configuration

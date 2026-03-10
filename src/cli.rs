@@ -151,6 +151,14 @@ pub enum Commands {
         #[arg(long = "no-place", alias = "immediate", alias = "ready")]
         no_place: bool,
 
+        /// Placement hint: place near these tasks (comma-separated IDs)
+        #[arg(long = "place-near", value_delimiter = ',')]
+        place_near: Vec<String>,
+
+        /// Placement hint: place before these tasks (comma-separated IDs)
+        #[arg(long = "place-before", value_delimiter = ',')]
+        place_before: Vec<String>,
+
         /// Delay before task becomes ready (e.g., 30s, 5m, 1h, 1d)
         #[arg(long)]
         delay: Option<String>,
@@ -1229,6 +1237,58 @@ pub enum Commands {
         /// TUI time counters (comma-separated: uptime,cumulative,active,session)
         #[arg(long, name = "tui-counters")]
         tui_counters: Option<String>,
+
+        /// Show all model registry entries (built-in + user-defined)
+        #[arg(long = "registry")]
+        show_registry: bool,
+
+        /// Add a new model to the registry (use with --id, --provider, --reg-model, --reg-tier)
+        #[arg(long = "registry-add")]
+        registry_add: bool,
+
+        /// Remove a model from the registry by ID
+        #[arg(long = "registry-remove", value_name = "ID")]
+        registry_remove: Option<String>,
+
+        /// Show current tier→model assignments
+        #[arg(long = "tiers")]
+        show_tiers: bool,
+
+        /// Set which model a tier uses (e.g., --tier standard=gpt-4o)
+        #[arg(long = "tier", value_name = "TIER=MODEL_ID")]
+        set_tier: Option<String>,
+
+        /// Registry entry short ID (for --registry-add)
+        #[arg(long = "id", requires = "registry_add")]
+        reg_id: Option<String>,
+
+        /// Provider name (for --registry-add, e.g., openai, anthropic)
+        #[arg(long = "provider", requires = "registry_add")]
+        reg_provider: Option<String>,
+
+        /// Full API model identifier (for --registry-add, e.g., gpt-4o)
+        #[arg(long = "reg-model", requires = "registry_add")]
+        reg_model: Option<String>,
+
+        /// Quality tier for registry entry (for --registry-add: fast, standard, premium)
+        #[arg(long = "reg-tier", requires = "registry_add")]
+        reg_tier: Option<String>,
+
+        /// API endpoint URL (for --registry-add)
+        #[arg(long = "endpoint", requires = "registry_add")]
+        reg_endpoint: Option<String>,
+
+        /// Context window in tokens (for --registry-add)
+        #[arg(long = "context-window", requires = "registry_add")]
+        reg_context_window: Option<u64>,
+
+        /// Cost per million input tokens in USD (for --registry-add)
+        #[arg(long = "cost-input", requires = "registry_add")]
+        cost_input: Option<f64>,
+
+        /// Cost per million output tokens in USD (for --registry-add)
+        #[arg(long = "cost-output", requires = "registry_add")]
+        cost_output: Option<f64>,
 
         /// Show all model routing assignments (per-role model+provider)
         #[arg(long = "models")]

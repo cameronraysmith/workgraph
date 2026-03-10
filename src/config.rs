@@ -453,6 +453,8 @@ pub enum DispatchRole {
     Compactor,
     /// Coordinator evaluation (inline per-turn scoring)
     CoordinatorEval,
+    /// Placement agent: analyzes tasks and wires them into the graph
+    Placer,
 }
 
 impl std::fmt::Display for DispatchRole {
@@ -470,6 +472,7 @@ impl std::fmt::Display for DispatchRole {
             Self::Creator => write!(f, "creator"),
             Self::Compactor => write!(f, "compactor"),
             Self::CoordinatorEval => write!(f, "coordinator_eval"),
+            Self::Placer => write!(f, "placer"),
         }
     }
 }
@@ -491,9 +494,10 @@ impl std::str::FromStr for DispatchRole {
             "creator" => Ok(Self::Creator),
             "compactor" => Ok(Self::Compactor),
             "coordinator_eval" => Ok(Self::CoordinatorEval),
+            "placer" => Ok(Self::Placer),
             _ => Err(anyhow::anyhow!(
                 "Unknown dispatch role '{}'. Valid roles: default, task_agent, evaluator, \
-                 flip_inference, flip_comparison, assigner, evolver, verification, triage, creator, compactor",
+                 flip_inference, flip_comparison, assigner, evolver, verification, triage, creator, compactor, placer",
                 s
             )),
         }
@@ -513,6 +517,7 @@ impl DispatchRole {
         Self::Triage,
         Self::Creator,
         Self::Compactor,
+        Self::Placer,
     ];
 
     /// Default quality tier for this role.
@@ -523,6 +528,7 @@ impl DispatchRole {
             Self::Assigner => Tier::Fast,
             Self::Compactor => Tier::Fast,
             Self::CoordinatorEval => Tier::Fast,
+            Self::Placer => Tier::Fast,
             Self::FlipInference => Tier::Standard,
             Self::TaskAgent => Tier::Standard,
             Self::Evaluator => Tier::Standard,
@@ -762,6 +768,9 @@ pub struct ModelRoutingConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compactor: Option<RoleModelConfig>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placer: Option<RoleModelConfig>,
 }
 
 impl ModelRoutingConfig {
@@ -780,6 +789,7 @@ impl ModelRoutingConfig {
             DispatchRole::Creator => self.creator.as_ref(),
             DispatchRole::Compactor => self.compactor.as_ref(),
             DispatchRole::CoordinatorEval => self.evaluator.as_ref(),
+            DispatchRole::Placer => self.placer.as_ref(),
         }
     }
 
@@ -798,6 +808,7 @@ impl ModelRoutingConfig {
             DispatchRole::Creator => &mut self.creator,
             DispatchRole::Compactor => &mut self.compactor,
             DispatchRole::CoordinatorEval => &mut self.evaluator,
+            DispatchRole::Placer => &mut self.placer,
         }
     }
 
@@ -840,12 +851,8 @@ pub struct ResolvedModel {
 }
 
 impl Config {
-    /// Provide built-in registry entries when none are configured.
-    pub fn effective_registry(&self) -> Vec<ModelRegistryEntry> {
-        if !self.model_registry.is_empty() {
-            return self.model_registry.clone();
-        }
-        // Built-in defaults for Anthropic models
+    /// Built-in Anthropic model defaults.
+    fn builtin_registry() -> Vec<ModelRegistryEntry> {
         vec![
             ModelRegistryEntry {
                 id: "haiku".into(),
@@ -892,7 +899,29 @@ impl Config {
         ]
     }
 
+    /// Return merged registry: built-in entries + user-defined entries.
+    /// User entries with the same ID override built-in entries.
+    pub fn effective_registry(&self) -> Vec<ModelRegistryEntry> {
+        let builtins = Self::builtin_registry();
+        if self.model_registry.is_empty() {
+            return builtins;
+        }
+        let user_ids: std::collections::HashSet<&str> =
+            self.model_registry.iter().map(|e| e.id.as_str()).collect();
+        let mut result: Vec<ModelRegistryEntry> = builtins
+            .into_iter()
+            .filter(|e| !user_ids.contains(e.id.as_str()))
+            .collect();
+        result.extend(self.model_registry.clone());
+        result
+    }
+
     /// Effective tier config: use configured tiers, filling in defaults for unconfigured ones.
+    pub fn effective_tiers_public(&self) -> TierConfig {
+        self.effective_tiers()
+    }
+
+    /// Effective tier config (internal).
     fn effective_tiers(&self) -> TierConfig {
         TierConfig {
             fast: self.tiers.fast.clone().or_else(|| Some("haiku".into())),
@@ -1196,6 +1225,10 @@ pub struct AgencyConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub creator_model: Option<String>,
 
+    /// Content-hash of agent to use as placer (None = not configured)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placer_agent: Option<String>,
+
     /// Automatically invoke the creator agent when the primitive store
     /// needs expansion. Default: false.
     #[serde(default)]
@@ -1340,6 +1373,7 @@ impl Default for AgencyConfig {
             evolver_agent: None,
             creator_agent: None,
             creator_model: None,
+            placer_agent: None,
             auto_create: false,
             auto_create_threshold: default_auto_create_threshold(),
             retention_heuristics: None,
@@ -2669,8 +2703,28 @@ model = "haiku"
             ..Default::default()
         }];
         let registry = config.effective_registry();
-        assert_eq!(registry.len(), 1);
-        assert_eq!(registry[0].id, "custom");
+        // 3 built-in + 1 custom = 4
+        assert_eq!(registry.len(), 4);
+        assert!(registry.iter().any(|e| e.id == "custom"));
+        assert!(registry.iter().any(|e| e.id == "haiku"));
+    }
+
+    #[test]
+    fn test_effective_registry_custom_overrides_builtin() {
+        let mut config = Config::default();
+        config.model_registry = vec![ModelRegistryEntry {
+            id: "haiku".into(),
+            provider: "local".into(),
+            model: "my-haiku".into(),
+            tier: Tier::Fast,
+            ..Default::default()
+        }];
+        let registry = config.effective_registry();
+        // 2 remaining built-ins + 1 override = 3
+        assert_eq!(registry.len(), 3);
+        let haiku = registry.iter().find(|e| e.id == "haiku").unwrap();
+        assert_eq!(haiku.model, "my-haiku");
+        assert_eq!(haiku.provider, "local");
     }
 
     #[test]
@@ -2729,6 +2783,7 @@ model = "haiku"
         assert_eq!(DispatchRole::Creator.default_tier(), Tier::Premium);
         assert_eq!(DispatchRole::Verification.default_tier(), Tier::Premium);
         assert_eq!(DispatchRole::Default.default_tier(), Tier::Standard);
+        assert_eq!(DispatchRole::Placer.default_tier(), Tier::Fast);
     }
 
     #[test]

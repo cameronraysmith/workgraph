@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use std::path::Path;
-use workgraph::config::{Config, ConfigSource, MatrixConfig};
+use workgraph::config::{Config, ConfigSource, MatrixConfig, ModelRegistryEntry, Tier};
 
 /// Scope for config operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -926,6 +926,324 @@ pub fn update_model_routing(
         }
     }
 
+    Ok(())
+}
+
+/// Show all model registry entries (built-in + user-defined).
+pub fn show_registry(dir: &Path, json: bool) -> Result<()> {
+    let config = Config::load_merged(dir)?;
+    let entries = config.effective_registry();
+
+    if json {
+        let val: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "id": e.id,
+                    "provider": e.provider,
+                    "model": e.model,
+                    "tier": e.tier.to_string(),
+                    "context_window": e.context_window,
+                    "cost_per_input_mtok": e.cost_per_input_mtok,
+                    "cost_per_output_mtok": e.cost_per_output_mtok,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&val)?);
+        return Ok(());
+    }
+
+    if entries.is_empty() {
+        println!("No model registry entries.");
+        return Ok(());
+    }
+
+    println!(
+        "  {:<12} {:<12} {:<30} {:<10} {}",
+        "ID", "PROVIDER", "MODEL", "TIER", "COST (in/out per MTok)"
+    );
+    println!("  {}", "-".repeat(85));
+
+    for entry in &entries {
+        let cost = if entry.cost_per_input_mtok > 0.0 || entry.cost_per_output_mtok > 0.0 {
+            format!(
+                "${:.2}/${:.2}",
+                entry.cost_per_input_mtok, entry.cost_per_output_mtok
+            )
+        } else {
+            "-".to_string()
+        };
+        println!(
+            "  {:<12} {:<12} {:<30} {:<10} {}",
+            entry.id, entry.provider, entry.model, entry.tier, cost,
+        );
+    }
+
+    Ok(())
+}
+
+/// Add a new model entry to the registry.
+pub fn add_registry_entry(
+    dir: &Path,
+    scope: ConfigScope,
+    id: &str,
+    provider: &str,
+    model: &str,
+    tier: &str,
+    endpoint: Option<&str>,
+    context_window: Option<u64>,
+    cost_input: Option<f64>,
+    cost_output: Option<f64>,
+) -> Result<()> {
+    let tier: Tier = tier.parse()?;
+
+    let entry = ModelRegistryEntry {
+        id: id.to_string(),
+        provider: provider.to_string(),
+        model: model.to_string(),
+        tier,
+        endpoint: endpoint.map(|s| s.to_string()),
+        context_window: context_window.unwrap_or(0),
+        cost_per_input_mtok: cost_input.unwrap_or(0.0),
+        cost_per_output_mtok: cost_output.unwrap_or(0.0),
+        ..Default::default()
+    };
+
+    let mut config = match scope {
+        ConfigScope::Global => Config::load_global()?.unwrap_or_default(),
+        ConfigScope::Local => Config::load(dir)?,
+    };
+
+    // Check for duplicate ID and update if exists
+    let existing_idx = config.model_registry.iter().position(|e| e.id == id);
+    if let Some(idx) = existing_idx {
+        config.model_registry[idx] = entry;
+        println!("Updated registry entry: {}", id);
+    } else {
+        config.model_registry.push(entry);
+        println!("Added registry entry: {}", id);
+    }
+
+    save_config(&config, dir, scope)?;
+
+    println!(
+        "  {} / {} / {} (tier: {})",
+        id, provider, model, tier
+    );
+
+    Ok(())
+}
+
+/// Remove a registry entry by ID. Warns about dependents unless --force is set.
+pub fn remove_registry_entry(
+    dir: &Path,
+    scope: ConfigScope,
+    id: &str,
+    force: bool,
+    json: bool,
+) -> Result<()> {
+    let mut config = match scope {
+        ConfigScope::Global => Config::load_global()?.unwrap_or_default(),
+        ConfigScope::Local => Config::load(dir)?,
+    };
+
+    // Check if entry exists in user config
+    let idx = config
+        .model_registry
+        .iter()
+        .position(|e| e.id == id);
+
+    if idx.is_none() {
+        // Check if it's a built-in
+        let merged = Config::load_merged(dir)?;
+        if merged.effective_registry().iter().any(|e| e.id == id) {
+            anyhow::bail!(
+                "'{}' is a built-in registry entry and cannot be removed.\n\
+                 To override it, add a custom entry with the same ID using --registry-add.",
+                id
+            );
+        }
+        anyhow::bail!("Registry entry '{}' not found.", id);
+    }
+
+    // Check for dependents: tier defaults and role overrides
+    let mut warnings = Vec::new();
+
+    // Check tier defaults
+    let tiers = &config.tiers;
+    if tiers.fast.as_deref() == Some(id) {
+        warnings.push(format!("tiers.fast = '{}'", id));
+    }
+    if tiers.standard.as_deref() == Some(id) {
+        warnings.push(format!("tiers.standard = '{}'", id));
+    }
+    if tiers.premium.as_deref() == Some(id) {
+        warnings.push(format!("tiers.premium = '{}'", id));
+    }
+
+    // Check role overrides
+    use workgraph::config::DispatchRole;
+    for role in DispatchRole::ALL {
+        if let Some(role_cfg) = config.models.get_role(*role) {
+            if role_cfg.model.as_deref() == Some(id) {
+                warnings.push(format!("[models.{}].model = '{}'", role, id));
+            }
+        }
+    }
+
+    if !warnings.is_empty() && !force {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "error": "entry has dependents",
+                    "id": id,
+                    "dependents": warnings,
+                })
+            );
+        } else {
+            eprintln!("Cannot remove '{}': referenced by:", id);
+            for w in &warnings {
+                eprintln!("  - {}", w);
+            }
+            eprintln!();
+            eprintln!("Use --force to remove anyway, or reassign the dependents first.");
+        }
+        std::process::exit(1);
+    }
+
+    config.model_registry.remove(idx.unwrap());
+
+    save_config(&config, dir, scope)?;
+
+    if !warnings.is_empty() {
+        println!(
+            "Removed registry entry '{}' (with {} dangling reference(s))",
+            id,
+            warnings.len()
+        );
+    } else {
+        println!("Removed registry entry '{}'", id);
+    }
+
+    Ok(())
+}
+
+/// Show current tier→model assignments.
+pub fn show_tiers(dir: &Path, json: bool) -> Result<()> {
+    let config = Config::load_merged(dir)?;
+    let tiers = config.effective_tiers_public();
+    let registry = config.effective_registry();
+
+    let resolve = |model_id: Option<&str>| -> String {
+        match model_id {
+            Some(id) => registry
+                .iter()
+                .find(|e| e.id == id)
+                .map(|e| e.model.clone())
+                .unwrap_or_else(|| format!("{} (not in registry)", id)),
+            None => "(unset)".to_string(),
+        }
+    };
+
+    if json {
+        let val = serde_json::json!({
+            "fast": {
+                "model_id": tiers.fast,
+                "resolved_model": resolve(tiers.fast.as_deref()),
+            },
+            "standard": {
+                "model_id": tiers.standard,
+                "resolved_model": resolve(tiers.standard.as_deref()),
+            },
+            "premium": {
+                "model_id": tiers.premium,
+                "resolved_model": resolve(tiers.premium.as_deref()),
+            },
+        });
+        println!("{}", serde_json::to_string_pretty(&val)?);
+        return Ok(());
+    }
+
+    println!(
+        "  {:<12} {:<12} {}",
+        "TIER", "MODEL ID", "RESOLVED MODEL"
+    );
+    println!("  {}", "-".repeat(60));
+
+    println!(
+        "  {:<12} {:<12} {}",
+        "fast",
+        tiers.fast.as_deref().unwrap_or("(unset)"),
+        resolve(tiers.fast.as_deref()),
+    );
+    println!(
+        "  {:<12} {:<12} {}",
+        "standard",
+        tiers.standard.as_deref().unwrap_or("(unset)"),
+        resolve(tiers.standard.as_deref()),
+    );
+    println!(
+        "  {:<12} {:<12} {}",
+        "premium",
+        tiers.premium.as_deref().unwrap_or("(unset)"),
+        resolve(tiers.premium.as_deref()),
+    );
+
+    Ok(())
+}
+
+/// Set which model a tier uses. Format: <tier>=<model-id>
+pub fn set_tier(dir: &Path, scope: ConfigScope, tier_spec: &str) -> Result<()> {
+    let parts: Vec<&str> = tier_spec.splitn(2, '=').collect();
+    if parts.len() != 2 {
+        anyhow::bail!(
+            "--tier requires format <tier>=<model-id>, got \"{}\"",
+            tier_spec
+        );
+    }
+
+    let tier_name = parts[0].trim();
+    let model_id = parts[1].trim();
+
+    // Validate tier name
+    let _tier: Tier = tier_name.parse()?;
+
+    let mut config = match scope {
+        ConfigScope::Global => Config::load_global()?.unwrap_or_default(),
+        ConfigScope::Local => Config::load(dir)?,
+    };
+
+    // Warn if model_id is not in registry
+    let merged = Config::load_merged(dir)?;
+    if merged.registry_lookup(model_id).is_none() {
+        eprintln!(
+            "Warning: '{}' is not in the model registry. \
+             Tier will resolve to it as a bare model name.",
+            model_id
+        );
+    }
+
+    match tier_name {
+        "fast" => config.tiers.fast = Some(model_id.to_string()),
+        "standard" => config.tiers.standard = Some(model_id.to_string()),
+        "premium" => config.tiers.premium = Some(model_id.to_string()),
+        _ => unreachable!(), // already validated by Tier::from_str
+    }
+
+    save_config(&config, dir, scope)?;
+
+    println!("Set tiers.{} = \"{}\"", tier_name, model_id);
+
+    Ok(())
+}
+
+/// Helper: save config to the appropriate location based on scope.
+fn save_config(config: &Config, dir: &Path, scope: ConfigScope) -> Result<()> {
+    match scope {
+        ConfigScope::Global => config.save_global()?,
+        ConfigScope::Local => config.save(dir)?,
+    }
     Ok(())
 }
 

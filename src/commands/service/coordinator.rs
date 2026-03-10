@@ -742,12 +742,55 @@ fn resurrect_done_tasks(graph: &mut workgraph::graph::WorkGraph, dir: &Path) -> 
 /// Returns `true` if the graph was modified.
 fn build_placement_tasks(
     graph: &mut workgraph::graph::WorkGraph,
-    _config: &Config,
+    config: &Config,
     dir: &Path,
 ) -> bool {
     use workgraph::graph::is_system_task;
 
     let mut modified = false;
+
+    // Handle failed .place-* tasks: fallback-publish the original task.
+    // Never let placement failure block dispatch.
+    let failed_placers: Vec<(String, String)> = graph
+        .tasks()
+        .filter(|t| {
+            t.id.starts_with(".place-")
+                && t.status == Status::Failed
+                && !t.tags.iter().any(|tag| tag == "fallback-published")
+        })
+        .map(|t| {
+            let source_id = t.id.strip_prefix(".place-").unwrap().to_string();
+            (t.id.clone(), source_id)
+        })
+        .collect();
+
+    for (place_id, source_id) in failed_placers {
+        // Publish (unpause) the source task so it proceeds without placement
+        if let Some(source) = graph.get_task_mut(&source_id) {
+            if source.paused {
+                source.paused = false;
+                if !source.tags.contains(&"placed".to_string()) {
+                    source.tags.push("placed".to_string());
+                }
+                source.log.push(workgraph::graph::LogEntry {
+                    timestamp: Utc::now().to_rfc3339(),
+                    actor: Some("coordinator".to_string()),
+                    message: "Placement failed, publishing without placement".to_string(),
+                });
+                eprintln!(
+                    "[coordinator] Placement failed for '{}' — fallback publishing '{}'",
+                    place_id, source_id
+                );
+                modified = true;
+            }
+        }
+        // Tag the .place-* task so we don't re-process it
+        if let Some(place_task) = graph.get_task_mut(&place_id) {
+            place_task
+                .tags
+                .push("fallback-published".to_string());
+        }
+    }
 
     // Collect draft tasks needing placement
     let tasks_needing_placement: Vec<(String, Vec<String>, Option<String>)> = graph
@@ -815,6 +858,8 @@ fn build_placement_tasks(
 
         // Agent placement: create .place-<task-id> system task
         let placement_context = build_placement_context(graph, &task_id);
+        let placer_model = config
+            .resolve_model_for_role(workgraph::config::DispatchRole::Placer);
         let place_task = Task {
             id: place_task_id.clone(),
             title: format!("Place: {}", task_id),
@@ -825,6 +870,9 @@ fn build_placement_tasks(
             exec_mode: Some("bare".to_string()),
             visibility: "internal".to_string(),
             created_at: Some(Utc::now().to_rfc3339()),
+            model: Some(placer_model.model),
+            provider: placer_model.provider,
+            agent: config.agency.placer_agent.clone(),
             ..Task::default()
         };
 
@@ -885,6 +933,18 @@ fn build_placement_context(graph: &workgraph::graph::WorkGraph, task_id: &str) -
             ctx.push_str(&format!("Existing deps: {}\n", task.after.join(", ")));
         }
         ctx.push('\n');
+
+        // Placement hints section (per design doc section 5)
+        if !task.place_near.is_empty() || !task.place_before.is_empty() {
+            ctx.push_str("## Placement hints\n");
+            if !task.place_near.is_empty() {
+                ctx.push_str(&format!("near: {}\n", task.place_near.join(", ")));
+            }
+            if !task.place_before.is_empty() {
+                ctx.push_str(&format!("before: {}\n", task.place_before.join(", ")));
+            }
+            ctx.push('\n');
+        }
     }
 
     ctx.push_str("## Active tasks (non-terminal)\n");
@@ -1353,6 +1413,8 @@ fn build_auto_assign_tasks(
                     superseded_by: vec![],
                     supersedes: None,
                     unplaced: false,
+                    place_before: vec![],
+                    place_near: vec![],
                 };
 
                 graph.add_node(Node::Task(create_task));
@@ -1636,6 +1698,8 @@ fn build_flip_verification_tasks(
             superseded_by: vec![],
             supersedes: None,
             unplaced: false,
+            place_before: vec![],
+            place_near: vec![],
         };
 
         graph.add_node(Node::Task(verify_task));
@@ -1805,6 +1869,8 @@ fn build_auto_evolve_task(
         superseded_by: vec![],
         supersedes: None,
         unplaced: false,
+        place_before: vec![],
+        place_near: vec![],
     };
 
     graph.add_node(Node::Task(evolve_task));
@@ -1967,6 +2033,8 @@ fn build_auto_create_task(
         superseded_by: vec![],
         supersedes: None,
         unplaced: false,
+        place_before: vec![],
+        place_near: vec![],
     };
 
     graph.add_node(Node::Task(create_task));
@@ -2524,12 +2592,18 @@ fn spawn_agents_for_ready_tasks(
                 .unwrap_or_else(|| executor.to_string())
         };
 
-        // Resolve model per-task: .assign-* tasks use the Assigner role model,
+        // Resolve model per-task: system tasks use their respective role models,
         // all other tasks use the default (TaskAgent) model.
         let task_model = if task.id.starts_with(".assign-") {
             Some(
                 config
                     .resolve_model_for_role(workgraph::config::DispatchRole::Assigner)
+                    .model,
+            )
+        } else if task.id.starts_with(".place-") {
+            Some(
+                config
+                    .resolve_model_for_role(workgraph::config::DispatchRole::Placer)
                     .model,
             )
         } else {
