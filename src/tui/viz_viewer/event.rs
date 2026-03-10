@@ -1816,62 +1816,83 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
                     let orig_line = app.visible_to_original(visible_idx);
                     // Guard: orig_line must be within plain_lines range.
                     if orig_line < app.plain_lines.len() {
-                        // Check if the click is on the mail indicator (✉) region.
                         let content_col = (column.saturating_sub(app.last_graph_area.x) as usize)
                             + app.scroll.offset_x;
-                        let clicked_mail = app
+
+                        // Only select a task when clicking on actual text content
+                        // (task name, status, log snippet, mail indicator), not on
+                        // tree-drawing chars, indentation, or empty space past the
+                        // end of the line.  This prevents accidental selection
+                        // changes when click-dragging to pan.
+                        let on_text = app
                             .plain_lines
                             .get(orig_line)
-                            .and_then(|line| {
-                                // Find the ✉ character position in display columns
-                                // (not byte offset) since content_col is a visual column.
-                                let envelope_char_col =
-                                    line.char_indices().position(|(_, c)| c == '✉')?;
-                                // The clickable region spans from ✉ through the
-                                // count digits/slash that follow it (e.g. "✉3" or "✉2/1").
-                                let after_envelope: String = line
-                                    .chars()
-                                    .skip(envelope_char_col + 1)
-                                    .take_while(|c| !c.is_whitespace())
-                                    .collect();
-                                let end_col =
-                                    envelope_char_col + 1 + after_envelope.chars().count();
-                                if content_col >= envelope_char_col && content_col < end_col {
-                                    Some(())
-                                } else {
-                                    None
-                                }
+                            .map(|line| {
+                                let chars: Vec<char> = line.chars().collect();
+                                let text_start =
+                                    chars.iter().position(|c| c.is_alphanumeric() || *c == '✉');
+                                let text_end = chars
+                                    .iter()
+                                    .rposition(|c| !c.is_whitespace())
+                                    .map(|p| p + 1)
+                                    .unwrap_or(0);
+                                matches!(text_start, Some(ts) if content_col >= ts && content_col < text_end)
                             })
-                            .is_some();
-                        app.select_task_at_line(orig_line);
-                        if clicked_mail {
-                            // Switch to the Messages tab for this task.
-                            app.right_panel_visible = true;
-                            app.right_panel_tab = RightPanelTab::Messages;
-                            app.invalidate_messages_panel();
-                            app.load_messages_panel();
-                        } else if let Some(line) = app.plain_lines.get(orig_line) {
-                            // Determine click region for tab switching.
-                            let chars: Vec<char> = line.chars().collect();
-                            let text_start = chars.iter().position(|c| c.is_alphanumeric());
-                            // Find the "  (" separator between task ID and status.
-                            let paren_start = text_start.and_then(|ts| {
-                                (ts..chars.len().saturating_sub(1))
-                                    .find(|&i| chars[i] == ' ' && chars[i + 1] == '(')
-                            });
-                            if let (Some(ts), Some(ps)) = (text_start, paren_start)
-                                && app.right_panel_visible
-                            {
-                                // Inspector already open — update which tab is shown.
-                                if content_col >= ts && content_col < ps {
-                                    app.right_panel_tab = RightPanelTab::Detail;
-                                } else if content_col >= ps {
-                                    app.right_panel_tab = RightPanelTab::Log;
-                                    app.invalidate_log_pane();
-                                    app.load_log_pane();
+                            .unwrap_or(false);
+
+                        if on_text {
+                            // Check if the click is on the mail indicator (✉) region.
+                            let clicked_mail = app
+                                .plain_lines
+                                .get(orig_line)
+                                .and_then(|line| {
+                                    let envelope_char_col =
+                                        line.char_indices().position(|(_, c)| c == '✉')?;
+                                    let after_envelope: String = line
+                                        .chars()
+                                        .skip(envelope_char_col + 1)
+                                        .take_while(|c| !c.is_whitespace())
+                                        .collect();
+                                    let end_col =
+                                        envelope_char_col + 1 + after_envelope.chars().count();
+                                    if content_col >= envelope_char_col && content_col < end_col {
+                                        Some(())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .is_some();
+                            app.select_task_at_line(orig_line);
+                            if clicked_mail {
+                                // Switch to the Messages tab for this task.
+                                app.right_panel_visible = true;
+                                app.right_panel_tab = RightPanelTab::Messages;
+                                app.invalidate_messages_panel();
+                                app.load_messages_panel();
+                            } else if let Some(line) = app.plain_lines.get(orig_line) {
+                                // Determine click region for tab switching.
+                                let chars: Vec<char> = line.chars().collect();
+                                let text_start =
+                                    chars.iter().position(|c| c.is_alphanumeric());
+                                // Find the "  (" separator between task ID and status.
+                                let paren_start = text_start.and_then(|ts| {
+                                    (ts..chars.len().saturating_sub(1))
+                                        .find(|&i| chars[i] == ' ' && chars[i + 1] == '(')
+                                });
+                                if let (Some(ts), Some(ps)) = (text_start, paren_start)
+                                    && app.right_panel_visible
+                                {
+                                    // Inspector already open — update which tab is shown.
+                                    if content_col >= ts && content_col < ps {
+                                        app.right_panel_tab = RightPanelTab::Detail;
+                                    } else if content_col >= ps {
+                                        app.right_panel_tab = RightPanelTab::Log;
+                                        app.invalidate_log_pane();
+                                        app.load_log_pane();
+                                    }
                                 }
+                                // If inspector is closed, just select — don't auto-open.
                             }
-                            // If inspector is closed, just select — don't auto-open.
                         }
                     }
                 }
@@ -3632,5 +3653,195 @@ mod scrollbar_tests {
             app.scroll.offset_x, prev_x,
             "Moved without graph_pan_last should not scroll horizontally"
         );
+    }
+
+    // ── 8. Click-select only on text content ──
+
+    /// Helper to set up graph area for click-to-select tests.
+    fn setup_for_click_select(app: &mut VizApp) {
+        setup_graph_scroll(app, 100, 20);
+        app.scroll.content_width = 200;
+        app.scroll.viewport_width = 80;
+        app.last_graph_area = Rect {
+            x: 0,
+            y: 0,
+            width: 79,
+            height: 20,
+        };
+        app.last_graph_scrollbar_area = Rect {
+            x: 79,
+            y: 0,
+            width: 1,
+            height: 20,
+        };
+        app.last_panel_scrollbar_area = Rect::default();
+        app.last_graph_hscrollbar_area = Rect::default();
+    }
+
+    #[test]
+    fn click_on_task_text_selects_task() {
+        let (mut app, _tmp) = build_test_app();
+        setup_for_click_select(&mut app);
+        app.selected_task_idx = None;
+
+        // The first plain_line should be a root task like "task-0 (open) Task 0".
+        // Find the column where alphanumeric text starts.
+        let first_line = &app.plain_lines[0];
+        let text_start = first_line
+            .chars()
+            .position(|c| c.is_alphanumeric())
+            .expect("First line should contain text");
+
+        // Click on the text content area (at text_start column, row 0).
+        handle_mouse(
+            &mut app,
+            MouseEventKind::Down(MouseButton::Left),
+            0,
+            text_start as u16,
+        );
+        assert!(
+            app.selected_task_idx.is_some(),
+            "Clicking on task text should select a task"
+        );
+    }
+
+    #[test]
+    fn click_on_empty_space_past_line_end_does_not_select() {
+        let (mut app, _tmp) = build_test_app();
+        setup_for_click_select(&mut app);
+        app.selected_task_idx = None;
+
+        // Click far to the right of any line content (column 78, well past text).
+        let first_line_len = app.plain_lines[0].chars().count();
+        let past_end_col = (first_line_len + 5) as u16;
+        // Make sure the column is within the graph area.
+        if past_end_col < 79 {
+            handle_mouse(
+                &mut app,
+                MouseEventKind::Down(MouseButton::Left),
+                0,
+                past_end_col,
+            );
+            assert!(
+                app.selected_task_idx.is_none(),
+                "Clicking past end of line should not select a task"
+            );
+        }
+    }
+
+    /// Build a graph with parent-child edges (tree chars in output).
+    fn build_tree_app() -> (VizApp, tempfile::TempDir) {
+        let mut graph = WorkGraph::new();
+        let root = make_task_with_status("root", "Root task", Status::Open);
+        let mut child1 = make_task_with_status("child1", "Child 1", Status::Open);
+        child1.after = vec!["root".to_string()];
+        let mut child2 = make_task_with_status("child2", "Child 2", Status::Open);
+        child2.after = vec!["root".to_string()];
+        graph.add_node(Node::Task(root));
+        graph.add_node(Node::Task(child1));
+        graph.add_node(Node::Task(child2));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let graph_path = tmp.path().join("graph.jsonl");
+        save_graph(&graph, &graph_path).unwrap();
+
+        let tasks: Vec<_> = graph.tasks().collect();
+        let task_ids: HashSet<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
+        let viz = generate_ascii(
+            &graph,
+            &tasks,
+            &task_ids,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            VizLayoutMode::Tree,
+            &HashSet::new(),
+            "gray",
+            &HashMap::new(),
+        );
+
+        let mut app = VizApp::from_viz_output_for_test(&viz);
+        app.workgraph_dir = tmp.path().to_path_buf();
+        (app, tmp)
+    }
+
+    #[test]
+    fn click_on_tree_chars_does_not_select() {
+        let (mut app, _tmp) = build_tree_app();
+        setup_for_click_select(&mut app);
+
+        // Find a child line that has tree-drawing prefix (e.g. "├→" or "└→").
+        let child_line_idx = app
+            .plain_lines
+            .iter()
+            .position(|l| l.contains('├') || l.contains('└'))
+            .expect("Should have at least one child line with tree chars");
+
+        let line = &app.plain_lines[child_line_idx];
+        let text_start = line
+            .chars()
+            .position(|c| c.is_alphanumeric())
+            .unwrap_or(0);
+
+        // Click on the tree-drawing prefix area (column 0, which is before text).
+        // First select a different task so we can detect change.
+        app.selected_task_idx = Some(0);
+        let prev_selected = app.selected_task_idx;
+
+        // Scroll so that child_line_idx is visible at row 0.
+        app.scroll.offset_y = child_line_idx;
+
+        handle_mouse(
+            &mut app,
+            MouseEventKind::Down(MouseButton::Left),
+            0,  // row
+            0,  // column — in the tree-drawing area
+        );
+
+        // The selection should remain unchanged because we clicked on tree chars.
+        assert_eq!(
+            app.selected_task_idx, prev_selected,
+            "Clicking on tree-drawing chars (col 0, before text_start={}) should not change selection",
+            text_start,
+        );
+    }
+
+    #[test]
+    fn click_drag_on_empty_space_does_not_change_selection() {
+        let (mut app, _tmp) = build_test_app();
+        setup_for_click_select(&mut app);
+
+        // Select task 0 first.
+        app.selected_task_idx = Some(0);
+
+        // Click on empty space past line end — should not change selection.
+        let first_line_len = app.plain_lines[0].chars().count();
+        let past_end_col = (first_line_len + 5) as u16;
+        if past_end_col < 79 {
+            handle_mouse(
+                &mut app,
+                MouseEventKind::Down(MouseButton::Left),
+                0,
+                past_end_col,
+            );
+            assert_eq!(
+                app.selected_task_idx,
+                Some(0),
+                "Click on empty space should not change selection"
+            );
+
+            // Drag should work (pan) without changing selection.
+            handle_mouse(
+                &mut app,
+                MouseEventKind::Drag(MouseButton::Left),
+                5,
+                past_end_col,
+            );
+            assert_eq!(
+                app.selected_task_idx,
+                Some(0),
+                "Drag on empty space should not change selection"
+            );
+        }
     }
 }
