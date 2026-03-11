@@ -256,7 +256,11 @@ pub fn reconcile_orphaned_tasks(dir: &Path, graph_path: &Path) -> Result<usize> 
                         }
                     }
                 },
-                None => true, // InProgress with no agent — always orphaned
+                None => {
+                    // System coordinator/compact tasks are managed by the daemon
+                    // directly and never have an assigned agent — skip them.
+                    !task.tags.iter().any(|t| t == "coordinator-loop" || t == "compact-loop")
+                }
             };
 
             if dominated {

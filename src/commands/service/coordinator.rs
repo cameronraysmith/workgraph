@@ -2541,8 +2541,10 @@ fn spawn_agents_for_ready_tasks(
     let gp = graph_path(dir);
     let mut spawned = 0;
 
-    let to_spawn = final_ready.iter().take(slots_available);
-    for task in to_spawn {
+    for task in final_ready.iter() {
+        if spawned >= slots_available {
+            break;
+        }
         // Skip if already claimed
         if task.assigned.is_some() {
             continue;
