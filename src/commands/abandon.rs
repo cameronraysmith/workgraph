@@ -159,7 +159,7 @@ mod tests {
         let mut eval = make_task(".evaluate-t1", "Eval t1");
         eval.after = vec!["t1".to_string()];
         graph.add_node(Node::Task(eval));
-        let mut verify = make_task(".verify-flip-t1", "Verify t1");
+        let mut verify = make_task(".verify-t1", "Verify t1");
         verify.after = vec!["t1".to_string()];
         graph.add_node(Node::Task(verify));
         let mut dep = make_task("t2", "Depends on t1");
@@ -175,7 +175,7 @@ mod tests {
             Status::Abandoned
         );
         assert_eq!(
-            g.get_task(".verify-flip-t1").unwrap().status,
+            g.get_task(".verify-t1").unwrap().status,
             Status::Abandoned
         );
         assert_eq!(g.get_task("t2").unwrap().status, Status::Open);

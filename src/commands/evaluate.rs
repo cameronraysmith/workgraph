@@ -237,7 +237,7 @@ pub fn run(
         })
         .collect();
 
-    // Step 3.8: Load FLIP score and verify-flip findings (if available)
+    // Step 3.8: Load FLIP score and verify findings (if available)
     let flip_score = {
         let evals_dir = agency_dir.join("evaluations");
         let all_evals = load_all_evaluations_or_warn(&evals_dir);
@@ -247,7 +247,7 @@ pub fn run(
             .map(|e| e.score)
     };
 
-    let verify_task_id = format!(".verify-flip-{}", task_id);
+    let verify_task_id = format!(".verify-{}", task_id);
     let verify_task_data = graph.get_task(&verify_task_id);
     let verify_status_owned: Option<String> = verify_task_data.and_then(|vt| match vt.status {
         Status::Done => Some("passed".to_string()),

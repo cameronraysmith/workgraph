@@ -3717,8 +3717,8 @@ impl VizApp {
                 ("∴ Evaluation", format!("evaluate-{}", task.id)),
                 ("⤿ FLIP", format!(".flip-{}", task.id)),
                 ("⤿ FLIP", format!("flip-{}", task.id)),
-                ("✓ Verify-FLIP", format!(".verify-flip-{}", task.id)),
-                ("✓ Verify-FLIP", format!("verify-flip-{}", task.id)),
+                ("✓ Verify", format!(".verify-{}", task.id)),
+                ("✓ Verify", format!("verify-{}", task.id)),
             ];
 
             let mut phase_entries: Vec<(String, TokenUsage)> = Vec::new();

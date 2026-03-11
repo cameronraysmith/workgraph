@@ -1595,7 +1595,7 @@ fn build_flip_verification_tasks(
 
     for eval in &low_flip {
         let source_task_id = &eval.task_id;
-        let verify_task_id = format!(".verify-flip-{}", source_task_id);
+        let verify_task_id = format!(".verify-{}", source_task_id);
 
         // Skip if verification task already exists
         if graph.get_task(&verify_task_id).is_some() {

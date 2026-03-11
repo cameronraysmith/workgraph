@@ -344,9 +344,9 @@ pub struct EvaluatorInput<'a> {
     pub downstream_tasks: &'a [(String, String, Option<String>)],
     /// FLIP score for the source task (from source: "flip" evaluation), if available.
     pub flip_score: Option<f64>,
-    /// Verification status from .verify-flip-<task>: "passed" or "failed", if available.
+    /// Verification status from .verify-<task>: "passed" or "failed", if available.
     pub verify_status: Option<&'a str>,
-    /// Log entries from the .verify-flip-<task> task, if available.
+    /// Log entries from the .verify-<task> task, if available.
     pub verify_findings: Option<&'a str>,
 }
 

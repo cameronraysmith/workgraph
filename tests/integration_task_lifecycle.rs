@@ -95,7 +95,7 @@ fn test_abandon_cascades_to_evaluate_and_verify_children() {
     let mut eval = make_task(".evaluate-feature-x", "Eval feature X", Status::Open);
     eval.after = vec!["feature-x".to_string()];
 
-    let mut verify = make_task(".verify-flip-feature-x", "Verify feature X", Status::Open);
+    let mut verify = make_task(".verify-feature-x", "Verify feature X", Status::Open);
     verify.after = vec!["feature-x".to_string()];
 
     // A normal dependent should NOT be cascade-abandoned
@@ -117,7 +117,7 @@ fn test_abandon_cascades_to_evaluate_and_verify_children() {
         ".evaluate-* should be cascade-abandoned"
     );
     assert_eq!(
-        g.get_task(".verify-flip-feature-x").unwrap().status,
+        g.get_task(".verify-feature-x").unwrap().status,
         Status::Abandoned,
         ".verify-* should be cascade-abandoned"
     );
@@ -137,7 +137,7 @@ fn test_abandon_does_not_touch_terminal_system_tasks() {
     let mut eval = make_task(".evaluate-t1", "Eval t1", Status::Done);
     eval.after = vec!["t1".to_string()];
 
-    let mut verify = make_task(".verify-flip-t1", "Verify t1", Status::Abandoned);
+    let mut verify = make_task(".verify-t1", "Verify t1", Status::Abandoned);
     verify.after = vec!["t1".to_string()];
 
     let wg_dir = setup_workgraph(&tmp, vec![parent, eval, verify]);
@@ -152,7 +152,7 @@ fn test_abandon_does_not_touch_terminal_system_tasks() {
         "Done system task should stay Done"
     );
     assert_eq!(
-        g.get_task(".verify-flip-t1").unwrap().status,
+        g.get_task(".verify-t1").unwrap().status,
         Status::Abandoned,
         "Already-abandoned system task should stay Abandoned"
     );
@@ -369,7 +369,7 @@ fn test_no_zombie_system_tasks_after_abandon() {
     let mut eval = make_task(".evaluate-main-task", "Eval main", Status::Open);
     eval.after = vec!["main-task".to_string()];
 
-    let mut verify = make_task(".verify-flip-main-task", "Verify main", Status::Open);
+    let mut verify = make_task(".verify-main-task", "Verify main", Status::Open);
     verify.after = vec!["main-task".to_string()];
 
     let mut assign = make_task(".assign-main-task", "Assign main", Status::Done);
@@ -424,7 +424,7 @@ fn test_no_zombie_accumulation_across_multiple_abandons() {
             ..Task::default()
         };
         let verify = Task {
-            id: format!(".verify-flip-{}", id),
+            id: format!(".verify-{}", id),
             title: format!("Verify {}", id),
             status: Status::Open,
             after: vec![id.clone()],
@@ -507,7 +507,7 @@ fn test_full_lifecycle_abandon_supersede_cascade() {
             ..Task::default()
         };
         let verify = Task {
-            id: ".verify-flip-auth-v1".to_string(),
+            id: ".verify-auth-v1".to_string(),
             title: "Verify auth-v1".to_string(),
             status: Status::InProgress,
             after: vec!["auth-v1".to_string()],
@@ -548,7 +548,7 @@ fn test_full_lifecycle_abandon_supersede_cascade() {
         Status::Abandoned
     );
     assert_eq!(
-        g.get_task(".verify-flip-auth-v1").unwrap().status,
+        g.get_task(".verify-auth-v1").unwrap().status,
         Status::Abandoned
     );
 

@@ -167,10 +167,8 @@ fn compute_phase_annotation(internal_task: &Task) -> &'static str {
     let id = &internal_task.id;
     if id.starts_with(".assign-") || id.starts_with("assign-") {
         "[assigning]"
-    } else if id.starts_with(".verify-flip-") || id.starts_with("verify-flip-") {
-        "[✓ validating]"
     } else if id.starts_with(".verify-") || id.starts_with("verify-") {
-        "[verifying]"
+        "[✓ validating]"
     } else {
         "[∴ evaluating]"
     }
@@ -181,12 +179,12 @@ fn system_task_parent_id(id: &str) -> Option<String> {
     for prefix in &[
         ".assign-",
         ".evaluate-",
-        ".verify-flip-",
+        ".verify-",
         ".flip-",
         ".respond-to-",
         "assign-",
         "evaluate-",
-        "verify-flip-",
+        "verify-",
         "flip-",
         "respond-to-",
     ] {
@@ -557,7 +555,7 @@ pub fn generate_viz_output_from_graph(
         .collect();
 
     // Build unified agency token usage map: aggregate all lifecycle tasks
-    // (.assign-*, .evaluate-*, .flip-*, .verify-flip-*) into a single total per parent task.
+    // (.assign-*, .evaluate-*, .flip-*, .verify-*) into a single total per parent task.
     let mut agency_token_usage: HashMap<String, TokenUsage> = HashMap::new();
     for task in graph.tasks() {
         if !is_internal_task(task) {

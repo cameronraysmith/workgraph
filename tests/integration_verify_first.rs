@@ -265,9 +265,9 @@ fn test_verify_adds_dep_to_eval() {
     };
     graph.add_node(Node::Task(eval_task));
 
-    // Simulate build_flip_verification_tasks: creates .verify-flip-task-x
+    // Simulate build_flip_verification_tasks: creates .verify-task-x
     // and adds it as dep on .evaluate-task-x
-    let verify_task_id = ".verify-flip-task-x".to_string();
+    let verify_task_id = ".verify-task-x".to_string();
     let verify_task = Task {
         id: verify_task_id.clone(),
         title: "Verify (FLIP 0.45): Task X".to_string(),
@@ -285,14 +285,14 @@ fn test_verify_adds_dep_to_eval() {
         }
     }
 
-    // Verify: eval now depends on both .flip-task-x and .verify-flip-task-x
+    // Verify: eval now depends on both .flip-task-x and .verify-task-x
     let eval = graph.get_task(eval_task_id).unwrap();
     assert!(
         eval.after.contains(&".flip-task-x".to_string()),
         "Eval should still depend on FLIP task"
     );
     assert!(
-        eval.after.contains(&".verify-flip-task-x".to_string()),
+        eval.after.contains(&".verify-task-x".to_string()),
         "Eval should now also depend on verify task"
     );
     assert_eq!(eval.after.len(), 2, "Eval should have exactly 2 deps");
@@ -329,7 +329,7 @@ fn test_eval_blocked_until_verify_done() {
         ..Task::default()
     }));
     graph.add_node(Node::Task(Task {
-        id: ".verify-flip-task-x".to_string(),
+        id: ".verify-task-x".to_string(),
         title: "Verify (FLIP 0.45): Task X".to_string(),
         status: Status::Open,
         tags: vec!["verification".to_string()],
@@ -341,7 +341,7 @@ fn test_eval_blocked_until_verify_done() {
         status: Status::Open,
         after: vec![
             ".flip-task-x".to_string(),
-            ".verify-flip-task-x".to_string(),
+            ".verify-task-x".to_string(),
         ],
         tags: vec!["evaluation".to_string()],
         ..Task::default()
@@ -357,7 +357,7 @@ fn test_eval_blocked_until_verify_done() {
     );
 
     // Verify is in-progress: still blocked
-    graph.get_task_mut(".verify-flip-task-x").unwrap().status = Status::InProgress;
+    graph.get_task_mut(".verify-task-x").unwrap().status = Status::InProgress;
     let ready = ready_tasks(&graph);
     let ready_ids: Vec<&str> = ready.iter().map(|t| t.id.as_str()).collect();
     assert!(
@@ -367,7 +367,7 @@ fn test_eval_blocked_until_verify_done() {
     );
 
     // Verify completes: eval becomes ready
-    graph.get_task_mut(".verify-flip-task-x").unwrap().status = Status::Done;
+    graph.get_task_mut(".verify-task-x").unwrap().status = Status::Done;
     let ready = ready_tasks(&graph);
     let ready_ids: Vec<&str> = ready.iter().map(|t| t.id.as_str()).collect();
     assert!(
