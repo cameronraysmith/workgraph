@@ -36,6 +36,7 @@ use chrono::{DateTime, Utc};
 use workgraph::chat;
 use workgraph::graph::Status;
 use workgraph::parser::load_graph;
+use workgraph::service::compactor::{context_md_path, CompactorState};
 use workgraph::service::registry::AgentRegistry;
 
 use crate::commands::{graph_path, is_process_alive};
@@ -573,7 +574,7 @@ fn agent_thread_main(
 
                 // Build context injection with event log
                 let context =
-                    match build_coordinator_context(dir, &last_interaction, Some(event_log)) {
+                    match build_coordinator_context(dir, &last_interaction, Some(event_log), coordinator_id) {
                         Ok(ctx) => ctx,
                         Err(e) => {
                             logger.warn(&format!(
@@ -794,7 +795,7 @@ fn build_crash_recovery_summary(dir: &Path, coordinator_id: u32) -> Result<Strin
     parts.push("---".to_string());
     parts.push(String::new());
 
-    let graph_context = build_coordinator_context(dir, "1970-01-01T00:00:00Z", None)?;
+    let graph_context = build_coordinator_context(dir, "1970-01-01T00:00:00Z", None, coordinator_id)?;
     if graph_context.is_empty() {
         parts.push("Current graph state: No graph found.".to_string());
     } else {
@@ -1574,6 +1575,7 @@ pub fn build_coordinator_context(
     dir: &Path,
     last_interaction: &str,
     event_log: Option<&SharedEventLog>,
+    coordinator_id: u32,
 ) -> Result<String> {
     let gp = graph_path(dir);
     if !gp.exists() {
@@ -1688,6 +1690,24 @@ pub fn build_coordinator_context(
 
     parts.push(format!("## System Context Update ({})", now));
 
+    // --- Compacted Project Context ---
+    let context_path = context_md_path(dir);
+    if context_path.exists() {
+        if let Ok(contents) = std::fs::read_to_string(&context_path) {
+            let contents = contents.trim();
+            if !contents.is_empty() {
+                let state = CompactorState::load(dir);
+                let ts_line = match &state.last_compaction {
+                    Some(ts) => format!("_Last compacted: {}_\n", ts),
+                    None => String::new(),
+                };
+                parts.push(format!(
+                    "\n### Compacted Project Context\n{}{}", ts_line, contents
+                ));
+            }
+        }
+    }
+
     parts.push(format!(
         "\n### Graph Summary\n{} tasks: {} done, {} in-progress, {} open, {} blocked, {} failed, {} abandoned",
         total, done, in_progress, open, blocked, failed, abandoned
@@ -1719,6 +1739,13 @@ pub fn build_coordinator_context(
             parts.push(line.clone());
         }
     }
+
+    // Tell the coordinator where its chat log lives
+    let chat_log = chat::chat_log_path_for(dir, coordinator_id);
+    parts.push(format!(
+        "\n### Chat Log\nYour full chat history is at: {}",
+        chat_log.display()
+    ));
 
     Ok(parts.join("\n"))
 }
@@ -1798,7 +1825,7 @@ mod tests {
     fn test_build_coordinator_context_no_graph() {
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path();
-        let ctx = build_coordinator_context(dir, "2026-01-01T00:00:00Z", None).unwrap();
+        let ctx = build_coordinator_context(dir, "2026-01-01T00:00:00Z", None, 0).unwrap();
         assert!(ctx.is_empty());
     }
 
@@ -1818,7 +1845,7 @@ mod tests {
 
         // This will fail to load since it's not a valid graph format,
         // but we're testing the error path gracefully
-        let ctx = build_coordinator_context(dir, "2026-01-01T00:00:00Z", None);
+        let ctx = build_coordinator_context(dir, "2026-01-01T00:00:00Z", None, 0);
         // Either succeeds with content or fails gracefully
         assert!(ctx.is_ok() || ctx.is_err());
     }
@@ -1928,5 +1955,65 @@ mod tests {
         assert!(!summary.contains("msg-0"));
         // But later messages should be
         assert!(summary.contains("msg-19") || summary.contains("response-19"));
+    }
+
+    #[test]
+    fn test_coordinator_context_includes_compaction() {
+        use workgraph::service::compactor::{context_md_path, CompactorState};
+        use workgraph::test_helpers::{make_task_with_status, setup_workgraph};
+
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+
+        // Set up a valid graph so build_coordinator_context proceeds past the early return
+        setup_workgraph(dir, vec![
+            make_task_with_status("task-1", "A task", Status::Open),
+        ]);
+
+        // Write context.md with known content
+        let ctx_path = context_md_path(dir);
+        std::fs::create_dir_all(ctx_path.parent().unwrap()).unwrap();
+        std::fs::write(&ctx_path, "The project is building a widget system.").unwrap();
+
+        // Write compactor state with a known timestamp
+        let state = CompactorState {
+            last_compaction: Some("2026-03-10T12:00:00Z".to_string()),
+            last_ops_count: 10,
+            last_tick: 3,
+            compaction_count: 1,
+        };
+        state.save(dir).unwrap();
+
+        let ctx = build_coordinator_context(dir, "2026-01-01T00:00:00Z", None, 0).unwrap();
+
+        // Compacted context should appear
+        assert!(ctx.contains("### Compacted Project Context"), "missing section header");
+        assert!(ctx.contains("The project is building a widget system."), "missing context body");
+        assert!(ctx.contains("2026-03-10T12:00:00Z"), "missing compaction timestamp");
+
+        // Compacted context should appear BEFORE graph summary
+        let compact_pos = ctx.find("### Compacted Project Context").unwrap();
+        let graph_pos = ctx.find("### Graph Summary").unwrap();
+        assert!(compact_pos < graph_pos, "compacted context should come before graph summary");
+    }
+
+    #[test]
+    fn test_coordinator_context_without_compaction() {
+        use workgraph::test_helpers::{make_task_with_status, setup_workgraph};
+
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+
+        // Set up a valid graph, no context.md
+        setup_workgraph(dir, vec![
+            make_task_with_status("task-1", "A task", Status::Open),
+        ]);
+
+        let ctx = build_coordinator_context(dir, "2026-01-01T00:00:00Z", None, 0).unwrap();
+
+        // Should not contain compacted section
+        assert!(!ctx.contains("Compacted Project Context"));
+        // But should still have graph summary
+        assert!(ctx.contains("### Graph Summary"));
     }
 }

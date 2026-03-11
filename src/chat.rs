@@ -61,6 +61,11 @@ fn chat_dir_for(workgraph_dir: &Path, coordinator_id: u32) -> PathBuf {
     workgraph_dir.join("chat").join(coordinator_id.to_string())
 }
 
+/// Path to the plaintext chat log for a specific coordinator.
+pub fn chat_log_path_for(workgraph_dir: &Path, coordinator_id: u32) -> PathBuf {
+    chat_dir_for(workgraph_dir, coordinator_id).join("chat.log")
+}
+
 /// Directory for chat files (backward compat: coordinator 0).
 #[cfg(test)]
 fn chat_dir(workgraph_dir: &Path) -> PathBuf {
@@ -175,7 +180,7 @@ fn append_message(
         content: content.to_string(),
         request_id: request_id.to_string(),
         attachments,
-        full_response,
+        full_response: full_response.clone(),
     };
 
     let mut json = serde_json::to_string(&msg).context("Failed to serialize chat message")?;
@@ -185,6 +190,22 @@ fn append_message(
     file_ref
         .write_all(json.as_bytes())
         .with_context(|| format!("Failed to write to chat file: {}", path.display()))?;
+
+    // Also append a plaintext entry to chat.log for grep-friendly access
+    if let Some(parent) = path.parent() {
+        let log_path = parent.join("chat.log");
+        let log_content = full_response.as_deref().unwrap_or(content);
+        let entry = format!(
+            "[{}] {}: {}\n\n",
+            msg.timestamp, role, log_content
+        );
+        // Best-effort: don't fail the message write if plaintext log fails
+        let _ = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&log_path)
+            .and_then(|mut f| f.write_all(entry.as_bytes()));
+    }
 
     // Lock is released when file is dropped
     Ok(next_id)
