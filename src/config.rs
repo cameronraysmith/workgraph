@@ -532,7 +532,7 @@ impl DispatchRole {
             Self::FlipInference => Tier::Standard,
             Self::TaskAgent => Tier::Standard,
             Self::Evaluator => Tier::Standard,
-            Self::Evolver => Tier::Standard,
+            Self::Evolver => Tier::Premium,
             Self::Creator => Tier::Premium,
             Self::Verification => Tier::Premium,
             Self::Default => Tier::Standard,
@@ -2839,6 +2839,7 @@ model = "haiku"
         assert_eq!(DispatchRole::TaskAgent.default_tier(), Tier::Standard);
         assert_eq!(DispatchRole::Evaluator.default_tier(), Tier::Standard);
         assert_eq!(DispatchRole::FlipInference.default_tier(), Tier::Standard);
+        assert_eq!(DispatchRole::Evolver.default_tier(), Tier::Premium);
         assert_eq!(DispatchRole::Creator.default_tier(), Tier::Premium);
         assert_eq!(DispatchRole::Verification.default_tier(), Tier::Premium);
         assert_eq!(DispatchRole::Default.default_tier(), Tier::Standard);

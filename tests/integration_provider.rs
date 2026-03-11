@@ -483,15 +483,15 @@ fn test_fallback_chain_role_to_default_to_agent() {
     // Resolution: role-specific → models.default → agent.model
     let mut config = Config::default();
 
-    // 1. No config at all → resolves via Standard tier → sonnet registry entry
+    // 1. No config at all → resolves via Premium tier → opus registry entry
     let resolved = config.resolve_model_for_role(DispatchRole::Evolver);
     assert_eq!(
-        resolved.model, "claude-sonnet-4-20250514",
-        "Without any config, Evolver should resolve via Standard tier"
+        resolved.model, "claude-opus-4-6",
+        "Without any config, Evolver should resolve via Premium tier"
     );
     assert_eq!(resolved.provider, Some("anthropic".to_string()));
 
-    // 2. Set models.default → tier resolution still takes priority for Evolver (Standard tier)
+    // 2. Set models.default → tier resolution still takes priority for Evolver (Premium tier)
     //    but default provider cascades through tier resolution
     config.models.default = Some(RoleModelConfig {
         model: Some("default-model".to_string()),
@@ -500,7 +500,7 @@ fn test_fallback_chain_role_to_default_to_agent() {
     });
     let resolved = config.resolve_model_for_role(DispatchRole::Evolver);
     assert_eq!(
-        resolved.model, "claude-sonnet-4-20250514",
+        resolved.model, "claude-opus-4-6",
         "Tier resolution (step 4) takes priority over models.default (step 5)"
     );
     assert_eq!(
