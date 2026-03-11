@@ -782,6 +782,10 @@ pub struct ChatState {
     /// Mapping from rendered line index to message index (set each frame by renderer).
     /// Used for click-to-edit: determines which message a clicked line belongs to.
     pub line_to_message: Vec<Option<usize>>,
+    /// Per-coordinator input mode (ChatInput/MessageInput); saved/restored on coordinator switch.
+    pub input_mode: InputMode,
+    /// Whether the user explicitly dismissed chat input with Esc (per-coordinator).
+    pub chat_input_dismissed: bool,
 }
 
 impl Default for ChatState {
@@ -802,6 +806,8 @@ impl Default for ChatState {
             edit_saved_input: String::new(),
             history_cursor: None,
             line_to_message: Vec::new(),
+            input_mode: InputMode::Normal,
+            chat_input_dismissed: false,
         }
     }
 }
@@ -2442,6 +2448,7 @@ impl VizApp {
         };
         self.selected_task_idx = Some(idx);
         self.recompute_trace();
+        self.sync_coordinator_from_selection();
         self.scroll_to_selected_task();
     }
 
@@ -2458,6 +2465,7 @@ impl VizApp {
         };
         self.selected_task_idx = Some(idx);
         self.recompute_trace();
+        self.sync_coordinator_from_selection();
         self.scroll_to_selected_task();
     }
 
@@ -2472,6 +2480,7 @@ impl VizApp {
         };
         self.selected_task_idx = Some(idx);
         self.recompute_trace();
+        self.sync_coordinator_from_selection();
         self.scroll_to_selected_task();
     }
 
@@ -2487,6 +2496,7 @@ impl VizApp {
         };
         self.selected_task_idx = Some(idx);
         self.recompute_trace();
+        self.sync_coordinator_from_selection();
         self.scroll_to_selected_task();
     }
 
@@ -2497,6 +2507,7 @@ impl VizApp {
         }
         self.selected_task_idx = Some(0);
         self.recompute_trace();
+        self.sync_coordinator_from_selection();
         self.scroll_to_selected_task();
     }
 
@@ -2507,6 +2518,7 @@ impl VizApp {
         }
         self.selected_task_idx = Some(self.task_order.len() - 1);
         self.recompute_trace();
+        self.sync_coordinator_from_selection();
         self.scroll_to_selected_task();
     }
 
@@ -2564,8 +2576,26 @@ impl VizApp {
             self.cycle_set = members.clone();
         }
 
-        // Selection sync: if a coordinator task is selected, switch chat to that coordinator
-        // and auto-switch the right panel to Chat tab.
+        // Invalidate HUD, lifecycle, and messages panel so they reload for the new selection.
+        self.invalidate_hud();
+        self.invalidate_agency_lifecycle();
+        self.invalidate_log_pane();
+        // Save message draft before invalidating — invalidate clears task_id.
+        self.save_message_draft();
+        self.invalidate_messages_panel();
+    }
+
+    /// If the currently selected task is a coordinator task, switch to that
+    /// coordinator and show the Chat tab. Call this only from user-initiated
+    /// selection changes (keyboard / mouse), NOT from automatic graph refreshes.
+    fn sync_coordinator_from_selection(&mut self) {
+        let selected_id = match self.selected_task_idx {
+            Some(idx) => match self.task_order.get(idx) {
+                Some(id) => id.clone(),
+                None => return,
+            },
+            None => return,
+        };
         if let Some(cid) = selected_id
             .strip_prefix(".coordinator-")
             .and_then(|s| s.parse::<u32>().ok())
@@ -2580,14 +2610,6 @@ impl VizApp {
         } else if selected_id == ".coordinator" {
             self.right_panel_tab = RightPanelTab::Chat;
         }
-
-        // Invalidate HUD, lifecycle, and messages panel so they reload for the new selection.
-        self.invalidate_hud();
-        self.invalidate_agency_lifecycle();
-        self.invalidate_log_pane();
-        // Save message draft before invalidating — invalidate clears task_id.
-        self.save_message_draft();
-        self.invalidate_messages_panel();
     }
 
     /// Scroll the viewport so the selected task stays within the middle 60% of
@@ -2652,6 +2674,7 @@ impl VizApp {
         };
         self.selected_task_idx = Some(idx);
         self.recompute_trace();
+        self.sync_coordinator_from_selection();
         true
     }
 
@@ -3392,6 +3415,7 @@ impl VizApp {
                 if !self.task_order.is_empty() {
                     self.selected_task_idx = Some(0);
                     self.recompute_trace();
+                    self.sync_coordinator_from_selection();
                 }
             }
             SortMode::ReverseChronological => {
@@ -3399,6 +3423,7 @@ impl VizApp {
                 if !self.task_order.is_empty() {
                     self.selected_task_idx = Some(self.task_order.len() - 1);
                     self.recompute_trace();
+                    self.sync_coordinator_from_selection();
                 }
             }
             SortMode::StatusGrouped => {
@@ -3406,6 +3431,7 @@ impl VizApp {
                 if !self.task_order.is_empty() {
                     self.selected_task_idx = Some(0);
                     self.recompute_trace();
+                    self.sync_coordinator_from_selection();
                     self.scroll_to_selected_task();
                 }
             }
@@ -6212,8 +6238,12 @@ impl VizApp {
         if target_id == self.active_coordinator_id {
             return;
         }
-        // Save current chat state
-        let current = std::mem::take(&mut self.chat);
+        // Save per-coordinator input mode and dismissed flag into the outgoing chat state
+        let mut current = std::mem::take(&mut self.chat);
+        if matches!(self.input_mode, InputMode::ChatInput | InputMode::MessageInput) {
+            current.input_mode = self.input_mode.clone();
+        }
+        current.chat_input_dismissed = self.chat_input_dismissed;
         self.coordinator_chats
             .insert(self.active_coordinator_id, current);
 
@@ -6222,6 +6252,16 @@ impl VizApp {
             .coordinator_chats
             .remove(&target_id)
             .unwrap_or_default();
+
+        // Restore per-coordinator input mode: if the target had a chat-related mode, restore it;
+        // otherwise if we were in a chat-related mode from the previous coordinator, reset to Normal.
+        if matches!(self.chat.input_mode, InputMode::ChatInput | InputMode::MessageInput) {
+            self.input_mode = self.chat.input_mode.clone();
+        } else if matches!(self.input_mode, InputMode::ChatInput | InputMode::MessageInput) {
+            self.input_mode = InputMode::Normal;
+        }
+        self.chat_input_dismissed = self.chat.chat_input_dismissed;
+
         self.active_coordinator_id = target_id;
 
         // Sync: highlight the corresponding coordinator task in the graph.

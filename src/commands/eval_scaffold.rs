@@ -5,8 +5,7 @@
 //! graph edges:
 //!
 //! ```text
-//! .assign-foo → foo → .evaluate-foo
-//!                   → .flip-foo
+//! .place-foo → .assign-foo → foo → .flip-foo → .evaluate-foo
 //! ```
 
 use chrono::Utc;
@@ -103,10 +102,20 @@ pub fn scaffold_assign_task(graph: &mut WorkGraph, task_id: &str, task_title: &s
         return false;
     }
 
+    // If a .place-* task exists for this source task, make .assign-* depend on it.
+    // This enforces the pipeline ordering: .place-* → .assign-* → task
+    let place_task_id = format!(".place-{}", task_id);
+    let after = if graph.get_task(&place_task_id).is_some() {
+        vec![place_task_id.clone()]
+    } else {
+        vec![]
+    };
+
     let assign_task = Task {
         id: assign_task_id.clone(),
         title: format!("Assign agent for: {}", task_title),
         status: Status::Open,
+        after,
         before: vec![task_id.to_string()],
         tags: vec!["assignment".to_string(), "agency".to_string()],
         exec: Some(format!("wg assign {} --auto", task_id)),
@@ -555,6 +564,7 @@ mod tests {
         assert_eq!(assign.title, "Assign agent for: My Task");
         assert_eq!(assign.status, Status::Open);
         assert_eq!(assign.before, vec!["my-task".to_string()]);
+        assert!(assign.after.is_empty()); // No .place-* exists → no deps
         assert!(assign.tags.contains(&"assignment".to_string()));
         assert!(assign.tags.contains(&"agency".to_string()));
         assert_eq!(assign.visibility, "internal");
@@ -562,6 +572,30 @@ mod tests {
         // Source task should have .assign-* as a blocker
         let source = graph.get_task("my-task").unwrap();
         assert!(source.after.contains(&".assign-my-task".to_string()));
+    }
+
+    #[test]
+    fn test_scaffold_assign_depends_on_place_when_exists() {
+        let mut graph = WorkGraph::new();
+        graph.add_node(Node::Task(make_task("my-task", "My Task")));
+
+        // Create a .place-* task first (as coordinator Phase 2.9 would)
+        let place_task = Task {
+            id: ".place-my-task".to_string(),
+            title: "Place: my-task".to_string(),
+            status: Status::Open,
+            tags: vec!["placement".to_string()],
+            ..Task::default()
+        };
+        graph.add_node(Node::Task(place_task));
+
+        // Now scaffold .assign-* — it should depend on .place-*
+        let modified = scaffold_assign_task(&mut graph, "my-task", "My Task");
+        assert!(modified);
+
+        let assign = graph.get_task(".assign-my-task").unwrap();
+        assert_eq!(assign.after, vec![".place-my-task".to_string()]);
+        assert_eq!(assign.before, vec!["my-task".to_string()]);
     }
 
     #[test]
@@ -626,7 +660,7 @@ mod tests {
         let mut graph = WorkGraph::new();
         graph.add_node(Node::Task(make_task("foo", "Foo Task")));
 
-        // Scaffold the full lifecycle chain
+        // Scaffold the full lifecycle chain (no .place-* — direct publish)
         scaffold_assign_task(&mut graph, "foo", "Foo Task");
         scaffold_eval_task(dir.path(), &mut graph, "foo", "Foo Task", &config);
 
@@ -634,6 +668,7 @@ mod tests {
         let assign = graph.get_task(".assign-foo").unwrap();
         assert_eq!(assign.status, Status::Open);
         assert_eq!(assign.before, vec!["foo".to_string()]);
+        assert!(assign.after.is_empty()); // No .place-* → no deps
 
         // Verify foo has .assign-foo in its after list
         let foo = graph.get_task("foo").unwrap();
@@ -648,6 +683,46 @@ mod tests {
         assert_eq!(eval.after, vec![".flip-foo".to_string()]);
 
         // Full chain: .assign-foo → foo → .flip-foo → .evaluate-foo
-        //                              → (also visible in .flip-foo.after)
+    }
+
+    #[test]
+    fn test_full_lifecycle_chain_with_placement() {
+        let dir = tempdir().unwrap();
+        let mut config = Config::default();
+        config.agency.flip_enabled = true;
+        let mut graph = WorkGraph::new();
+        graph.add_node(Node::Task(make_task("bar", "Bar Task")));
+
+        // Simulate coordinator Phase 2.9: create .place-* first
+        let place_task = Task {
+            id: ".place-bar".to_string(),
+            title: "Place: bar".to_string(),
+            status: Status::Open,
+            tags: vec!["placement".to_string()],
+            ..Task::default()
+        };
+        graph.add_node(Node::Task(place_task));
+
+        // Simulate publish (after placement agent calls wg publish):
+        // scaffold assign + eval
+        scaffold_assign_task(&mut graph, "bar", "Bar Task");
+        scaffold_eval_task(dir.path(), &mut graph, "bar", "Bar Task", &config);
+
+        // Full chain: .place-bar → .assign-bar → bar → .flip-bar → .evaluate-bar
+        let place = graph.get_task(".place-bar").unwrap();
+        assert_eq!(place.status, Status::Open);
+
+        let assign = graph.get_task(".assign-bar").unwrap();
+        assert_eq!(assign.after, vec![".place-bar".to_string()]);
+        assert_eq!(assign.before, vec!["bar".to_string()]);
+
+        let bar = graph.get_task("bar").unwrap();
+        assert!(bar.after.contains(&".assign-bar".to_string()));
+
+        let flip = graph.get_task(".flip-bar").unwrap();
+        assert_eq!(flip.after, vec!["bar".to_string()]);
+
+        let eval = graph.get_task(".evaluate-bar").unwrap();
+        assert_eq!(eval.after, vec![".flip-bar".to_string()]);
     }
 }

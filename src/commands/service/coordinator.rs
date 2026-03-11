@@ -873,6 +873,20 @@ fn build_placement_tasks(
         };
 
         graph.add_node(Node::Task(place_task));
+
+        // Wire .place-* → .assign-* dependency if .assign-* already exists.
+        // This enforces pipeline ordering: .place-* → .assign-* → task
+        let assign_task_id = format!(".assign-{}", task_id);
+        if let Some(assign_task) = graph.get_task_mut(&assign_task_id)
+            && !assign_task.after.iter().any(|a| a == &place_task_id)
+        {
+            assign_task.after.push(place_task_id.clone());
+            eprintln!(
+                "[coordinator] Wired placement dependency: '{}' → '{}'",
+                place_task_id, assign_task_id
+            );
+        }
+
         eprintln!(
             "[coordinator] Created placement task '{}' for draft task '{}'",
             place_task_id, task_id
