@@ -471,7 +471,7 @@ mod tests {
 
         assert!(!result.contains("assign-my-task"));
         assert!(result.contains("my-task"));
-        assert!(result.contains("[assigning]"));
+        assert!(result.contains("[⊞ assigning]"));
     }
 
     #[test]
@@ -503,7 +503,7 @@ mod tests {
 
         assert!(!result.contains("assign-my-task"));
         assert!(result.contains("my-task"));
-        assert!(result.contains("[assigning]"));
+        assert!(result.contains("[⊞ assigning]"));
     }
 
     #[test]

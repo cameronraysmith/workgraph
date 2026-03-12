@@ -318,7 +318,8 @@ pub(crate) fn generate_ascii(
         // which is used for upstream edge tracing.
         let is_agency_phase = use_color
             && annotations.get(id).is_some_and(|a| {
-                a.contains("assigning")
+                a.contains("placing")
+                    || a.contains("assigning")
                     || a.contains("evaluating")
                     || a.contains("validating")
                     || a.contains("verifying")
@@ -1762,7 +1763,51 @@ mod tests {
         assert!(!result.text.contains("assign-my-task"));
         // Parent task should appear with phase annotation
         assert!(result.text.contains("my-task"));
-        assert!(result.text.contains("[assigning]"));
+        assert!(result.text.contains("[⊞ assigning]"));
+    }
+
+    #[test]
+    fn test_ascii_shows_placing_phase() {
+        let mut graph = WorkGraph::new();
+        let mut parent = make_task("my-task", "My Task");
+        parent.status = Status::Open;
+        let mut place = make_internal_task(
+            ".place-my-task",
+            "Place my-task",
+            "assignment",
+            vec![],
+        );
+        place.status = Status::InProgress;
+        parent.after = vec![".place-my-task".to_string()];
+        graph.add_node(Node::Task(parent));
+        graph.add_node(Node::Task(place));
+
+        let annotations = HashMap::new();
+        let (filtered, annots) = crate::commands::viz::filter_internal_tasks(
+            &graph,
+            graph.tasks().collect(),
+            &annotations,
+        );
+        let task_ids: HashSet<&str> = filtered.iter().map(|t| t.id.as_str()).collect();
+
+        let result = generate_ascii(
+            &graph,
+            &filtered,
+            &task_ids,
+            &annots,
+            &HashMap::new(),
+            &HashMap::new(),
+            LayoutMode::default(),
+            &HashSet::new(),
+            "gray",
+            &HashMap::new(),
+        );
+
+        // Internal task should NOT appear
+        assert!(!result.text.contains(".place-my-task"));
+        // Parent task should appear with phase annotation
+        assert!(result.text.contains("my-task"));
+        assert!(result.text.contains("[⊞ placing]"));
     }
 
     #[test]
@@ -1843,7 +1888,7 @@ mod tests {
         assert!(result.text.contains("assign-my-task"));
         assert!(result.text.contains("my-task"));
         // No phase annotation when shown as literal nodes
-        assert!(!result.text.contains("[assigning]"));
+        assert!(!result.text.contains("[⊞ assigning]"));
     }
 
     #[test]
@@ -3413,8 +3458,8 @@ mod tests {
 
         let plain = strip_ansi_for_map(&result.text);
         assert!(
-            plain.contains("[assigning]"),
-            "Should contain [assigning]. Plain: {}",
+            plain.contains("[⊞ assigning]"),
+            "Should contain [⊞ assigning]. Plain: {}",
             plain
         );
         // Internal assign task should be filtered out.

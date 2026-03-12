@@ -165,10 +165,12 @@ pub(crate) fn is_coordinator_task(task: &Task) -> bool {
 /// - If an evaluation task exists and is not done → "[evaluating]"
 fn compute_phase_annotation(internal_task: &Task) -> &'static str {
     let id = &internal_task.id;
-    if id.starts_with(".assign-") || id.starts_with("assign-") {
-        "[assigning]"
+    if id.starts_with(".place-") || id.starts_with("place-") {
+        "[⊞ placing]"
+    } else if id.starts_with(".assign-") || id.starts_with("assign-") {
+        "[⊞ assigning]"
     } else if id.starts_with(".verify-") || id.starts_with("verify-") {
-        "[✓ validating]"
+        "[∴ validating]"
     } else {
         "[∴ evaluating]"
     }
@@ -177,11 +179,13 @@ fn compute_phase_annotation(internal_task: &Task) -> &'static str {
 /// Extract the parent task ID from a system task ID.
 fn system_task_parent_id(id: &str) -> Option<String> {
     for prefix in &[
+        ".place-",
         ".assign-",
         ".evaluate-",
         ".verify-",
         ".flip-",
         ".respond-to-",
+        "place-",
         "assign-",
         "evaluate-",
         "verify-",
