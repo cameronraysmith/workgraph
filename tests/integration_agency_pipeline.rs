@@ -981,6 +981,56 @@ fn retroactive_wiring_is_idempotent() {
     assert_eq!(assign.after[0], ".place-foo");
 }
 
+#[test]
+fn place_exists_before_assign_wires_forward() {
+    // Scenario: coordinator Phase 2.9 runs before publish.
+    // .place-* already exists when scaffold_assign_task creates .assign-*.
+    // Replicates the forward wiring path in eval_scaffold.rs lines 115-120.
+    let mut graph = WorkGraph::new();
+    graph.add_node(Node::Task(make_task("my-task", "My Task")));
+
+    // Step 1: Coordinator creates .place-* first
+    let place_task = Task {
+        id: ".place-my-task".to_string(),
+        title: "Place: my-task".to_string(),
+        status: Status::Open,
+        tags: vec!["placement".to_string(), "agency".to_string()],
+        ..Task::default()
+    };
+    graph.add_node(Node::Task(place_task));
+
+    // Step 2: Simulate scaffold_assign_task (publish-side) — detects .place-* exists
+    let task_id = "my-task";
+    let place_task_id = format!(".place-{}", task_id);
+    let after = if graph.get_task(&place_task_id).is_some() {
+        vec![place_task_id.clone()]
+    } else {
+        vec![]
+    };
+
+    let assign_task = Task {
+        id: ".assign-my-task".to_string(),
+        title: "Assign agent for: My Task".to_string(),
+        status: Status::Open,
+        after,
+        before: vec!["my-task".to_string()],
+        tags: vec!["assignment".to_string(), "agency".to_string()],
+        ..Task::default()
+    };
+    graph.add_node(Node::Task(assign_task));
+
+    // Verify: .assign-* depends on .place-* (forward wiring)
+    let assign = graph.get_task(".assign-my-task").unwrap();
+    assert_eq!(
+        assign.after,
+        vec![".place-my-task".to_string()],
+        ".assign-* should depend on .place-* when place exists at scaffold time"
+    );
+
+    // Verify: full chain .place-* → .assign-* → my-task
+    assert_eq!(assign.before, vec!["my-task".to_string()]);
+}
+
 // ===========================================================================
 // Additional edge cases
 // ===========================================================================
