@@ -434,6 +434,9 @@ pub fn run(
                 println!("Model:      {}", m);
             }
             println!("Score:      {:.2}", evaluation.score);
+            if let Some(f) = evaluation.dimensions.get("intent_fidelity") {
+                println!("  intent_fidelity:        {:.2}", f);
+            }
             // Individual quality dimensions
             if let Some(c) = evaluation.dimensions.get("correctness") {
                 println!("  correctness:            {:.2}", c);
@@ -456,9 +459,6 @@ pub fn run(
             }
             if let Some(b) = evaluation.dimensions.get("blocking_impact") {
                 println!("  blocking_impact:        {:.2}", b);
-            }
-            if let Some(f) = evaluation.dimensions.get("intent_fidelity") {
-                println!("  intent_fidelity:        {:.2}", f);
             }
             println!("Notes:      {}", evaluation.notes);
             println!("Evaluator:  {}", evaluation.evaluator);
