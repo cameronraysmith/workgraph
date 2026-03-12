@@ -16,7 +16,7 @@ use workgraph::graph::{Node, Status, Task, WorkGraph};
 
 /// Tags that mark tasks as part of the evaluation/assignment infrastructure.
 /// Tasks with these tags do not get their own eval tasks (no meta-evaluation).
-const DOMINATED_TAGS: &[&str] = &["evaluation", "assignment", "evolution", "flip"];
+const DOMINATED_TAGS: &[&str] = &["evaluation", "assignment", "evolution", "flip", "placement"];
 
 /// Returns true if FLIP should run for a given task, based on global config
 /// and the task's `flip-eval` tag.
@@ -548,6 +548,42 @@ mod tests {
             &config
         ));
         assert!(graph.get_task(".evaluate-flip-infra").is_none());
+    }
+
+    #[test]
+    fn test_scaffold_skips_placement_tagged_tasks() {
+        let dir = tempdir().unwrap();
+        let config = Config::default();
+        let mut graph = WorkGraph::new();
+        let mut task = make_task("place-infra", "Place Infra");
+        task.tags = vec!["placement".to_string()];
+        graph.add_node(Node::Task(task));
+
+        // Placement-tagged tasks should NOT get eval scaffolding
+        assert!(!scaffold_eval_task(
+            dir.path(),
+            &mut graph,
+            "place-infra",
+            "Place Infra",
+            &config
+        ));
+        assert!(graph.get_task(".evaluate-place-infra").is_none());
+
+        // Placement-tagged tasks should NOT get assign scaffolding
+        assert!(!scaffold_assign_task(
+            &mut graph,
+            "place-infra",
+            "Place Infra"
+        ));
+        assert!(graph.get_task(".assign-place-infra").is_none());
+    }
+
+    #[test]
+    fn test_dominated_tags_includes_placement() {
+        assert!(
+            DOMINATED_TAGS.contains(&"placement"),
+            "DOMINATED_TAGS must include 'placement' to prevent .place-* tasks from spawning eval overhead"
+        );
     }
 
     // --- Assign scaffolding tests ---
