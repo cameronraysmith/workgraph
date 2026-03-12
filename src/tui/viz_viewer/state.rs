@@ -65,7 +65,7 @@ pub fn paste_insert_mode(text: &str, state: &mut EditorState) {
 }
 
 pub fn create_editor_handler() -> EditorEventHandler {
-    use edtui::actions::delete::DeleteToEndOfLine;
+    use edtui::actions::delete::{DeleteToEndOfLine, RemoveChar};
     use edtui::actions::{
         MoveBackward, MoveDown, MoveForward, MoveToEndOfLine, MoveToStartOfLine, MoveUp,
     };
@@ -87,6 +87,10 @@ pub fn create_editor_handler() -> EditorEventHandler {
     handler.key_handler.insert(
         KeyEventRegister::i(vec![EdKeyEvent::Ctrl('b')]),
         MoveBackward(1),
+    );
+    handler.key_handler.insert(
+        KeyEventRegister::i(vec![EdKeyEvent::Ctrl('d')]),
+        RemoveChar(1),
     );
     handler.key_handler.insert(
         KeyEventRegister::i(vec![EdKeyEvent::Ctrl('k')]),
