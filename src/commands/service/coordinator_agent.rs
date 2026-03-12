@@ -1697,20 +1697,20 @@ pub fn build_coordinator_context(
 
     // --- Compacted Project Context ---
     let context_path = context_md_path(dir);
-    if context_path.exists() {
-        if let Ok(contents) = std::fs::read_to_string(&context_path) {
-            let contents = contents.trim();
-            if !contents.is_empty() {
-                let state = CompactorState::load(dir);
-                let ts_line = match &state.last_compaction {
-                    Some(ts) => format!("_Last compacted: {}_\n", ts),
-                    None => String::new(),
-                };
-                parts.push(format!(
-                    "\n### Compacted Project Context\n{}{}",
-                    ts_line, contents
-                ));
-            }
+    if context_path.exists()
+        && let Ok(contents) = std::fs::read_to_string(&context_path)
+    {
+        let contents = contents.trim();
+        if !contents.is_empty() {
+            let state = CompactorState::load(dir);
+            let ts_line = match &state.last_compaction {
+                Some(ts) => format!("_Last compacted: {}_\n", ts),
+                None => String::new(),
+            };
+            parts.push(format!(
+                "\n### Compacted Project Context\n{}{}",
+                ts_line, contents
+            ));
         }
     }
 

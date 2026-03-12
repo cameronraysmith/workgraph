@@ -343,17 +343,17 @@ fn handle_choice_dialog_input(app: &mut VizApp, code: KeyCode) {
 
     match code {
         KeyCode::Up | KeyCode::Char('k') => {
-            if let InputMode::ChoiceDialog(ref mut s) = app.input_mode {
-                if s.selected > 0 {
-                    s.selected -= 1;
-                }
+            if let InputMode::ChoiceDialog(ref mut s) = app.input_mode
+                && s.selected > 0
+            {
+                s.selected -= 1;
             }
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            if let InputMode::ChoiceDialog(ref mut s) = app.input_mode {
-                if s.selected + 1 < s.options.len() {
-                    s.selected += 1;
-                }
+            if let InputMode::ChoiceDialog(ref mut s) = app.input_mode
+                && s.selected + 1 < s.options.len()
+            {
+                s.selected += 1;
             }
         }
         KeyCode::Enter => {

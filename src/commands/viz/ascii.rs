@@ -482,14 +482,13 @@ pub(crate) fn generate_ascii(
                 };
                 // Coordinator tasks are hot when they have a recent log entry
                 // (within 60s), indicating the coordinator is actively processing.
-                if t.tags.iter().any(|tag| tag == "coordinator-loop") {
-                    if let Some(last_log) = t.log.last() {
-                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&last_log.timestamp) {
-                            let age = now_utc.signed_duration_since(dt);
-                            if age.num_seconds() < 60 {
-                                return true;
-                            }
-                        }
+                if t.tags.iter().any(|tag| tag == "coordinator-loop")
+                    && let Some(last_log) = t.log.last()
+                    && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&last_log.timestamp)
+                {
+                    let age = now_utc.signed_duration_since(dt);
+                    if age.num_seconds() < 60 {
+                        return true;
                     }
                 }
                 if t.status == Status::InProgress {

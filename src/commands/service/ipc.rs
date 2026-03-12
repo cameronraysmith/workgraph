@@ -991,10 +991,10 @@ fn handle_create_coordinator(dir: &Path, name: Option<&str>) -> IpcResponse {
         graph.add_node(workgraph::graph::Node::Task(compact_task));
 
         // Add back-edge from coordinator to compact (cycle)
-        if let Some(coord) = graph.get_task_mut(&format!(".coordinator-{}", next_id)) {
-            if !coord.after.contains(&compact_id) {
-                coord.after.push(compact_id);
-            }
+        if let Some(coord) = graph.get_task_mut(&format!(".coordinator-{}", next_id))
+            && !coord.after.contains(&compact_id)
+        {
+            coord.after.push(compact_id);
         }
     }
 

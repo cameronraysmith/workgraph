@@ -1659,7 +1659,7 @@ fn build_flip_verification_tasks(
             for artifact in &source_artifacts {
                 desc.push_str(&format!("- `{}`\n", artifact));
             }
-            desc.push_str("\n");
+            desc.push('\n');
         }
 
         desc.push_str("### Verification Steps\n");

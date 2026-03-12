@@ -36,6 +36,7 @@ pub struct OrphanedTask {
 
 /// Result of a sweep operation
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct SweepResult {
     pub orphaned: Vec<OrphanedTask>,
     pub fixed: Vec<String>,
@@ -166,17 +167,17 @@ pub fn run(dir: &Path, dry_run: bool, json: bool) -> Result<SweepResult> {
     let mut fixed = Vec::new();
 
     for o in &orphaned {
-        if let Some(task) = graph.get_task_mut(&o.task_id) {
-            if task.status == Status::InProgress {
-                task.status = Status::Open;
-                task.assigned = None;
-                task.log.push(LogEntry {
-                    timestamp: Utc::now().to_rfc3339(),
-                    actor: Some("sweep".to_string()),
-                    message: format!("Sweep: task unclaimed — {}", o.reason),
-                });
-                fixed.push(o.task_id.clone());
-            }
+        if let Some(task) = graph.get_task_mut(&o.task_id)
+            && task.status == Status::InProgress
+        {
+            task.status = Status::Open;
+            task.assigned = None;
+            task.log.push(LogEntry {
+                timestamp: Utc::now().to_rfc3339(),
+                actor: Some("sweep".to_string()),
+                message: format!("Sweep: task unclaimed — {}", o.reason),
+            });
+            fixed.push(o.task_id.clone());
         }
     }
 

@@ -1298,7 +1298,7 @@ fn run_graph_compaction(dir: &Path, compaction_error_count: &mut u64, logger: &D
         }
         Err(e) => {
             *compaction_error_count += 1;
-            if *compaction_error_count == 1 || *compaction_error_count % 5 == 0 {
+            if *compaction_error_count == 1 || (*compaction_error_count).is_multiple_of(5) {
                 logger.error(&format!(
                     "Compaction error (#{} consecutive): {:#}",
                     *compaction_error_count, e
