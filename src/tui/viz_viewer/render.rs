@@ -23,7 +23,7 @@ const SIDE_MIN_WIDTH: u16 = 100;
 
 /// Creates a [`Line`] with the lightning-wave animation and elapsed time.
 ///
-/// Renders [`WAVE_NUM_BOLTS`] `ϟ` characters with a color ripple: the bolt at the
+/// Renders [`WAVE_NUM_BOLTS`] `↯` characters with a color ripple: the bolt at the
 /// current wave position is bright yellow, adjacent bolts are gold, and distant
 /// bolts are dim gray.  An elapsed-time string is appended after a space.
 fn spinner_wave_line(elapsed: std::time::Duration, indent: &str) -> Line<'static> {

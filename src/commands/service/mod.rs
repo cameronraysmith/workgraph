@@ -28,6 +28,7 @@ pub use ipc::{IpcRequest, IpcResponse};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::io::IsTerminal;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -684,11 +685,70 @@ pub fn run_start(
     };
     state.save(dir)?;
 
-    // Wait a moment for the daemon to start
-    std::thread::sleep(Duration::from_millis(200));
+    // Wait for daemon to start, showing an animated spinner on TTYs
+    let daemon_alive = if !json && std::io::stdout().is_terminal() {
+        use std::io::Write as _;
+        // Wave spinner constants
+        const BOLT: &str = "↯";
+        const NUM_BOLTS: usize = 5;
+        const FRAME_MS: u64 = 120;
+        // Fixed rainbow spectrum: Red, Orange, Green, Cyan, Violet
+        const SPECTRAL_BRIGHT: [u8; NUM_BOLTS] = [196, 214, 46, 33, 129];
+        const SPECTRAL_DIM: [u8; NUM_BOLTS] = [52, 94, 22, 17, 53];
+
+        let start = Instant::now();
+        let mut stdout = std::io::stdout();
+        let mut alive = false;
+
+        // Animate for at least 600ms so the wave is visible, up to 2s max
+        while start.elapsed() < Duration::from_millis(2000) {
+            let elapsed_ms = start.elapsed().as_millis() as usize;
+            let wave_pos = (elapsed_ms / FRAME_MS as usize) % NUM_BOLTS;
+
+            // Build the colored bolt string — peak bolt is bright, others dimmed
+            let mut line = String::with_capacity(80);
+            line.push_str("  ");
+            for i in 0..NUM_BOLTS {
+                let dist = (i as isize - wave_pos as isize).unsigned_abs();
+                let color = if dist <= 1 {
+                    SPECTRAL_BRIGHT[i]
+                } else {
+                    SPECTRAL_DIM[i]
+                };
+                if dist == 0 {
+                    // Bold the peak bolt for extra pop
+                    line.push_str(&format!("\x1b[1;38;5;{}m{}\x1b[0m", color, BOLT));
+                } else {
+                    line.push_str(&format!("\x1b[38;5;{}m{}\x1b[0m", color, BOLT));
+                }
+            }
+            line.push_str(" Starting service...");
+
+            // Overwrite current line
+            print!("\r\x1b[2K{}", line);
+            let _ = stdout.flush();
+
+            std::thread::sleep(Duration::from_millis(FRAME_MS));
+
+            // Check if daemon is alive after minimum animation time
+            if start.elapsed() >= Duration::from_millis(600) && is_process_alive(pid) {
+                alive = true;
+                break;
+            }
+        }
+
+        // Clear the spinner line
+        print!("\r\x1b[2K");
+        let _ = stdout.flush();
+        alive
+    } else {
+        // Non-TTY or JSON mode: just wait and check
+        std::thread::sleep(Duration::from_millis(500));
+        is_process_alive(pid)
+    };
 
     // Verify daemon started successfully
-    if !is_process_alive(pid) {
+    if !daemon_alive {
         ServiceState::remove(dir)?;
         anyhow::bail!("Daemon process exited immediately. Check logs.");
     }
@@ -1473,7 +1533,9 @@ pub fn run_daemon(
         tasks_ready: 0,
         agents_spawned: 0,
         paused: false,
-        accumulated_tokens: 0,
+        accumulated_tokens: CoordinatorState::load(&dir)
+            .map(|cs| cs.accumulated_tokens)
+            .unwrap_or(0),
     };
     coord_state.save(&dir);
 

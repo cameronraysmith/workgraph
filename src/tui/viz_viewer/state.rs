@@ -1204,8 +1204,8 @@ pub fn format_duration_compact(secs: u64) -> String {
     }
 }
 
-/// The lightning bolt character for the wave animation (Greek koppa — reliably 1-cell wide).
-pub const WAVE_BOLT: &str = "ϟ";
+/// The lightning bolt character for the wave animation (downwards zigzag arrow — reliably 1-cell wide).
+pub const WAVE_BOLT: &str = "↯";
 
 /// Number of lightning bolts in the wave animation.
 pub const WAVE_NUM_BOLTS: usize = 5;
@@ -2120,6 +2120,9 @@ pub struct VizApp {
     last_daemon_log_mtime: Option<SystemTime>,
     /// Last mtime of the chat outbox for the active coordinator.
     last_chat_outbox_mtime: Option<SystemTime>,
+    /// Set by the fast path when graph.jsonl changes but the full viz wasn't reloaded.
+    /// Checked by the slow path to ensure the viz reload isn't skipped.
+    graph_viz_stale: bool,
 }
 
 /// Scroll state for a 2D viewport.
@@ -2298,6 +2301,7 @@ impl VizApp {
             last_messages_mtime: None,
             last_daemon_log_mtime: None,
             last_chat_outbox_mtime: None,
+            graph_viz_stale: false,
         };
         app.start_fs_watcher();
         // Load graph once for both viz and stats on startup.
@@ -3490,6 +3494,10 @@ impl VizApp {
                 .ok();
             if current_mtime != self.last_graph_mtime {
                 self.last_graph_mtime = current_mtime;
+                // Mark viz stale so the slow path does a full reload —
+                // the fast path only does targeted panel updates, not the
+                // full graph visualization.
+                self.graph_viz_stale = true;
                 // Log pane: reload if active (log entries are in graph.jsonl).
                 if self.right_panel_tab == RightPanelTab::Log {
                     self.invalidate_log_pane();
@@ -3602,10 +3610,11 @@ impl VizApp {
             .and_then(|m| m.modified())
             .ok();
 
-        let graph_changed = current_mtime != self.last_graph_mtime;
+        let graph_changed = current_mtime != self.last_graph_mtime || self.graph_viz_stale;
         let needs_token_refresh = self.task_counts.in_progress > 0;
 
         if graph_changed || needs_token_refresh {
+            self.graph_viz_stale = false;
             // Load graph once and share between viz and stats (avoids double read+parse).
             let graph_path = self.workgraph_dir.join("graph.jsonl");
             if let Ok(graph) = load_graph(&graph_path) {
@@ -5193,6 +5202,7 @@ impl VizApp {
             last_messages_mtime: None,
             last_daemon_log_mtime: None,
             last_chat_outbox_mtime: None,
+            graph_viz_stale: false,
         }
     }
 
@@ -5201,6 +5211,7 @@ impl VizApp {
         self.last_graph_mtime = std::fs::metadata(self.workgraph_dir.join("graph.jsonl"))
             .and_then(|m| m.modified())
             .ok();
+        self.graph_viz_stale = false;
         self.smart_follow_active = self.scroll.is_at_bottom();
         // Load graph once and share between viz and stats.
         let graph_path = self.workgraph_dir.join("graph.jsonl");
