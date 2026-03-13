@@ -562,6 +562,7 @@ fn agent_thread_main(
                         &req.request_id,
                     );
                 }
+                chat::clear_streaming(dir, coordinator_id);
                 break; // Break inner loop to restart
             }
 
@@ -613,13 +614,19 @@ fn agent_thread_main(
                             "The coordinator agent encountered an error. Please try again.",
                             &req.request_id,
                         );
+                        chat::clear_streaming(dir, coordinator_id);
                         break; // Restart
                     }
                 }
 
-                // Wait for the response from the stdout reader
-                let collected =
-                    collect_response(&response_rx, logger, std::time::Duration::from_secs(300));
+                // Wait for the response from the stdout reader, streaming
+                // partial text to the chat streaming file as tokens arrive.
+                let collected = collect_response(
+                    &response_rx,
+                    logger,
+                    std::time::Duration::from_secs(300),
+                    Some((dir, coordinator_id)),
+                );
 
                 // Extract token usage before consuming the response.
                 let turn_token_usage = collected.as_ref().and_then(|r| r.token_usage);
@@ -673,6 +680,10 @@ fn agent_thread_main(
                         None
                     }
                 };
+
+                // Clear the streaming file now that the complete response is
+                // written to the outbox.
+                chat::clear_streaming(dir, coordinator_id);
 
                 // Accumulate token usage in coordinator state for compaction gating.
                 // Done regardless of whether there was a text response, so even
@@ -762,7 +773,7 @@ fn inject_crash_recovery_context(
     stdin.flush().context("Failed to flush stdin")?;
 
     // Wait for the agent's acknowledgment (shorter timeout than normal messages)
-    let ack = collect_response(response_rx, logger, std::time::Duration::from_secs(60));
+    let ack = collect_response(response_rx, logger, std::time::Duration::from_secs(60), None);
     match ack {
         Some(text) => {
             logger.info(&format!(
@@ -1033,16 +1044,22 @@ fn stdout_reader(
 /// Buffers text, tool_use, and tool_result fragments until a TurnComplete signal arrives.
 /// Returns a `CollectedResponse` with both the summary (last text block) and the full
 /// response including tool calls (for expanded display). Returns None on timeout or StreamEnd.
+///
+/// If `streaming_target` is provided, writes partial text to the streaming file as tokens
+/// arrive so the TUI can display progressive output.
 fn collect_response(
     rx: &mpsc::Receiver<ResponseEvent>,
     logger: &DaemonLogger,
     timeout: std::time::Duration,
+    streaming_target: Option<(&Path, u32)>,
 ) -> Option<CollectedResponse> {
     let deadline = std::time::Instant::now() + timeout;
     let mut parts: Vec<ResponsePart> = Vec::new();
     let mut has_tool_calls = false;
     let mut total_input_tokens: u64 = 0;
     let mut total_output_tokens: u64 = 0;
+    // Accumulate streaming text for progressive display in the TUI.
+    let mut streaming_text = String::new();
 
     loop {
         let remaining = deadline
@@ -1060,14 +1077,44 @@ fn collect_response(
 
         match rx.recv_timeout(remaining) {
             Ok(ResponseEvent::Text(text)) => {
+                // Write partial text to the streaming file for TUI progressive display.
+                if let Some((dir, coordinator_id)) = streaming_target {
+                    if !streaming_text.is_empty() {
+                        streaming_text.push('\n');
+                    }
+                    streaming_text.push_str(&text);
+                    let _ = chat::write_streaming(dir, coordinator_id, &streaming_text);
+                }
                 parts.push(ResponsePart::Text(text));
             }
             Ok(ResponseEvent::ToolUse { name, input }) => {
                 has_tool_calls = true;
+                // Show tool use activity in the streaming file.
+                if let Some((dir, coordinator_id)) = streaming_target {
+                    if !streaming_text.is_empty() {
+                        streaming_text.push('\n');
+                    }
+                    streaming_text.push_str(&format!("[calling {}...]", name));
+                    let _ = chat::write_streaming(dir, coordinator_id, &streaming_text);
+                }
                 parts.push(ResponsePart::ToolUse { name, input });
             }
             Ok(ResponseEvent::ToolResult(content)) => {
                 has_tool_calls = true;
+                // Replace the "[calling tool...]" line with a completion note.
+                if let Some((dir, coordinator_id)) = streaming_target {
+                    // Trim the "[calling ...]" suffix and show a condensed result.
+                    let preview = if content.len() > 80 {
+                        format!("{}...", &content[..77])
+                    } else {
+                        content.clone()
+                    };
+                    if !streaming_text.is_empty() {
+                        streaming_text.push('\n');
+                    }
+                    streaming_text.push_str(&format!("[tool result: {}]", preview));
+                    let _ = chat::write_streaming(dir, coordinator_id, &streaming_text);
+                }
                 parts.push(ResponsePart::ToolResult(content));
             }
             Ok(ResponseEvent::TurnStats {

@@ -116,6 +116,34 @@ fn coordinator_cursor_path(workgraph_dir: &Path) -> PathBuf {
     coordinator_cursor_path_for(workgraph_dir, 0)
 }
 
+/// Path to the streaming partial-response file for a specific coordinator.
+fn streaming_path_for(workgraph_dir: &Path, coordinator_id: u32) -> PathBuf {
+    chat_dir_for(workgraph_dir, coordinator_id).join(".streaming")
+}
+
+/// Write (overwrite) partial streaming text for a coordinator.
+/// Called by the coordinator agent as text tokens arrive.
+pub fn write_streaming(workgraph_dir: &Path, coordinator_id: u32, text: &str) -> Result<()> {
+    let path = streaming_path_for(workgraph_dir, coordinator_id);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, text).context("Failed to write streaming file")
+}
+
+/// Read current partial streaming text for a coordinator.
+/// Returns empty string if no streaming is in progress.
+pub fn read_streaming(workgraph_dir: &Path, coordinator_id: u32) -> String {
+    let path = streaming_path_for(workgraph_dir, coordinator_id);
+    fs::read_to_string(&path).unwrap_or_default()
+}
+
+/// Clear the streaming file (response complete).
+pub fn clear_streaming(workgraph_dir: &Path, coordinator_id: u32) {
+    let path = streaming_path_for(workgraph_dir, coordinator_id);
+    let _ = fs::remove_file(&path);
+}
+
 /// Append a message to a JSONL file with flock-based ID assignment.
 ///
 /// Opens the file with O_APPEND, acquires an exclusive lock,
@@ -1329,5 +1357,40 @@ mod tests {
             wait_for_response_for(&wg_dir, 1, "target-req", Duration::from_secs(1)).unwrap();
         assert!(result.is_some());
         assert_eq!(result.unwrap().content, "response from coord 1");
+    }
+
+    #[test]
+    fn test_streaming_write_read_clear() {
+        let (_tmp, wg_dir) = setup();
+
+        // Initially empty.
+        assert_eq!(read_streaming(&wg_dir, 0), "");
+
+        // Write partial text.
+        write_streaming(&wg_dir, 0, "Hello").unwrap();
+        assert_eq!(read_streaming(&wg_dir, 0), "Hello");
+
+        // Overwrite with more text.
+        write_streaming(&wg_dir, 0, "Hello world").unwrap();
+        assert_eq!(read_streaming(&wg_dir, 0), "Hello world");
+
+        // Clear.
+        clear_streaming(&wg_dir, 0);
+        assert_eq!(read_streaming(&wg_dir, 0), "");
+    }
+
+    #[test]
+    fn test_streaming_per_coordinator() {
+        let (_tmp, wg_dir) = setup();
+
+        write_streaming(&wg_dir, 0, "coord 0 text").unwrap();
+        write_streaming(&wg_dir, 1, "coord 1 text").unwrap();
+
+        assert_eq!(read_streaming(&wg_dir, 0), "coord 0 text");
+        assert_eq!(read_streaming(&wg_dir, 1), "coord 1 text");
+
+        clear_streaming(&wg_dir, 0);
+        assert_eq!(read_streaming(&wg_dir, 0), "");
+        assert_eq!(read_streaming(&wg_dir, 1), "coord 1 text");
     }
 }

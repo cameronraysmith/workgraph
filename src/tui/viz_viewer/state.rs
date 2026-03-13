@@ -822,6 +822,8 @@ pub struct ChatState {
     pub input_mode: InputMode,
     /// Whether the user explicitly dismissed chat input with Esc (per-coordinator).
     pub chat_input_dismissed: bool,
+    /// Partial streaming text from the coordinator (displayed progressively).
+    pub streaming_text: String,
 }
 
 impl Default for ChatState {
@@ -844,6 +846,7 @@ impl Default for ChatState {
             line_to_message: Vec::new(),
             input_mode: InputMode::Normal,
             chat_input_dismissed: false,
+            streaming_text: String::new(),
         }
     }
 }
@@ -3277,6 +3280,23 @@ impl VizApp {
     /// Check if the graph has changed on disk and refresh if needed.
     /// Returns `true` if any work was done (graph reloaded, service polled, etc.).
     pub fn maybe_refresh(&mut self) -> bool {
+        // Fast-path: poll streaming file frequently during chat response
+        // generation so text appears progressively, not just once per second.
+        if self.chat.awaiting_response
+            && self.last_refresh.elapsed() >= std::time::Duration::from_millis(150)
+        {
+            let prev = self.chat.streaming_text.clone();
+            let streaming = workgraph::chat::read_streaming(
+                &self.workgraph_dir,
+                self.active_coordinator_id,
+            );
+            if streaming != prev {
+                self.chat.streaming_text = streaming;
+                // Also check outbox in case the response just completed.
+                self.poll_chat_messages();
+                return true;
+            }
+        }
         if self.last_refresh.elapsed() < self.refresh_interval {
             return false;
         }
@@ -3376,6 +3396,10 @@ impl VizApp {
     /// Whether any time-based UI elements are active and need periodic redraws
     /// (animations, fading notifications, scrollbar timeouts, etc.).
     pub fn has_timed_ui_elements(&self) -> bool {
+        // Chat streaming: keep poll interval short for progressive display.
+        if self.chat.awaiting_response {
+            return true;
+        }
         // Active splash animations (flash-and-fade on tasks)
         if self.has_active_animations() {
             return true;
@@ -5143,12 +5167,19 @@ impl VizApp {
                             inbox_id: None,
                         });
                         save_chat_history(&self.workgraph_dir, &self.chat.messages);
-                    }
-                    // Clear awaiting state — the response arrives via poll_chat_messages.
-                    // Don't push the response here to avoid duplicates with poll.
-                    if self.chat.last_request_id.as_deref() == Some(&request_id) {
-                        self.chat.awaiting_response = false;
-                        self.chat.last_request_id = None;
+                        // Clear awaiting on error — no response will come.
+                        if self.chat.last_request_id.as_deref() == Some(&request_id) {
+                            self.chat.awaiting_response = false;
+                            self.chat.last_request_id = None;
+                        }
+                    } else {
+                        // wg chat succeeded — response should be in the outbox.
+                        // Poll immediately so message appears at the same time as
+                        // the throbber disappears (avoids 1-second gap).
+                        self.poll_chat_messages();
+                        // If poll didn't find messages yet (edge case), keep
+                        // awaiting_response true so the throbber persists until
+                        // the next poll picks it up.
                     }
                     // Auto-scroll to bottom.
                     self.chat.scroll = 0;
@@ -6125,9 +6156,16 @@ impl VizApp {
         }
     }
 
-    /// Poll for new coordinator responses in the outbox.
+    /// Poll for new coordinator responses in the outbox and streaming updates.
     /// Called during refresh ticks.
     pub fn poll_chat_messages(&mut self) {
+        // Poll the streaming file for partial text while awaiting a response.
+        if self.chat.awaiting_response {
+            let streaming =
+                workgraph::chat::read_streaming(&self.workgraph_dir, self.active_coordinator_id);
+            self.chat.streaming_text = streaming;
+        }
+
         let new_msgs = match workgraph::chat::read_outbox_since_for(
             &self.workgraph_dir,
             self.active_coordinator_id,
@@ -6172,12 +6210,13 @@ impl VizApp {
             .map(|m| m.id)
             .unwrap_or(self.chat.outbox_cursor);
 
-        // Any new coordinator response clears the awaiting state.
+        // Any new coordinator response clears the awaiting state and streaming text.
         // The TUI request_id ("tui-...") differs from wg chat's ("chat-..."),
         // so we clear on any new outbox message rather than matching by ID.
         if self.chat.awaiting_response {
             self.chat.awaiting_response = false;
             self.chat.last_request_id = None;
+            self.chat.streaming_text.clear();
         }
 
         // Auto-scroll to bottom when new messages arrive (if user hasn't scrolled up).

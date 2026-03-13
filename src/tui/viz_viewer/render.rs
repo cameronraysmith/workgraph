@@ -2187,15 +2187,36 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         line_to_message.push(None);
     }
 
-    // Streaming indicator when awaiting response.
+    // Streaming indicator / progressive text when awaiting response.
     if app.chat.awaiting_response {
-        rendered_lines.push(Line::from(Span::styled(
-            "↯ ...",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::SLOW_BLINK),
-        )));
-        line_to_message.push(None);
+        if app.chat.streaming_text.is_empty() {
+            // No streaming text yet — show throbber.
+            rendered_lines.push(Line::from(Span::styled(
+                "↯ ...",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::SLOW_BLINK),
+            )));
+            line_to_message.push(None);
+        } else {
+            // Show progressive streaming text from the coordinator.
+            let style = Style::default().fg(Color::Cyan);
+            for line in app.chat.streaming_text.lines() {
+                rendered_lines.push(Line::from(Span::styled(
+                    format!("  {}", line),
+                    style,
+                )));
+                line_to_message.push(None);
+            }
+            // Append a blinking cursor to indicate still generating.
+            rendered_lines.push(Line::from(Span::styled(
+                "  ▍",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::SLOW_BLINK),
+            )));
+            line_to_message.push(None);
+        }
         rendered_lines.push(Line::from(""));
         line_to_message.push(None);
     }
