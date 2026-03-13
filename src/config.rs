@@ -327,10 +327,10 @@ fn default_provider() -> String {
 /// Expand `~` prefix to user's home directory.
 fn expand_tilde(path: &str) -> PathBuf {
     let p = Path::new(path);
-    if let Ok(rest) = p.strip_prefix("~") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest);
-        }
+    if let Ok(rest) = p.strip_prefix("~")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
     }
     p.to_path_buf()
 }
@@ -2218,12 +2218,11 @@ impl Config {
                     let m = self.agent.model.as_str();
                     if m.is_empty() { None } else { Some(m) }
                 });
-            if let Some(id) = model_id {
-                if let Some(entry) = self.registry_lookup(id) {
-                    if entry.context_window > 0 {
-                        return (entry.context_window as f64 * ratio).round() as u64;
-                    }
-                }
+            if let Some(id) = model_id
+                && let Some(entry) = self.registry_lookup(id)
+                && entry.context_window > 0
+            {
+                return (entry.context_window as f64 * ratio).round() as u64;
             }
         }
         self.coordinator.compaction_token_threshold

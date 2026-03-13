@@ -192,10 +192,10 @@ pub fn run_fanout(
         graph.add_node(Node::Task(analyzer_task));
 
         // Update partition task's before list for bidirectional consistency
-        if let Some(pt) = graph.get_task_mut(&partition_task_id) {
-            if !pt.before.contains(&task_id) {
-                pt.before.push(task_id.clone());
-            }
+        if let Some(pt) = graph.get_task_mut(&partition_task_id)
+            && !pt.before.contains(&task_id)
+        {
+            pt.before.push(task_id.clone());
         }
 
         analyzer_task_ids.push(task_id);
@@ -268,10 +268,10 @@ Write to `.workgraph/evolve-runs/{run_id}/synthesis-result.json`:
 
     // Update analyzer tasks' before lists
     for aid in &analyzer_task_ids {
-        if let Some(at) = graph.get_task_mut(aid) {
-            if !at.before.contains(&synthesize_task_id) {
-                at.before.push(synthesize_task_id.clone());
-            }
+        if let Some(at) = graph.get_task_mut(aid)
+            && !at.before.contains(&synthesize_task_id)
+        {
+            at.before.push(synthesize_task_id.clone());
         }
     }
 
@@ -310,10 +310,10 @@ Read from: `.workgraph/evolve-runs/{run_id}/synthesis-result.json`
     };
     graph.add_node(Node::Task(apply_task));
 
-    if let Some(st) = graph.get_task_mut(&synthesize_task_id) {
-        if !st.before.contains(&apply_task_id) {
-            st.before.push(apply_task_id.clone());
-        }
+    if let Some(st) = graph.get_task_mut(&synthesize_task_id)
+        && !st.before.contains(&apply_task_id)
+    {
+        st.before.push(apply_task_id.clone());
     }
 
     // 5. Create evaluate task (depends on apply)
@@ -401,10 +401,10 @@ Evaluate the results of the evolution run.
     };
     graph.add_node(Node::Task(evaluate_task));
 
-    if let Some(at) = graph.get_task_mut(&apply_task_id) {
-        if !at.before.contains(&evaluate_task_id) {
-            at.before.push(evaluate_task_id.clone());
-        }
+    if let Some(at) = graph.get_task_mut(&apply_task_id)
+        && !at.before.contains(&evaluate_task_id)
+    {
+        at.before.push(evaluate_task_id.clone());
     }
 
     // 6. Wire cycle back-edge if autopoietic

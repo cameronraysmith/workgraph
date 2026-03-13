@@ -2885,10 +2885,10 @@ impl VizApp {
         self.splash_animations
             .retain(|_, anim| anim.start.elapsed() < cutoff);
         // Expire annotation click flash after 500ms.
-        if let Some(ref flash) = self.annotation_click_flash {
-            if flash.start.elapsed() > std::time::Duration::from_millis(500) {
-                self.annotation_click_flash = None;
-            }
+        if let Some(ref flash) = self.annotation_click_flash
+            && flash.start.elapsed() > std::time::Duration::from_millis(500)
+        {
+            self.annotation_click_flash = None;
         }
     }
 
@@ -3384,20 +3384,20 @@ impl VizApp {
             }
 
             // Messages panel: check if the message file for the viewed task changed.
-            if self.right_panel_tab == RightPanelTab::Messages {
-                if let Some(task_id) = self.selected_task_id().map(String::from) {
-                    let msg_path = self
-                        .workgraph_dir
-                        .join("messages")
-                        .join(format!("{}.jsonl", task_id));
-                    let msg_mtime = std::fs::metadata(&msg_path).and_then(|m| m.modified()).ok();
-                    if msg_mtime != self.last_messages_mtime {
-                        self.last_messages_mtime = msg_mtime;
-                        self.save_message_draft();
-                        self.invalidate_messages_panel();
-                        self.load_messages_panel();
-                        content_updated = true;
-                    }
+            if self.right_panel_tab == RightPanelTab::Messages
+                && let Some(task_id) = self.selected_task_id().map(String::from)
+            {
+                let msg_path = self
+                    .workgraph_dir
+                    .join("messages")
+                    .join(format!("{}.jsonl", task_id));
+                let msg_mtime = std::fs::metadata(&msg_path).and_then(|m| m.modified()).ok();
+                if msg_mtime != self.last_messages_mtime {
+                    self.last_messages_mtime = msg_mtime;
+                    self.save_message_draft();
+                    self.invalidate_messages_panel();
+                    self.load_messages_panel();
+                    content_updated = true;
                 }
             }
 
@@ -3998,10 +3998,11 @@ impl VizApp {
                         let mut dim_strs: Vec<String> = Vec::new();
 
                         // For FLIP evals, prepend intent_fidelity from top-level score
-                        if is_flip && !dims.contains_key("intent_fidelity") {
-                            if let Some(score) = eval.get("score").and_then(|v| v.as_f64()) {
-                                dim_strs.push(format!("intent_fidelity: {:.2}", score));
-                            }
+                        if is_flip
+                            && !dims.contains_key("intent_fidelity")
+                            && let Some(score) = eval.get("score").and_then(|v| v.as_f64())
+                        {
+                            dim_strs.push(format!("intent_fidelity: {:.2}", score));
                         }
 
                         // Add dims in priority order first
@@ -4026,41 +4027,34 @@ impl VizApp {
 
                     // For FLIP evaluations, render formatted metadata section
                     if is_flip {
-                        if let Some(notes) = eval.get("notes").and_then(|v| v.as_str()) {
-                            if let Some(json_start) = notes.find("\n\nFLIP metadata: {") {
-                                let json_str = &notes[json_start + "\n\nFLIP metadata: ".len()..];
-                                if let Ok(meta) =
-                                    serde_json::from_str::<serde_json::Value>(json_str)
+                        if let Some(notes) = eval.get("notes").and_then(|v| v.as_str())
+                            && let Some(json_start) = notes.find("\n\nFLIP metadata: {")
+                        {
+                            let json_str = &notes[json_start + "\n\nFLIP metadata: ".len()..];
+                            if let Ok(meta) = serde_json::from_str::<serde_json::Value>(json_str) {
+                                if let Some(inf_model) =
+                                    meta.get("inference_model").and_then(|v| v.as_str())
+                                    && let Some(cmp_model) =
+                                        meta.get("comparison_model").and_then(|v| v.as_str())
                                 {
-                                    if let Some(inf_model) =
-                                        meta.get("inference_model").and_then(|v| v.as_str())
-                                    {
-                                        if let Some(cmp_model) =
-                                            meta.get("comparison_model").and_then(|v| v.as_str())
-                                        {
-                                            lines.push(format!(
-                                                "  Models: {} → {}",
-                                                inf_model, cmp_model
-                                            ));
-                                        }
-                                    }
-                                    if let Some(prompt) =
-                                        meta.get("inferred_prompt").and_then(|v| v.as_str())
-                                    {
-                                        let preview: String = prompt
-                                            .lines()
-                                            .next()
-                                            .unwrap_or("")
-                                            .chars()
-                                            .take(80)
-                                            .collect();
-                                        let suffix = if preview.len() < prompt.len() {
-                                            "…"
-                                        } else {
-                                            ""
-                                        };
-                                        lines.push(format!("  Inferred: {}{}", preview, suffix));
-                                    }
+                                    lines.push(format!("  Models: {} → {}", inf_model, cmp_model));
+                                }
+                                if let Some(prompt) =
+                                    meta.get("inferred_prompt").and_then(|v| v.as_str())
+                                {
+                                    let preview: String = prompt
+                                        .lines()
+                                        .next()
+                                        .unwrap_or("")
+                                        .chars()
+                                        .take(80)
+                                        .collect();
+                                    let suffix = if preview.len() < prompt.len() {
+                                        "…"
+                                    } else {
+                                        ""
+                                    };
+                                    lines.push(format!("  Inferred: {}{}", preview, suffix));
                                 }
                             }
                         }

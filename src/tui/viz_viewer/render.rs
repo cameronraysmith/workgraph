@@ -870,18 +870,18 @@ fn draw_viz_content(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         }
 
         // Annotation click flash: briefly invert the annotation text colors.
-        if let Some(ref flash) = app.annotation_click_flash {
-            if flash.orig_line == orig_idx {
-                let elapsed_ms = flash.start.elapsed().as_millis() as u64;
-                if elapsed_ms < 500 {
-                    let last = text_lines.last_mut().unwrap();
-                    *last = apply_annotation_flash(
-                        std::mem::take(last),
-                        flash.col_start,
-                        flash.col_end,
-                        elapsed_ms,
-                    );
-                }
+        if let Some(ref flash) = app.annotation_click_flash
+            && flash.orig_line == orig_idx
+        {
+            let elapsed_ms = flash.start.elapsed().as_millis() as u64;
+            if elapsed_ms < 500 {
+                let last = text_lines.last_mut().unwrap();
+                *last = apply_annotation_flash(
+                    std::mem::take(last),
+                    flash.col_start,
+                    flash.col_end,
+                    elapsed_ms,
+                );
             }
         }
 
@@ -1522,16 +1522,16 @@ fn draw_tab_bar(
     let tab_labels: Vec<Line> = RightPanelTab::ALL
         .iter()
         .map(|t| {
-            if *t == RightPanelTab::Messages {
-                if let Some(ref status) = msg_status {
-                    return Line::from(vec![
-                        Span::raw(format!("{}:", t.index())),
-                        Span::styled(
-                            format!("{} {}", t.label(), status.icon()),
-                            Style::default().fg(status.color()),
-                        ),
-                    ]);
-                }
+            if *t == RightPanelTab::Messages
+                && let Some(ref status) = msg_status
+            {
+                return Line::from(vec![
+                    Span::raw(format!("{}:", t.index())),
+                    Span::styled(
+                        format!("{} {}", t.label(), status.icon()),
+                        Style::default().fg(status.color()),
+                    ),
+                ]);
             }
             Line::from(format!("{}:{}", t.index(), t.label()))
         })
@@ -5849,47 +5849,44 @@ fn draw_config_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         ];
 
         // Show endpoint test status inline for endpoint name entries.
-        if entry.key.ends_with(".name") && entry.section == ConfigSection::Endpoints {
-            if let Some(ep_idx) = entry
+        if entry.key.ends_with(".name")
+            && entry.section == ConfigSection::Endpoints
+            && let Some(ep_idx) = entry
                 .key
                 .strip_prefix("endpoint.")
                 .and_then(|r| r.strip_suffix(".name"))
                 .and_then(|s| s.parse::<usize>().ok())
-            {
-                if let Some(ep_name) = endpoint_names.get(&ep_idx) {
-                    if let Some(status) = app.config_panel.endpoint_test_results.get(ep_name) {
-                        match status {
-                            EndpointTestStatus::Testing => {
-                                spans.push(Span::styled(
-                                    " ⟳ Testing...".to_string(),
-                                    Style::default()
-                                        .fg(Color::Yellow)
-                                        .add_modifier(Modifier::BOLD),
-                                ));
-                            }
-                            EndpointTestStatus::Ok => {
-                                spans.push(Span::styled(
-                                    " ✓ Connected".to_string(),
-                                    Style::default()
-                                        .fg(Color::Green)
-                                        .add_modifier(Modifier::BOLD),
-                                ));
-                            }
-                            EndpointTestStatus::Error(msg) => {
-                                spans.push(Span::styled(
-                                    " ✗ ".to_string(),
-                                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                                ));
-                                let truncated = if msg.len() > 40 {
-                                    format!("{}...", &msg[..40])
-                                } else {
-                                    msg.clone()
-                                };
-                                spans
-                                    .push(Span::styled(truncated, Style::default().fg(Color::Red)));
-                            }
-                        }
-                    }
+            && let Some(ep_name) = endpoint_names.get(&ep_idx)
+            && let Some(status) = app.config_panel.endpoint_test_results.get(ep_name)
+        {
+            match status {
+                EndpointTestStatus::Testing => {
+                    spans.push(Span::styled(
+                        " ⟳ Testing...".to_string(),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+                EndpointTestStatus::Ok => {
+                    spans.push(Span::styled(
+                        " ✓ Connected".to_string(),
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+                EndpointTestStatus::Error(msg) => {
+                    spans.push(Span::styled(
+                        " ✗ ".to_string(),
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    ));
+                    let truncated = if msg.len() > 40 {
+                        format!("{}...", &msg[..40])
+                    } else {
+                        msg.clone()
+                    };
+                    spans.push(Span::styled(truncated, Style::default().fg(Color::Red)));
                 }
             }
         }

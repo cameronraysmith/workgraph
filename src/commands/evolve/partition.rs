@@ -118,7 +118,7 @@ fn partition_mutation(
             r.performance.task_count >= 3
                 && r.performance
                     .avg_score
-                    .map_or(false, |s| s >= 0.25 && s <= 0.70)
+                    .is_some_and(|s| (0.25..=0.70).contains(&s))
         })
         .map(|r| r.id.as_str())
         .collect();
@@ -175,7 +175,7 @@ fn partition_crossover(
     let mut qualifying_roles: Vec<&Role> = roles
         .iter()
         .filter(|r| {
-            r.performance.task_count >= 3 && r.performance.avg_score.map_or(false, |s| s >= 0.55)
+            r.performance.task_count >= 3 && r.performance.avg_score.is_some_and(|s| s >= 0.55)
         })
         .collect();
     qualifying_roles.sort_by(|a, b| {
@@ -270,7 +270,7 @@ fn partition_retirement(
     let target_role_ids: HashSet<&str> = roles
         .iter()
         .filter(|r| {
-            r.performance.task_count >= 5 && r.performance.avg_score.map_or(false, |s| s < 0.35)
+            r.performance.task_count >= 5 && r.performance.avg_score.is_some_and(|s| s < 0.35)
         })
         .map(|r| r.id.as_str())
         .collect();
@@ -278,7 +278,7 @@ fn partition_retirement(
     let target_tradeoff_ids: HashSet<&str> = tradeoffs
         .iter()
         .filter(|t| {
-            t.performance.task_count >= 5 && t.performance.avg_score.map_or(false, |s| s < 0.35)
+            t.performance.task_count >= 5 && t.performance.avg_score.is_some_and(|s| s < 0.35)
         })
         .map(|t| t.id.as_str())
         .collect();

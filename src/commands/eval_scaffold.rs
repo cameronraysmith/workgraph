@@ -210,19 +210,18 @@ pub fn scaffold_full_pipeline(
     if workgraph::graph::is_system_task(task_id) {
         return false;
     }
-    if let Some(task) = graph.get_task(task_id) {
-        if task
+    if let Some(task) = graph.get_task(task_id)
+        && task
             .tags
             .iter()
             .any(|tag| DOMINATED_TAGS.contains(&tag.as_str()))
-        {
-            return false;
-        }
-        // NOTE: We intentionally do NOT early-return on "eval-scheduled" here.
-        // The tag may have been set by `scaffold_eval_task` (which only creates
-        // .flip/.evaluate), so .place/.assign might still be missing.  Each
-        // individual task creation below has its own idempotency guard.
+    {
+        return false;
     }
+    // NOTE: We intentionally do NOT early-return on "eval-scheduled" here.
+    // The tag may have been set by `scaffold_eval_task` (which only creates
+    // .flip/.evaluate), so .place/.assign might still be missing.  Each
+    // individual task creation below has its own idempotency guard.
 
     let place_task_id = format!(".place-{}", task_id);
     let assign_task_id = format!(".assign-{}", task_id);
@@ -287,12 +286,11 @@ pub fn scaffold_full_pipeline(
     }
 
     // 3. Wire main task to depend on .assign-* (so it waits for assignment)
-    if graph.get_task(&assign_task_id).is_some() {
-        if let Some(source) = graph.get_task_mut(task_id) {
-            if !source.after.iter().any(|a| a == &assign_task_id) {
-                source.after.push(assign_task_id.clone());
-            }
-        }
+    if graph.get_task(&assign_task_id).is_some()
+        && let Some(source) = graph.get_task_mut(task_id)
+        && !source.after.iter().any(|a| a == &assign_task_id)
+    {
+        source.after.push(assign_task_id.clone());
     }
 
     // 4. Create .flip-* task (depends on main task)
@@ -375,12 +373,11 @@ pub fn scaffold_full_pipeline(
     }
 
     // Tag source task as eval-scheduled (prevents duplicate scaffolding after gc)
-    if any_created {
-        if let Some(source) = graph.get_task_mut(task_id) {
-            if !source.tags.iter().any(|t| t == "eval-scheduled") {
-                source.tags.push("eval-scheduled".to_string());
-            }
-        }
+    if any_created
+        && let Some(source) = graph.get_task_mut(task_id)
+        && !source.tags.iter().any(|t| t == "eval-scheduled")
+    {
+        source.tags.push("eval-scheduled".to_string());
     }
 
     any_created

@@ -153,14 +153,12 @@ pub fn run_remove(workgraph_dir: &Path, name: &str, global: bool) -> Result<()> 
     }
 
     // If we removed the default, promote the first remaining endpoint
-    if was_default {
-        if let Some(ep) = config.llm_endpoints.endpoints.first_mut() {
-            ep.is_default = true;
-            eprintln!(
-                "Note: '{}' was default. Promoted '{}' to default.",
-                name, ep.name
-            );
-        }
+    if was_default && let Some(ep) = config.llm_endpoints.endpoints.first_mut() {
+        ep.is_default = true;
+        eprintln!(
+            "Note: '{}' was default. Promoted '{}' to default.",
+            name, ep.name
+        );
     }
 
     if global {
