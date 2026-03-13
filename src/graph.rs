@@ -1309,12 +1309,23 @@ fn reactivate_cycle(
     config_owner_id: &str,
     cycle_config: &CycleConfig,
 ) -> Vec<String> {
-    // Check if ALL members are Done
+    // Check if ALL members are terminal (Done or Abandoned).
+    // Abandoned is terminal — the task won't produce more work.
+    let mut has_done_member = false;
     for member_id in members {
         match graph.get_task(member_id) {
-            Some(t) if t.status == Status::Done => {}
-            _ => return vec![], // Not all done yet
+            Some(t) if t.status == Status::Done => {
+                has_done_member = true;
+            }
+            Some(t) if t.status == Status::Abandoned => {
+                // Abandoned is terminal — don't wait for it
+            }
+            _ => return vec![], // Not terminal yet
         }
+    }
+    // If ALL members are abandoned, don't iterate — there's no work to redo
+    if !has_done_member {
+        return vec![];
     }
 
     // Check convergence tag on config owner — but only if no external guard
@@ -1353,7 +1364,7 @@ fn reactivate_cycle(
         return vec![];
     }
 
-    // All checks passed — re-open all members
+    // All checks passed — re-open Done members (skip Abandoned ones)
     let ready_after = cycle_config
         .delay
         .as_ref()
@@ -1368,6 +1379,10 @@ fn reactivate_cycle(
 
     for member_id in members {
         if let Some(task) = graph.get_task_mut(member_id) {
+            // Abandoned members stay as-is — they opted out of future iterations
+            if task.status == Status::Abandoned {
+                continue;
+            }
             task.status = Status::Open;
             task.assigned = None;
             task.started_at = None;

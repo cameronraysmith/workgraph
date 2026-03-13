@@ -5238,3 +5238,114 @@ fn test_failure_restart_not_triggered_for_non_cycle_task() {
         "Non-cycle task should not trigger restart"
     );
 }
+
+// ===========================================================================
+// Abandoned members in cycles
+// ===========================================================================
+
+#[test]
+fn test_cycle_iterates_when_one_member_done_one_abandoned() {
+    // Cycle: A → B → A. A is Done, B is Abandoned. max_iterations = 3.
+    // The cycle should iterate because all members are terminal.
+    // Only the Done member (A) should be reset to Open.
+    // The Abandoned member (B) should stay Abandoned.
+    let mut a = make_task_with_status("a", "A (header)", Status::Done);
+    a.after = vec!["b".to_string()];
+    a.cycle_config = Some(CycleConfig {
+        max_iterations: 3,
+        guard: None,
+        delay: None,
+        no_converge: false,
+        restart_on_failure: true,
+        max_failure_restarts: None,
+    });
+    let mut b = make_task_with_status("b", "B", Status::Abandoned);
+    b.after = vec!["a".to_string()];
+
+    let mut graph = build_graph(vec![a, b]);
+    let analysis = graph.compute_cycle_analysis();
+
+    let reactivated = evaluate_cycle_iteration(&mut graph, "a", &analysis);
+
+    assert!(
+        !reactivated.is_empty(),
+        "Cycle should iterate when all members are terminal (done + abandoned)"
+    );
+    // Done member resets to Open
+    assert_eq!(graph.get_task("a").unwrap().status, Status::Open);
+    assert_eq!(graph.get_task("a").unwrap().loop_iteration, 1);
+    // Abandoned member stays Abandoned
+    assert_eq!(graph.get_task("b").unwrap().status, Status::Abandoned);
+}
+
+#[test]
+fn test_cycle_does_not_iterate_when_all_members_abandoned() {
+    // Cycle: A → B → A. Both A and B are Abandoned.
+    // The cycle should NOT iterate — there's no work to do.
+    let mut a = make_task_with_status("a", "A (header)", Status::Abandoned);
+    a.after = vec!["b".to_string()];
+    a.cycle_config = Some(CycleConfig {
+        max_iterations: 3,
+        guard: None,
+        delay: None,
+        no_converge: false,
+        restart_on_failure: true,
+        max_failure_restarts: None,
+    });
+    let mut b = make_task_with_status("b", "B", Status::Abandoned);
+    b.after = vec!["a".to_string()];
+
+    let mut graph = build_graph(vec![a, b]);
+    let analysis = graph.compute_cycle_analysis();
+
+    let reactivated = evaluate_cycle_iteration(&mut graph, "a", &analysis);
+
+    assert!(
+        reactivated.is_empty(),
+        "Cycle should NOT iterate when all members are abandoned (no work to do)"
+    );
+    // Both stay Abandoned
+    assert_eq!(graph.get_task("a").unwrap().status, Status::Abandoned);
+    assert_eq!(graph.get_task("b").unwrap().status, Status::Abandoned);
+}
+
+#[test]
+fn test_cycle_abandoned_member_stays_abandoned_after_reset() {
+    // Cycle: A → B → C → A. A=Done, B=Abandoned, C=Done. max_iterations=5.
+    // After iteration: A and C reset to Open, B stays Abandoned.
+    // loop_iteration increments for A and C but B stays unchanged.
+    let mut a = make_task_with_status("a", "A (header)", Status::Done);
+    a.after = vec!["c".to_string()];
+    a.cycle_config = Some(CycleConfig {
+        max_iterations: 5,
+        guard: None,
+        delay: None,
+        no_converge: false,
+        restart_on_failure: true,
+        max_failure_restarts: None,
+    });
+    let mut b = make_task_with_status("b", "B", Status::Abandoned);
+    b.after = vec!["a".to_string()];
+    let mut c = make_task_with_status("c", "C", Status::Done);
+    c.after = vec!["b".to_string()];
+
+    let mut graph = build_graph(vec![a, b, c]);
+    let analysis = graph.compute_cycle_analysis();
+
+    let reactivated = evaluate_cycle_iteration(&mut graph, "c", &analysis);
+
+    // A and C should be reactivated, B should not
+    assert!(reactivated.contains(&"a".to_string()));
+    assert!(reactivated.contains(&"c".to_string()));
+    assert!(!reactivated.contains(&"b".to_string()));
+
+    // A and C reset to Open with incremented iteration
+    assert_eq!(graph.get_task("a").unwrap().status, Status::Open);
+    assert_eq!(graph.get_task("a").unwrap().loop_iteration, 1);
+    assert_eq!(graph.get_task("c").unwrap().status, Status::Open);
+    assert_eq!(graph.get_task("c").unwrap().loop_iteration, 1);
+
+    // B stays Abandoned, loop_iteration unchanged
+    assert_eq!(graph.get_task("b").unwrap().status, Status::Abandoned);
+    assert_eq!(graph.get_task("b").unwrap().loop_iteration, 0);
+}
