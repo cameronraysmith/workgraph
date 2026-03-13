@@ -3763,13 +3763,29 @@ impl VizApp {
                     && let Ok(eval) = serde_json::from_str::<serde_json::Value>(&content)
                 {
                     eval_found = true;
-                    lines.push("── Evaluation ──".to_string());
+                    let is_flip = eval
+                        .get("source")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s == "flip")
+                        .unwrap_or(false);
+
+                    if is_flip {
+                        lines.push("── Evaluation (FLIP) ──".to_string());
+                    } else {
+                        lines.push("── Evaluation ──".to_string());
+                    }
                     if let Some(score) = eval.get("score").and_then(|v| v.as_f64()) {
                         lines.push(format!("  Score: {:.2}", score));
                     }
                     if let Some(notes) = eval.get("notes").and_then(|v| v.as_str()) {
+                        // Strip FLIP metadata JSON from notes before rendering
+                        let display_notes = if let Some(idx) = notes.find("\n\nFLIP metadata: {") {
+                            &notes[..idx]
+                        } else {
+                            notes
+                        };
                         // Show first ~3 lines of notes.
-                        for (i, line) in notes.lines().enumerate() {
+                        for (i, line) in display_notes.lines().enumerate() {
                             if i >= 3 {
                                 lines.push("  ...".to_string());
                                 break;
@@ -3778,11 +3794,6 @@ impl VizApp {
                         }
                     }
                     if let Some(dims) = eval.get("dimensions").and_then(|v| v.as_object()) {
-                        let is_flip = eval
-                            .get("source")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s == "flip")
-                            .unwrap_or(false);
 
                         let priority_order: &[&str] = if is_flip {
                             &[
@@ -3832,6 +3843,31 @@ impl VizApp {
 
                         lines.push(format!("  Dims: {}", dim_strs.join(", ")));
                     }
+
+                    // For FLIP evaluations, render formatted metadata section
+                    if is_flip {
+                        if let Some(notes) = eval.get("notes").and_then(|v| v.as_str()) {
+                            if let Some(json_start) = notes.find("\n\nFLIP metadata: {") {
+                                let json_str = &notes[json_start + "\n\nFLIP metadata: ".len()..];
+                                if let Ok(meta) = serde_json::from_str::<serde_json::Value>(json_str) {
+                                    if let Some(inf_model) = meta.get("inference_model").and_then(|v| v.as_str()) {
+                                        if let Some(cmp_model) = meta.get("comparison_model").and_then(|v| v.as_str()) {
+                                            lines.push(format!("  Models: {} → {}", inf_model, cmp_model));
+                                        }
+                                    }
+                                    if let Some(prompt) = meta.get("inferred_prompt").and_then(|v| v.as_str()) {
+                                        let preview: String = prompt.lines().next().unwrap_or("").chars().take(80).collect();
+                                        let suffix = if preview.len() < prompt.len() { "…" } else { "" };
+                                        lines.push(format!("  Inferred: {}{}", preview, suffix));
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(evaluator) = eval.get("evaluator").and_then(|v| v.as_str()) {
+                            lines.push(format!("  Evaluator: {}", evaluator));
+                        }
+                    }
+
                     lines.push(String::new());
                 }
                 let _ = eval_found;
