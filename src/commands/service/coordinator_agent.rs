@@ -1060,6 +1060,8 @@ fn collect_response(
     let mut total_output_tokens: u64 = 0;
     // Accumulate streaming text for progressive display in the TUI.
     let mut streaming_text = String::new();
+    // Track the last tool name for informative result labels.
+    let mut last_tool_name: Option<String> = None;
 
     loop {
         let remaining = deadline
@@ -1089,30 +1091,28 @@ fn collect_response(
             }
             Ok(ResponseEvent::ToolUse { name, input }) => {
                 has_tool_calls = true;
-                // Show tool use activity in the streaming file.
+                // Show tool use activity in the streaming file with informative labels.
                 if let Some((dir, coordinator_id)) = streaming_target {
                     if !streaming_text.is_empty() {
                         streaming_text.push('\n');
                     }
-                    streaming_text.push_str(&format!("[calling {}...]", name));
+                    streaming_text.push_str(&tool_use_label(&name, &input));
                     let _ = chat::write_streaming(dir, coordinator_id, &streaming_text);
                 }
+                last_tool_name = Some(name.clone());
                 parts.push(ResponsePart::ToolUse { name, input });
             }
             Ok(ResponseEvent::ToolResult(content)) => {
                 has_tool_calls = true;
-                // Replace the "[calling tool...]" line with a completion note.
+                // Show an informative result summary in the streaming file.
                 if let Some((dir, coordinator_id)) = streaming_target {
-                    // Trim the "[calling ...]" suffix and show a condensed result.
-                    let preview = if content.len() > 80 {
-                        format!("{}...", &content[..77])
-                    } else {
-                        content.clone()
-                    };
                     if !streaming_text.is_empty() {
                         streaming_text.push('\n');
                     }
-                    streaming_text.push_str(&format!("[tool result: {}]", preview));
+                    streaming_text.push_str(&tool_result_label(
+                        last_tool_name.as_deref(),
+                        &content,
+                    ));
                     let _ = chat::write_streaming(dir, coordinator_id, &streaming_text);
                 }
                 parts.push(ResponsePart::ToolResult(content));
@@ -1279,6 +1279,135 @@ fn format_full_response(parts: &[ResponsePart]) -> String {
     }
 
     out
+}
+
+/// Generate an informative label for a tool call in the streaming display.
+///
+/// Instead of just "[calling Bash...]", this produces something like
+/// "[$ cargo test --lib]" or "[reading src/main.rs]" so the user can
+/// see what the agent is actually doing.
+fn tool_use_label(name: &str, input: &str) -> String {
+    let val: serde_json::Value = match serde_json::from_str(input) {
+        Ok(v) => v,
+        Err(_) => return format!("[calling {}...]", name),
+    };
+
+    match name {
+        "Bash" | "bash" => {
+            if let Some(cmd) = val.get("command").and_then(|c| c.as_str()) {
+                // Take just the first line for multi-line commands
+                let first_line = cmd.lines().next().unwrap_or(cmd).trim();
+                let display = truncate_label(first_line, 60);
+                format!("[$ {}]", display)
+            } else {
+                "[calling Bash...]".to_string()
+            }
+        }
+        "Read" => {
+            if let Some(path) = val.get("file_path").and_then(|c| c.as_str()) {
+                format!("[reading {}]", short_path(path))
+            } else {
+                "[calling Read...]".to_string()
+            }
+        }
+        "Edit" => {
+            if let Some(path) = val.get("file_path").and_then(|c| c.as_str()) {
+                format!("[editing {}]", short_path(path))
+            } else {
+                "[calling Edit...]".to_string()
+            }
+        }
+        "Write" => {
+            if let Some(path) = val.get("file_path").and_then(|c| c.as_str()) {
+                format!("[writing {}]", short_path(path))
+            } else {
+                "[calling Write...]".to_string()
+            }
+        }
+        "Grep" => {
+            if let Some(pattern) = val.get("pattern").and_then(|c| c.as_str()) {
+                let display = truncate_label(pattern, 40);
+                if let Some(path) = val.get("path").and_then(|c| c.as_str()) {
+                    format!("[grep '{}' in {}]", display, short_path(path))
+                } else {
+                    format!("[grep '{}']", display)
+                }
+            } else {
+                "[calling Grep...]".to_string()
+            }
+        }
+        "Glob" => {
+            if let Some(pattern) = val.get("pattern").and_then(|c| c.as_str()) {
+                format!("[glob {}]", pattern)
+            } else {
+                "[calling Glob...]".to_string()
+            }
+        }
+        _ => format!("[calling {}...]", name),
+    }
+}
+
+/// Truncate a string to `max_len` chars, appending "..." if truncated.
+fn truncate_label(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        // Find a char boundary near max_len - 3
+        let mut end = max_len.saturating_sub(3);
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
+    }
+}
+
+/// Extract the filename or last few path components for display.
+fn short_path(path: &str) -> &str {
+    // Show at most the last 3 path components
+    let parts: Vec<&str> = path.rsplitn(4, '/').collect();
+    if parts.len() <= 3 {
+        path
+    } else {
+        // parts = [last, second_last, third_last, remainder]
+        // We want "third_last/second_last/last" — 2 internal slashes.
+        let kept_len: usize =
+            parts[0].len() + parts[1].len() + parts[2].len() + 2;
+        &path[path.len() - kept_len..]
+    }
+}
+
+/// Generate a brief summary label for a tool result in the streaming display.
+fn tool_result_label(last_tool: Option<&str>, content: &str) -> String {
+    let line_count = content.lines().count();
+    let is_empty = content.trim().is_empty();
+
+    if is_empty {
+        if let Some(tool) = last_tool {
+            return format!("[{} ✓]", tool);
+        }
+        return "[✓ done]".to_string();
+    }
+
+    // Check for common error patterns
+    let first_line = content.lines().next().unwrap_or("");
+    let looks_like_error = first_line.contains("error")
+        || first_line.contains("Error")
+        || first_line.contains("FAILED")
+        || first_line.contains("not found")
+        || first_line.contains("No such file");
+
+    let tool_prefix = last_tool.unwrap_or("tool");
+
+    if looks_like_error {
+        let preview = truncate_label(first_line.trim(), 60);
+        format!("[{} ✗ {}]", tool_prefix, preview)
+    } else if line_count == 1 {
+        let preview = truncate_label(content.trim(), 60);
+        format!("[{}: {}]", tool_prefix, preview)
+    } else {
+        let preview = truncate_label(first_line.trim(), 40);
+        format!("[{}: {} ({} lines)]", tool_prefix, preview, line_count)
+    }
 }
 
 /// Format tool input as indented lines.
@@ -2173,5 +2302,127 @@ mod tests {
         assert!(!ctx.contains("Compacted Project Context"));
         // But should still have graph summary
         assert!(ctx.contains("### Graph Summary"));
+    }
+
+    #[test]
+    fn test_tool_use_label_bash() {
+        let input = r#"{"command":"cargo test --lib"}"#;
+        assert_eq!(tool_use_label("Bash", input), "[$ cargo test --lib]");
+    }
+
+    #[test]
+    fn test_tool_use_label_bash_multiline() {
+        let input = r#"{"command":"echo hello &&\necho world"}"#;
+        assert_eq!(tool_use_label("Bash", input), "[$ echo hello &&]");
+    }
+
+    #[test]
+    fn test_tool_use_label_bash_long_command() {
+        let long_cmd = "a".repeat(100);
+        let input = format!(r#"{{"command":"{}"}}"#, long_cmd);
+        let label = tool_use_label("Bash", &input);
+        assert!(label.starts_with("[$ aaaa"));
+        assert!(label.ends_with("...]"));
+        assert!(label.len() < 80);
+    }
+
+    #[test]
+    fn test_tool_use_label_read() {
+        let input = r#"{"file_path":"/home/user/project/src/main.rs"}"#;
+        assert_eq!(
+            tool_use_label("Read", input),
+            "[reading project/src/main.rs]"
+        );
+    }
+
+    #[test]
+    fn test_tool_use_label_edit() {
+        let input = r#"{"file_path":"/src/graph.rs","old_string":"foo","new_string":"bar"}"#;
+        assert_eq!(tool_use_label("Edit", input), "[editing /src/graph.rs]");
+    }
+
+    #[test]
+    fn test_tool_use_label_write() {
+        let input = r#"{"file_path":"/tmp/output.txt","content":"hello"}"#;
+        assert_eq!(tool_use_label("Write", input), "[writing /tmp/output.txt]");
+    }
+
+    #[test]
+    fn test_tool_use_label_grep() {
+        let input = r#"{"pattern":"fn main","path":"src/"}"#;
+        assert_eq!(tool_use_label("Grep", input), "[grep 'fn main' in src/]");
+    }
+
+    #[test]
+    fn test_tool_use_label_grep_no_path() {
+        let input = r#"{"pattern":"TODO"}"#;
+        assert_eq!(tool_use_label("Grep", input), "[grep 'TODO']");
+    }
+
+    #[test]
+    fn test_tool_use_label_glob() {
+        let input = r#"{"pattern":"**/*.rs"}"#;
+        assert_eq!(tool_use_label("Glob", input), "[glob **/*.rs]");
+    }
+
+    #[test]
+    fn test_tool_use_label_unknown_tool() {
+        let input = r#"{"foo":"bar"}"#;
+        assert_eq!(tool_use_label("CustomTool", input), "[calling CustomTool...]");
+    }
+
+    #[test]
+    fn test_tool_use_label_invalid_json() {
+        assert_eq!(tool_use_label("Bash", "not json"), "[calling Bash...]");
+    }
+
+    #[test]
+    fn test_tool_result_label_empty() {
+        assert_eq!(tool_result_label(Some("Bash"), ""), "[Bash ✓]");
+        assert_eq!(tool_result_label(None, "   "), "[✓ done]");
+    }
+
+    #[test]
+    fn test_tool_result_label_error() {
+        let result = tool_result_label(Some("Bash"), "error[E0308]: mismatched types");
+        assert!(result.contains("✗"));
+        assert!(result.contains("Bash"));
+        assert!(result.contains("error"));
+    }
+
+    #[test]
+    fn test_tool_result_label_single_line() {
+        assert_eq!(
+            tool_result_label(Some("Read"), "file contents here"),
+            "[Read: file contents here]"
+        );
+    }
+
+    #[test]
+    fn test_tool_result_label_multiline() {
+        let content = "line 1\nline 2\nline 3\nline 4";
+        let label = tool_result_label(Some("Bash"), content);
+        assert!(label.contains("4 lines"));
+        assert!(label.contains("Bash"));
+    }
+
+    #[test]
+    fn test_truncate_label() {
+        assert_eq!(truncate_label("short", 10), "short");
+        assert_eq!(truncate_label("a long string here", 10), "a long ...");
+        assert_eq!(truncate_label("abcdefghij", 10), "abcdefghij"); // exactly at limit
+        assert_eq!(truncate_label("abcdefghijk", 10), "abcdefg..."); // one over
+    }
+
+    #[test]
+    fn test_short_path() {
+        assert_eq!(short_path("/a/b/c/d/e.rs"), "c/d/e.rs");
+        assert_eq!(short_path("/src/main.rs"), "/src/main.rs"); // ≤3 components
+        assert_eq!(short_path("src/main.rs"), "src/main.rs");
+        assert_eq!(short_path("file.rs"), "file.rs");
+        assert_eq!(
+            short_path("/home/user/project/src/main.rs"),
+            "project/src/main.rs"
+        );
     }
 }
