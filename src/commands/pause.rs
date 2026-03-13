@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use std::path::Path;
 use workgraph::graph::LogEntry;
-use workgraph::parser::save_graph;
+use workgraph::parser::modify_graph;
 
 #[cfg(test)]
 use super::graph_path;
@@ -10,22 +10,44 @@ use super::graph_path;
 use workgraph::parser::load_graph;
 
 pub fn run(dir: &Path, id: &str) -> Result<()> {
-    let (mut graph, path) = super::load_workgraph_mut(dir)?;
-
-    let task = graph.get_task_mut_or_err(id)?;
-
-    if task.paused {
-        anyhow::bail!("Task '{}' is already paused", id);
+    let path = super::graph_path(dir);
+    if !path.exists() {
+        anyhow::bail!("Workgraph not initialized. Run 'wg init' first.");
     }
 
-    task.paused = true;
-    task.log.push(LogEntry {
-        timestamp: Utc::now().to_rfc3339(),
-        actor: None,
-        message: "Task paused".to_string(),
-    });
+    // Use modify_graph for atomic load-modify-save under a single exclusive
+    // lock, preventing race conditions with the coordinator.
+    let mut error: Option<anyhow::Error> = None;
 
-    save_graph(&graph, &path).context("Failed to save graph")?;
+    let _graph = modify_graph(&path, |graph| {
+        let task = match graph.get_task_mut(id) {
+            Some(t) => t,
+            None => {
+                error = Some(anyhow::anyhow!("Task '{}' not found", id));
+                return false;
+            }
+        };
+
+        if task.paused {
+            error = Some(anyhow::anyhow!("Task '{}' is already paused", id));
+            return false;
+        }
+
+        task.paused = true;
+        task.log.push(LogEntry {
+            timestamp: Utc::now().to_rfc3339(),
+            actor: None,
+            message: "Task paused".to_string(),
+        });
+
+        true
+    })
+    .context("Failed to save graph")?;
+
+    if let Some(e) = error {
+        return Err(e);
+    }
+
     super::notify_graph_changed(dir);
 
     // Record operation
@@ -49,6 +71,7 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
     use workgraph::graph::{Node, Status, Task, WorkGraph};
+    use workgraph::parser::save_graph;
 
     fn make_task(id: &str, title: &str, status: Status) -> Task {
         Task {
