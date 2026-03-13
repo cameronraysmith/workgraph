@@ -443,6 +443,8 @@ wg service reload
 
 **Cost tips:** Use **haiku** for simple formatting/linting, **sonnet** for typical coding, **opus** for complex reasoning and architecture.
 
+**Alternative providers:** Workgraph supports [OpenRouter](https://openrouter.ai/) and any OpenAI-compatible API. Configure an endpoint with `wg endpoints add` and use full model IDs like `deepseek/deepseek-chat-v3`. See [docs/guides/openrouter-setup.md](docs/guides/openrouter-setup.md) for details.
+
 ### The TUI
 
 Launch the interactive terminal dashboard:
