@@ -109,12 +109,54 @@ fn seed_agency_data(agency_dir: &Path) -> (Vec<String>, Vec<String>) {
 
     // 6 roles with varying performance
     let role_defs = vec![
-        ("Implementer", "Writes code", vec!["rust"], "Working code", 0.45, 8),
-        ("Reviewer", "Reviews pull requests", vec!["code-review"], "High-quality reviews", 0.65, 6),
-        ("Debugger", "Finds and fixes bugs", vec!["debugging"], "Bug-free code", 0.25, 10),
-        ("Architect", "Designs systems", vec!["design"], "Clean architecture", 0.80, 7),
-        ("Tester", "Writes tests", vec!["testing"], "Comprehensive tests", 0.55, 5),
-        ("Documenter", "Writes documentation", vec!["docs"], "Clear documentation", 0.90, 4),
+        (
+            "Implementer",
+            "Writes code",
+            vec!["rust"],
+            "Working code",
+            0.45,
+            8,
+        ),
+        (
+            "Reviewer",
+            "Reviews pull requests",
+            vec!["code-review"],
+            "High-quality reviews",
+            0.65,
+            6,
+        ),
+        (
+            "Debugger",
+            "Finds and fixes bugs",
+            vec!["debugging"],
+            "Bug-free code",
+            0.25,
+            10,
+        ),
+        (
+            "Architect",
+            "Designs systems",
+            vec!["design"],
+            "Clean architecture",
+            0.80,
+            7,
+        ),
+        (
+            "Tester",
+            "Writes tests",
+            vec!["testing"],
+            "Comprehensive tests",
+            0.55,
+            5,
+        ),
+        (
+            "Documenter",
+            "Writes documentation",
+            vec!["docs"],
+            "Clear documentation",
+            0.90,
+            4,
+        ),
     ];
 
     let mut role_ids = Vec::new();
@@ -131,11 +173,36 @@ fn seed_agency_data(agency_dir: &Path) -> (Vec<String>, Vec<String>) {
 
     // 5 tradeoffs with varying performance
     let tradeoff_defs = vec![
-        ("Quality First", "Prioritise correctness", vec!["Slower delivery"], vec!["Skipping tests"]),
-        ("Speed Focus", "Deliver quickly", vec!["Less polish"], vec!["Skipping validation"]),
-        ("Thorough", "Be comprehensive", vec!["Takes longer"], vec!["Incomplete analysis"]),
-        ("Pragmatic", "Balance speed and quality", vec!["Some shortcuts"], vec!["Major shortcuts"]),
-        ("Creative", "Explore novel approaches", vec!["Unpredictable timelines"], vec!["Ignoring constraints"]),
+        (
+            "Quality First",
+            "Prioritise correctness",
+            vec!["Slower delivery"],
+            vec!["Skipping tests"],
+        ),
+        (
+            "Speed Focus",
+            "Deliver quickly",
+            vec!["Less polish"],
+            vec!["Skipping validation"],
+        ),
+        (
+            "Thorough",
+            "Be comprehensive",
+            vec!["Takes longer"],
+            vec!["Incomplete analysis"],
+        ),
+        (
+            "Pragmatic",
+            "Balance speed and quality",
+            vec!["Some shortcuts"],
+            vec!["Major shortcuts"],
+        ),
+        (
+            "Creative",
+            "Explore novel approaches",
+            vec!["Unpredictable timelines"],
+            vec!["Ignoring constraints"],
+        ),
     ];
 
     let mut tradeoff_ids = Vec::new();
@@ -184,25 +251,26 @@ fn test_evolver_e2e_full_pipeline_structure() {
     // Run evolve in force-fanout mode with JSON output
     let output = wg_ok(
         &wg_dir,
-        &[
-            "evolve",
-            "run",
-            "--force-fanout",
-            "--budget",
-            "5",
-            "--json",
-        ],
+        &["evolve", "run", "--force-fanout", "--budget", "5", "--json"],
     );
 
     // Verify JSON output mentions the pipeline
-    let json: serde_json::Value = serde_json::from_str(&output).unwrap_or_else(|e| {
-        panic!("Invalid JSON from wg evolve: {}\nOutput: {}", e, output)
-    });
+    let json: serde_json::Value = serde_json::from_str(&output)
+        .unwrap_or_else(|e| panic!("Invalid JSON from wg evolve: {}\nOutput: {}", e, output));
     assert_eq!(json.get("mode").and_then(|v| v.as_str()), Some("fanout"));
-    assert!(json.get("analyzers").is_some(), "Output should list analyzers");
-    assert!(json.get("synthesizer").is_some(), "Output should list synthesizer");
+    assert!(
+        json.get("analyzers").is_some(),
+        "Output should list analyzers"
+    );
+    assert!(
+        json.get("synthesizer").is_some(),
+        "Output should list synthesizer"
+    );
     assert!(json.get("apply").is_some(), "Output should list apply");
-    assert!(json.get("evaluate").is_some(), "Output should list evaluate");
+    assert!(
+        json.get("evaluate").is_some(),
+        "Output should list evaluate"
+    );
 
     // Load graph and verify all pipeline stages exist
     let graph = load_graph(&wg_dir.join("graph.jsonl")).unwrap();
@@ -330,7 +398,9 @@ fn test_evolver_e2e_partition_creates_slice_files() {
         serde_json::from_str(&fs::read_to_string(run_dir.join("config.json")).unwrap()).unwrap();
     assert!(config_json.get("run_id").is_some());
     assert_eq!(
-        config_json.get("total_evaluations").and_then(|v| v.as_u64()),
+        config_json
+            .get("total_evaluations")
+            .and_then(|v| v.as_u64()),
         Some(24)
     );
     assert_eq!(
@@ -358,10 +428,9 @@ fn test_evolver_e2e_partition_creates_slice_files() {
     );
 
     // Verify snapshot content
-    let snapshot: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(run_dir.join("snapshot-iter-0.json")).unwrap(),
-    )
-    .unwrap();
+    let snapshot: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(run_dir.join("snapshot-iter-0.json")).unwrap())
+            .unwrap();
     assert_eq!(snapshot.get("iteration").and_then(|v| v.as_u64()), Some(0));
     assert!(snapshot.get("roles").is_some());
     assert!(snapshot.get("tradeoffs").is_some());
@@ -408,10 +477,7 @@ fn test_evolver_e2e_autopoietic_cycle_structure() {
         .cycle_config
         .as_ref()
         .expect("Evaluate must have CycleConfig in autopoietic mode");
-    assert_eq!(
-        cycle_config.max_iterations, 4,
-        "max_iterations should be 4"
-    );
+    assert_eq!(cycle_config.max_iterations, 4, "max_iterations should be 4");
     assert_eq!(
         cycle_config.delay,
         Some("120s".to_string()),
@@ -636,7 +702,10 @@ fn test_evolver_e2e_partial_failure_graph_structure() {
 
     // Verify we actually simulated partial failure
     assert!(failed_count > 0, "Should have at least one failed analyzer");
-    assert!(done_count > 0, "Should have at least one successful analyzer");
+    assert!(
+        done_count > 0,
+        "Should have at least one successful analyzer"
+    );
 
     // The synthesize task is still structurally valid (graph is unchanged,
     // synthesizer handles missing proposals gracefully at runtime)
@@ -661,19 +730,12 @@ fn test_evolver_e2e_dry_run_no_side_effects() {
 
     let output = wg_ok(
         &wg_dir,
-        &[
-            "evolve",
-            "run",
-            "--force-fanout",
-            "--dry-run",
-            "--json",
-        ],
+        &["evolve", "run", "--force-fanout", "--dry-run", "--json"],
     );
 
     // Verify dry run mode
-    let json: serde_json::Value = serde_json::from_str(&output).unwrap_or_else(|e| {
-        panic!("Invalid JSON: {}\nOutput: {}", e, output)
-    });
+    let json: serde_json::Value = serde_json::from_str(&output)
+        .unwrap_or_else(|e| panic!("Invalid JSON: {}\nOutput: {}", e, output));
     assert_eq!(
         json.get("mode").and_then(|v| v.as_str()),
         Some("dry_run_fanout")
@@ -794,14 +856,7 @@ fn test_evolver_e2e_json_output_complete() {
 
     let output = wg_ok(
         &wg_dir,
-        &[
-            "evolve",
-            "run",
-            "--force-fanout",
-            "--json",
-            "--budget",
-            "3",
-        ],
+        &["evolve", "run", "--force-fanout", "--json", "--budget", "3"],
     );
 
     let json: serde_json::Value = serde_json::from_str(&output).unwrap();
@@ -876,10 +931,7 @@ fn test_evolver_e2e_autopoietic_recorded_in_config() {
         config.get("max_iterations").and_then(|v| v.as_u64()),
         Some(2)
     );
-    assert_eq!(
-        config.get("cycle_delay").and_then(|v| v.as_u64()),
-        Some(60)
-    );
+    assert_eq!(config.get("cycle_delay").and_then(|v| v.as_u64()), Some(60));
 }
 
 // ===========================================================================
@@ -896,13 +948,7 @@ fn test_evolver_e2e_specific_strategy() {
     // Run with only mutation strategy
     wg_ok(
         &wg_dir,
-        &[
-            "evolve",
-            "run",
-            "--force-fanout",
-            "--strategy",
-            "mutation",
-        ],
+        &["evolve", "run", "--force-fanout", "--strategy", "mutation"],
     );
 
     let graph = load_graph(&wg_dir.join("graph.jsonl")).unwrap();

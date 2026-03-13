@@ -79,7 +79,10 @@ impl FileLock {
     }
 
     #[cfg(unix)]
-    fn flock_impl<P: AsRef<Path>>(lock_path: P, operation: libc::c_int) -> Result<Self, ParseError> {
+    fn flock_impl<P: AsRef<Path>>(
+        lock_path: P,
+        operation: libc::c_int,
+    ) -> Result<Self, ParseError> {
         use std::os::unix::io::AsRawFd;
 
         if let Some(parent) = lock_path.as_ref().parent() {

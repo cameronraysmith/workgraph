@@ -866,10 +866,7 @@ mod error_case_tests {
     #[test]
     fn integration_openrouter_unknown_provider_default_url_empty() {
         let url = EndpointConfig::default_url_for_provider("nonexistent-provider");
-        assert_eq!(
-            url, "",
-            "Unknown provider should return empty default URL"
-        );
+        assert_eq!(url, "", "Unknown provider should return empty default URL");
     }
 
     #[test]
@@ -894,9 +891,7 @@ mod error_case_tests {
 
     #[test]
     fn integration_openrouter_find_for_provider_empty_list() {
-        let endpoints = EndpointsConfig {
-            endpoints: vec![],
-        };
+        let endpoints = EndpointsConfig { endpoints: vec![] };
 
         assert!(
             endpoints.find_for_provider("openrouter").is_none(),

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use super::strategy::{EvolverOperation, EvolverOutput};
 use super::strategy::Strategy;
+use super::strategy::{EvolverOperation, EvolverOutput};
 
 /// Conflict resolution priority (higher wins).
 /// Retirement > GapAnalysis > Mutation > Crossover > BizarreIdeation
@@ -61,7 +61,10 @@ fn target_entity_key(op: &EvolverOperation) -> String {
             format!("compose::{}", op.role_id.as_deref().unwrap_or("unknown"))
         }
         "modify_coordinator_prompt" => {
-            format!("coordinator::{}", op.target_id.as_deref().unwrap_or("unknown"))
+            format!(
+                "coordinator::{}",
+                op.target_id.as_deref().unwrap_or("unknown")
+            )
         }
         _ => {
             // Modifications and retirements target existing entities
@@ -83,8 +86,18 @@ fn ops_conflict(a: &EvolverOperation, b: &EvolverOperation) -> bool {
     // A retire + modify/mutate on the same entity is a conflict
     let a_retires = a.op.starts_with("retire");
     let b_retires = b.op.starts_with("retire");
-    let a_modifies = a.op.starts_with("modify") || a.op.contains("mutation") || a.op.contains("substitution") || a.op.contains("swap") || a.op.contains("add_component") || a.op.contains("remove_component");
-    let b_modifies = b.op.starts_with("modify") || b.op.contains("mutation") || b.op.contains("substitution") || b.op.contains("swap") || b.op.contains("add_component") || b.op.contains("remove_component");
+    let a_modifies = a.op.starts_with("modify")
+        || a.op.contains("mutation")
+        || a.op.contains("substitution")
+        || a.op.contains("swap")
+        || a.op.contains("add_component")
+        || a.op.contains("remove_component");
+    let b_modifies = b.op.starts_with("modify")
+        || b.op.contains("mutation")
+        || b.op.contains("substitution")
+        || b.op.contains("swap")
+        || b.op.contains("add_component")
+        || b.op.contains("remove_component");
 
     // Retire vs modify on same target
     if a_target == b_target && ((a_retires && b_modifies) || (a_modifies && b_retires)) {
@@ -101,10 +114,7 @@ fn ops_conflict(a: &EvolverOperation, b: &EvolverOperation) -> bool {
 /// - Applies budget cap
 /// - Handles partial failures (missing strategies are skipped)
 /// - Tracks provenance (which strategy proposed what)
-pub fn synthesize(
-    inputs: Vec<(Strategy, EvolverOutput)>,
-    budget: Option<u32>,
-) -> EvolverOutput {
+pub fn synthesize(inputs: Vec<(Strategy, EvolverOutput)>, budget: Option<u32>) -> EvolverOutput {
     if inputs.is_empty() {
         return EvolverOutput {
             run_id: None,
@@ -116,9 +126,7 @@ pub fn synthesize(
     }
 
     // Grab run_id from first input that has one
-    let run_id = inputs
-        .iter()
-        .find_map(|(_, out)| out.run_id.clone());
+    let run_id = inputs.iter().find_map(|(_, out)| out.run_id.clone());
 
     // Collect all operations tagged with their source strategy
     let mut all_tagged: Vec<TaggedOp> = Vec::new();
@@ -138,8 +146,7 @@ pub fn synthesize(
                 tagged_op.rationale = Some(format!("Proposed by {} strategy", strategy.label()));
             } else {
                 let existing = tagged_op.rationale.as_ref().unwrap().clone();
-                tagged_op.rationale =
-                    Some(format!("{} [source: {}]", existing, strategy.label()));
+                tagged_op.rationale = Some(format!("{} [source: {}]", existing, strategy.label()));
             }
             all_tagged.push(TaggedOp {
                 strategy: *strategy,
@@ -242,7 +249,10 @@ pub fn synthesize(
         let order = |op: &str| -> u8 {
             if op.starts_with("retire") {
                 0
-            } else if op.starts_with("create") || op == "bizarre_ideation" || op.starts_with("random_compose") {
+            } else if op.starts_with("create")
+                || op == "bizarre_ideation"
+                || op.starts_with("random_compose")
+            {
                 1
             } else {
                 2
@@ -301,12 +311,8 @@ mod tests {
     #[test]
     fn test_evolver_synthesize_merges_strategies() {
         // Two strategies each propose different operations
-        let mutation_output = make_output(vec![
-            make_op("modify_role", Some("role-a"), Some(0.8)),
-        ]);
-        let gap_output = make_output(vec![
-            make_op("create_role", Some("role-b"), Some(0.7)),
-        ]);
+        let mutation_output = make_output(vec![make_op("modify_role", Some("role-a"), Some(0.8))]);
+        let gap_output = make_output(vec![make_op("create_role", Some("role-b"), Some(0.7))]);
 
         let result = synthesize(
             vec![
@@ -326,12 +332,8 @@ mod tests {
     #[test]
     fn test_evolver_synthesize_deduplicates() {
         // Two strategies propose the same modify on the same target
-        let mutation_output = make_output(vec![
-            make_op("modify_role", Some("role-a"), Some(0.8)),
-        ]);
-        let component_output = make_output(vec![
-            make_op("modify_role", Some("role-a"), Some(0.6)),
-        ]);
+        let mutation_output = make_output(vec![make_op("modify_role", Some("role-a"), Some(0.8))]);
+        let component_output = make_output(vec![make_op("modify_role", Some("role-a"), Some(0.6))]);
 
         let result = synthesize(
             vec![
@@ -350,12 +352,9 @@ mod tests {
     #[test]
     fn test_evolver_synthesize_resolves_conflicts() {
         // Retirement wants to retire role-a, Mutation wants to modify it
-        let retirement_output = make_output(vec![
-            make_op("retire_role", Some("role-a"), Some(0.9)),
-        ]);
-        let mutation_output = make_output(vec![
-            make_op("modify_role", Some("role-a"), Some(0.8)),
-        ]);
+        let retirement_output =
+            make_output(vec![make_op("retire_role", Some("role-a"), Some(0.9))]);
+        let mutation_output = make_output(vec![make_op("modify_role", Some("role-a"), Some(0.8))]);
 
         let result = synthesize(
             vec![
@@ -368,7 +367,13 @@ mod tests {
         // Retirement has higher priority, so retire_role wins
         assert_eq!(result.operations.len(), 1);
         assert_eq!(result.operations[0].op, "retire_role");
-        assert!(result.summary.as_ref().unwrap().contains("1 conflicts resolved"));
+        assert!(
+            result
+                .summary
+                .as_ref()
+                .unwrap()
+                .contains("1 conflicts resolved")
+        );
     }
 
     #[test]
@@ -386,20 +391,21 @@ mod tests {
         );
 
         assert_eq!(result.operations.len(), 2);
-        assert!(result.summary.as_ref().unwrap().contains("after budget cap"));
+        assert!(
+            result
+                .summary
+                .as_ref()
+                .unwrap()
+                .contains("after budget cap")
+        );
     }
 
     #[test]
     fn test_evolver_synthesize_partial_failures() {
         // Only one strategy succeeds, the other is missing entirely
-        let gap_output = make_output(vec![
-            make_op("create_role", None, Some(0.7)),
-        ]);
+        let gap_output = make_output(vec![make_op("create_role", None, Some(0.7))]);
 
-        let result = synthesize(
-            vec![(Strategy::GapAnalysis, gap_output)],
-            None,
-        );
+        let result = synthesize(vec![(Strategy::GapAnalysis, gap_output)], None);
 
         assert_eq!(result.operations.len(), 1);
         assert_eq!(result.operations[0].op, "create_role");
@@ -409,38 +415,36 @@ mod tests {
     fn test_evolver_synthesize_empty_input() {
         let result = synthesize(vec![], None);
         assert!(result.operations.is_empty());
-        assert!(result.summary.as_ref().unwrap().contains("No strategy outputs"));
+        assert!(
+            result
+                .summary
+                .as_ref()
+                .unwrap()
+                .contains("No strategy outputs")
+        );
     }
 
     #[test]
     fn test_evolver_synthesize_provenance_tracking() {
-        let output = make_output(vec![
-            make_op("modify_role", Some("role-a"), Some(0.8)),
-        ]);
+        let output = make_output(vec![make_op("modify_role", Some("role-a"), Some(0.8))]);
 
-        let result = synthesize(
-            vec![(Strategy::Mutation, output)],
-            None,
-        );
+        let result = synthesize(vec![(Strategy::Mutation, output)], None);
 
         assert_eq!(result.operations.len(), 1);
         let rationale = result.operations[0].rationale.as_ref().unwrap();
-        assert!(rationale.contains("mutation"), "Rationale should mention source strategy: {}", rationale);
+        assert!(
+            rationale.contains("mutation"),
+            "Rationale should mention source strategy: {}",
+            rationale
+        );
     }
 
     #[test]
     fn test_evolver_synthesize_deferred_operations_passed_through() {
-        let mut output = make_output(vec![
-            make_op("modify_role", Some("role-a"), Some(0.8)),
-        ]);
-        output.deferred_operations = vec![
-            make_op("config_swap_outcome", Some("role-a"), None),
-        ];
+        let mut output = make_output(vec![make_op("modify_role", Some("role-a"), Some(0.8))]);
+        output.deferred_operations = vec![make_op("config_swap_outcome", Some("role-a"), None)];
 
-        let result = synthesize(
-            vec![(Strategy::Mutation, output)],
-            None,
-        );
+        let result = synthesize(vec![(Strategy::Mutation, output)], None);
 
         assert_eq!(result.operations.len(), 1);
         assert_eq!(result.deferred_operations.len(), 1);
@@ -450,12 +454,16 @@ mod tests {
     #[test]
     fn test_evolver_synthesize_conflict_retire_vs_modify_same_entity() {
         // retire_motivation vs modify_motivation on same target
-        let retirement_output = make_output(vec![
-            make_op("retire_motivation", Some("tradeoff-x"), Some(0.9)),
-        ]);
-        let tuning_output = make_output(vec![
-            make_op("modify_motivation", Some("tradeoff-x"), Some(0.8)),
-        ]);
+        let retirement_output = make_output(vec![make_op(
+            "retire_motivation",
+            Some("tradeoff-x"),
+            Some(0.9),
+        )]);
+        let tuning_output = make_output(vec![make_op(
+            "modify_motivation",
+            Some("tradeoff-x"),
+            Some(0.8),
+        )]);
 
         let result = synthesize(
             vec![
@@ -475,20 +483,28 @@ mod tests {
         // 4 strategies, each with 2 ops on different targets
         let mut inputs = Vec::new();
 
-        inputs.push((Strategy::Mutation, make_output(vec![
-            make_op("modify_role", Some("r1"), Some(0.7)),
-            make_op("modify_role", Some("r2"), Some(0.6)),
-        ])));
-        inputs.push((Strategy::GapAnalysis, make_output(vec![
-            make_op("create_role", None, Some(0.8)),
-            make_op("create_motivation", None, Some(0.7)),
-        ])));
-        inputs.push((Strategy::Retirement, make_output(vec![
-            make_op("retire_role", Some("r3"), Some(0.9)),
-        ])));
-        inputs.push((Strategy::BizarreIdeation, make_output(vec![
-            make_op("bizarre_ideation", None, Some(0.5)),
-        ])));
+        inputs.push((
+            Strategy::Mutation,
+            make_output(vec![
+                make_op("modify_role", Some("r1"), Some(0.7)),
+                make_op("modify_role", Some("r2"), Some(0.6)),
+            ]),
+        ));
+        inputs.push((
+            Strategy::GapAnalysis,
+            make_output(vec![
+                make_op("create_role", None, Some(0.8)),
+                make_op("create_motivation", None, Some(0.7)),
+            ]),
+        ));
+        inputs.push((
+            Strategy::Retirement,
+            make_output(vec![make_op("retire_role", Some("r3"), Some(0.9))]),
+        ));
+        inputs.push((
+            Strategy::BizarreIdeation,
+            make_output(vec![make_op("bizarre_ideation", None, Some(0.5))]),
+        ));
 
         let result = synthesize(inputs, None);
 
@@ -500,14 +516,9 @@ mod tests {
 
     #[test]
     fn test_evolver_synthesize_budget_zero() {
-        let output = make_output(vec![
-            make_op("modify_role", Some("role-a"), Some(0.8)),
-        ]);
+        let output = make_output(vec![make_op("modify_role", Some("role-a"), Some(0.8))]);
 
-        let result = synthesize(
-            vec![(Strategy::Mutation, output)],
-            Some(0),
-        );
+        let result = synthesize(vec![(Strategy::Mutation, output)], Some(0));
 
         assert_eq!(result.operations.len(), 0);
     }

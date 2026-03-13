@@ -272,7 +272,11 @@ async fn streaming_server_drops_connection_errors() {
         Err(e) => {
             let msg = e.to_string();
             assert!(
-                msg.contains("Stream") || msg.contains("stream") || msg.contains("failed") || msg.contains("error") || msg.contains("retry"),
+                msg.contains("Stream")
+                    || msg.contains("stream")
+                    || msg.contains("failed")
+                    || msg.contains("error")
+                    || msg.contains("retry"),
                 "Expected streaming error message, got: {}",
                 msg
             );
@@ -303,11 +307,7 @@ async fn non_streaming_fallback_works() {
         }
     });
 
-    let base_url = mock_server_one_shot(
-        200,
-        "application/json",
-        response_body.to_string(),
-    );
+    let base_url = mock_server_one_shot(200, "application/json", response_body.to_string());
 
     // Explicitly disable streaming
     let client = OpenAiClient::new("test-key".into(), "test-model", None)
@@ -353,11 +353,7 @@ async fn non_streaming_tool_call_response() {
         }
     });
 
-    let base_url = mock_server_one_shot(
-        200,
-        "application/json",
-        response_body.to_string(),
-    );
+    let base_url = mock_server_one_shot(200, "application/json", response_body.to_string());
 
     let client = OpenAiClient::new("test-key".into(), "test-model", None)
         .unwrap()
@@ -457,11 +453,7 @@ async fn streaming_disabled_uses_json_path() {
         "usage": {"prompt_tokens": 5, "completion_tokens": 2}
     });
 
-    let base_url = mock_server_one_shot(
-        200,
-        "application/json",
-        response_body.to_string(),
-    );
+    let base_url = mock_server_one_shot(200, "application/json", response_body.to_string());
 
     let client = OpenAiClient::new("test-key".into(), "test-model", None)
         .unwrap()
@@ -531,11 +523,7 @@ async fn streaming_api_error_propagates() {
         }
     });
 
-    let base_url = mock_server_one_shot(
-        401,
-        "application/json",
-        error_body.to_string(),
-    );
+    let base_url = mock_server_one_shot(401, "application/json", error_body.to_string());
 
     let client = OpenAiClient::new("bad-key".into(), "test-model", None)
         .unwrap()
@@ -571,8 +559,8 @@ fn from_endpoint_sets_streaming_for_openrouter() {
         is_default: true,
     };
 
-    let client = OpenAiClient::from_endpoint(&ep, "anthropic/claude-sonnet-4-20250514", None)
-        .unwrap();
+    let client =
+        OpenAiClient::from_endpoint(&ep, "anthropic/claude-sonnet-4-20250514", None).unwrap();
     // OpenRouter provider should auto-enable streaming
     assert_eq!(client.name(), "openrouter");
     assert_eq!(client.model, "anthropic/claude-sonnet-4-20250514");

@@ -69,15 +69,33 @@ pub fn partition_evaluations(
 
     for strategy in strategies {
         let slice = match strategy {
-            Strategy::Mutation => partition_mutation(evaluations, roles, tradeoffs, total_evals, run_id),
-            Strategy::Crossover => partition_crossover(evaluations, roles, tradeoffs, total_evals, run_id),
-            Strategy::GapAnalysis => partition_gap_analysis(evaluations, roles, tradeoffs, total_evals, run_id),
-            Strategy::Retirement => partition_retirement(evaluations, roles, tradeoffs, total_evals, run_id),
-            Strategy::MotivationTuning => partition_motivation_tuning(evaluations, roles, tradeoffs, total_evals, run_id),
-            Strategy::ComponentMutation => partition_component_mutation(evaluations, roles, tradeoffs, total_evals, run_id),
-            Strategy::Randomisation => partition_randomisation(evaluations, roles, tradeoffs, total_evals, run_id),
-            Strategy::BizarreIdeation => partition_bizarre_ideation(evaluations, roles, tradeoffs, total_evals, run_id),
-            Strategy::CoordinatorEvolution => partition_coordinator_evolution(evaluations, roles, tradeoffs, total_evals, run_id),
+            Strategy::Mutation => {
+                partition_mutation(evaluations, roles, tradeoffs, total_evals, run_id)
+            }
+            Strategy::Crossover => {
+                partition_crossover(evaluations, roles, tradeoffs, total_evals, run_id)
+            }
+            Strategy::GapAnalysis => {
+                partition_gap_analysis(evaluations, roles, tradeoffs, total_evals, run_id)
+            }
+            Strategy::Retirement => {
+                partition_retirement(evaluations, roles, tradeoffs, total_evals, run_id)
+            }
+            Strategy::MotivationTuning => {
+                partition_motivation_tuning(evaluations, roles, tradeoffs, total_evals, run_id)
+            }
+            Strategy::ComponentMutation => {
+                partition_component_mutation(evaluations, roles, tradeoffs, total_evals, run_id)
+            }
+            Strategy::Randomisation => {
+                partition_randomisation(evaluations, roles, tradeoffs, total_evals, run_id)
+            }
+            Strategy::BizarreIdeation => {
+                partition_bizarre_ideation(evaluations, roles, tradeoffs, total_evals, run_id)
+            }
+            Strategy::CoordinatorEvolution => {
+                partition_coordinator_evolution(evaluations, roles, tradeoffs, total_evals, run_id)
+            }
             Strategy::All => unreachable!("all_individual excludes All"),
         };
         slices.push((strategy, slice));
@@ -157,8 +175,7 @@ fn partition_crossover(
     let mut qualifying_roles: Vec<&Role> = roles
         .iter()
         .filter(|r| {
-            r.performance.task_count >= 3
-                && r.performance.avg_score.map_or(false, |s| s >= 0.55)
+            r.performance.task_count >= 3 && r.performance.avg_score.map_or(false, |s| s >= 0.55)
         })
         .collect();
     qualifying_roles.sort_by(|a, b| {
@@ -253,8 +270,7 @@ fn partition_retirement(
     let target_role_ids: HashSet<&str> = roles
         .iter()
         .filter(|r| {
-            r.performance.task_count >= 5
-                && r.performance.avg_score.map_or(false, |s| s < 0.35)
+            r.performance.task_count >= 5 && r.performance.avg_score.map_or(false, |s| s < 0.35)
         })
         .map(|r| r.id.as_str())
         .collect();
@@ -262,8 +278,7 @@ fn partition_retirement(
     let target_tradeoff_ids: HashSet<&str> = tradeoffs
         .iter()
         .filter(|t| {
-            t.performance.task_count >= 5
-                && t.performance.avg_score.map_or(false, |s| s < 0.35)
+            t.performance.task_count >= 5 && t.performance.avg_score.map_or(false, |s| s < 0.35)
         })
         .map(|t| t.id.as_str())
         .collect();
@@ -279,7 +294,11 @@ fn partition_retirement(
 
     let truncated = filtered_evals.len() > MAX_EVALS_PER_SLICE;
     // For retirement, keep lowest-scoring evals to show the pattern
-    filtered_evals.sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+    filtered_evals.sort_by(|a, b| {
+        a.score
+            .partial_cmp(&b.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     filtered_evals.truncate(MAX_EVALS_PER_SLICE);
 
     let filtered_roles: Vec<Role> = roles
@@ -536,9 +555,11 @@ fn partition_coordinator_evolution(
     let mut filtered_evals: Vec<Evaluation> = evaluations
         .iter()
         .filter(|e| {
-            e.dimensions
-                .keys()
-                .any(|k| k.starts_with("coord") || k.starts_with("decomposition") || k.starts_with("dispatch"))
+            e.dimensions.keys().any(|k| {
+                k.starts_with("coord")
+                    || k.starts_with("decomposition")
+                    || k.starts_with("dispatch")
+            })
         })
         .cloned()
         .collect();
@@ -577,7 +598,7 @@ fn partition_coordinator_evolution(
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use workgraph::agency::{Lineage, PerformanceRecord, AccessControl};
+    use workgraph::agency::{AccessControl, Lineage, PerformanceRecord};
 
     fn make_role(id: &str, avg_score: Option<f64>, task_count: u32) -> Role {
         Role {
@@ -648,8 +669,12 @@ mod tests {
             make_eval("e3", "r3", "t1", 0.8),
         ];
 
-        let slices = partition_evaluations(&evals, &roles, &tradeoffs, Path::new("/tmp"), "test-run");
-        let mutation = slices.iter().find(|(s, _)| *s == Strategy::Mutation).unwrap();
+        let slices =
+            partition_evaluations(&evals, &roles, &tradeoffs, Path::new("/tmp"), "test-run");
+        let mutation = slices
+            .iter()
+            .find(|(s, _)| *s == Strategy::Mutation)
+            .unwrap();
         assert_eq!(mutation.1.stats.evaluations_in_slice, 1);
         assert_eq!(mutation.1.stats.roles_in_slice, 1);
     }
@@ -666,8 +691,12 @@ mod tests {
             make_eval("e2", "r2", "t1", 0.5),
         ];
 
-        let slices = partition_evaluations(&evals, &roles, &tradeoffs, Path::new("/tmp"), "test-run");
-        let retirement = slices.iter().find(|(s, _)| *s == Strategy::Retirement).unwrap();
+        let slices =
+            partition_evaluations(&evals, &roles, &tradeoffs, Path::new("/tmp"), "test-run");
+        let retirement = slices
+            .iter()
+            .find(|(s, _)| *s == Strategy::Retirement)
+            .unwrap();
         assert_eq!(retirement.1.stats.roles_in_slice, 1);
         assert_eq!(retirement.1.stats.tradeoffs_in_slice, 1);
     }
@@ -678,8 +707,12 @@ mod tests {
         let tradeoffs = vec![make_tradeoff("t1", Some(0.5), 5)];
         let evals = vec![make_eval("e1", "r1", "t1", 0.5)];
 
-        let slices = partition_evaluations(&evals, &roles, &tradeoffs, Path::new("/tmp"), "test-run");
-        let gap = slices.iter().find(|(s, _)| *s == Strategy::GapAnalysis).unwrap();
+        let slices =
+            partition_evaluations(&evals, &roles, &tradeoffs, Path::new("/tmp"), "test-run");
+        let gap = slices
+            .iter()
+            .find(|(s, _)| *s == Strategy::GapAnalysis)
+            .unwrap();
         assert_eq!(gap.1.stats.evaluations_in_slice, 0);
         // But gets all roles for coverage analysis
         assert_eq!(gap.1.stats.roles_in_slice, 1);
@@ -691,7 +724,8 @@ mod tests {
         let tradeoffs = vec![make_tradeoff("t1", Some(0.5), 5)];
         let evals = vec![make_eval("e1", "r1", "t1", 0.5)];
 
-        let slices = partition_evaluations(&evals, &roles, &tradeoffs, Path::new("/tmp"), "test-run");
+        let slices =
+            partition_evaluations(&evals, &roles, &tradeoffs, Path::new("/tmp"), "test-run");
         assert_eq!(slices.len(), 9); // all individual strategies
     }
 }

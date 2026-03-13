@@ -2202,10 +2202,7 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
             // Show progressive streaming text from the coordinator.
             let style = Style::default().fg(Color::Cyan);
             for line in app.chat.streaming_text.lines() {
-                rendered_lines.push(Line::from(Span::styled(
-                    format!("  {}", line),
-                    style,
-                )));
+                rendered_lines.push(Line::from(Span::styled(format!("  {}", line), style)));
                 line_to_message.push(None);
             }
             // Append a blinking cursor to indicate still generating.
@@ -5881,19 +5878,15 @@ fn draw_config_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
                             EndpointTestStatus::Error(msg) => {
                                 spans.push(Span::styled(
                                     " ✗ ".to_string(),
-                                    Style::default()
-                                        .fg(Color::Red)
-                                        .add_modifier(Modifier::BOLD),
+                                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                                 ));
                                 let truncated = if msg.len() > 40 {
                                     format!("{}...", &msg[..40])
                                 } else {
                                     msg.clone()
                                 };
-                                spans.push(Span::styled(
-                                    truncated,
-                                    Style::default().fg(Color::Red),
-                                ));
+                                spans
+                                    .push(Span::styled(truncated, Style::default().fg(Color::Red)));
                             }
                         }
                     }

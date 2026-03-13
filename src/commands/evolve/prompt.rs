@@ -481,10 +481,7 @@ pub(crate) fn build_analyzer_prompt(
     let mut out = String::new();
 
     // Header
-    out.push_str(&format!(
-        "# Evolver Analyzer: {}\n\n",
-        strategy.label()
-    ));
+    out.push_str(&format!("# Evolver Analyzer: {}\n\n", strategy.label()));
     out.push_str(&format!(
         "You are a specialized evolution analyzer focused on the **{}** strategy.\n\
          Your job is to analyze a pre-filtered data slice and propose concrete operations.\n\n",

@@ -773,7 +773,12 @@ fn inject_crash_recovery_context(
     stdin.flush().context("Failed to flush stdin")?;
 
     // Wait for the agent's acknowledgment (shorter timeout than normal messages)
-    let ack = collect_response(response_rx, logger, std::time::Duration::from_secs(60), None);
+    let ack = collect_response(
+        response_rx,
+        logger,
+        std::time::Duration::from_secs(60),
+        None,
+    );
     match ack {
         Some(text) => {
             logger.info(&format!(
@@ -1109,10 +1114,8 @@ fn collect_response(
                     if !streaming_text.is_empty() {
                         streaming_text.push('\n');
                     }
-                    streaming_text.push_str(&tool_result_label(
-                        last_tool_name.as_deref(),
-                        &content,
-                    ));
+                    streaming_text
+                        .push_str(&tool_result_label(last_tool_name.as_deref(), &content));
                     let _ = chat::write_streaming(dir, coordinator_id, &streaming_text);
                 }
                 parts.push(ResponsePart::ToolResult(content));
@@ -1370,8 +1373,7 @@ fn short_path(path: &str) -> &str {
     } else {
         // parts = [last, second_last, third_last, remainder]
         // We want "third_last/second_last/last" — 2 internal slashes.
-        let kept_len: usize =
-            parts[0].len() + parts[1].len() + parts[2].len() + 2;
+        let kept_len: usize = parts[0].len() + parts[1].len() + parts[2].len() + 2;
         &path[path.len() - kept_len..]
     }
 }
@@ -2368,7 +2370,10 @@ mod tests {
     #[test]
     fn test_tool_use_label_unknown_tool() {
         let input = r#"{"foo":"bar"}"#;
-        assert_eq!(tool_use_label("CustomTool", input), "[calling CustomTool...]");
+        assert_eq!(
+            tool_use_label("CustomTool", input),
+            "[calling CustomTool...]"
+        );
     }
 
     #[test]

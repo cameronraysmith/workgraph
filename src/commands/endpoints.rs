@@ -326,7 +326,18 @@ mod tests {
     #[test]
     fn cli_endpoint_add_persists() {
         let tmp = setup_dir();
-        run_add(tmp.path(), "my-ep", Some("openai"), Some("https://api.openai.com/v1"), Some("gpt-4o"), Some("sk-test"), None, false, false).unwrap();
+        run_add(
+            tmp.path(),
+            "my-ep",
+            Some("openai"),
+            Some("https://api.openai.com/v1"),
+            Some("gpt-4o"),
+            Some("sk-test"),
+            None,
+            false,
+            false,
+        )
+        .unwrap();
 
         let config = Config::load(tmp.path()).unwrap();
         assert_eq!(config.llm_endpoints.endpoints.len(), 1);
@@ -345,7 +356,18 @@ mod tests {
         let kf = tmp.path().join("key.txt");
         std::fs::write(&kf, "sk-from-file\n").unwrap();
 
-        run_add(tmp.path(), "file-ep", Some("anthropic"), None, None, None, Some(kf.to_str().unwrap()), false, false).unwrap();
+        run_add(
+            tmp.path(),
+            "file-ep",
+            Some("anthropic"),
+            None,
+            None,
+            None,
+            Some(kf.to_str().unwrap()),
+            false,
+            false,
+        )
+        .unwrap();
 
         let config = Config::load(tmp.path()).unwrap();
         let ep = &config.llm_endpoints.endpoints[0];
@@ -358,7 +380,18 @@ mod tests {
     #[test]
     fn cli_endpoint_add_defaults_to_anthropic() {
         let tmp = setup_dir();
-        run_add(tmp.path(), "bare", None, None, None, None, None, false, false).unwrap();
+        run_add(
+            tmp.path(),
+            "bare",
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+        )
+        .unwrap();
         let config = Config::load(tmp.path()).unwrap();
         assert_eq!(config.llm_endpoints.endpoints[0].provider, "anthropic");
     }
@@ -366,15 +399,48 @@ mod tests {
     #[test]
     fn cli_endpoint_add_duplicate_errors() {
         let tmp = setup_dir();
-        run_add(tmp.path(), "dup", Some("openai"), None, None, None, None, false, false).unwrap();
-        let err = run_add(tmp.path(), "dup", Some("openai"), None, None, None, None, false, false).unwrap_err();
+        run_add(
+            tmp.path(),
+            "dup",
+            Some("openai"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+        )
+        .unwrap();
+        let err = run_add(
+            tmp.path(),
+            "dup",
+            Some("openai"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("already exists"));
     }
 
     #[test]
     fn cli_endpoint_add_first_auto_default() {
         let tmp = setup_dir();
-        run_add(tmp.path(), "first", Some("openai"), None, None, None, None, false, false).unwrap();
+        run_add(
+            tmp.path(),
+            "first",
+            Some("openai"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+        )
+        .unwrap();
         let config = Config::load(tmp.path()).unwrap();
         assert!(config.llm_endpoints.endpoints[0].is_default);
     }
@@ -382,8 +448,30 @@ mod tests {
     #[test]
     fn cli_endpoint_add_second_not_auto_default() {
         let tmp = setup_dir();
-        run_add(tmp.path(), "a", Some("openai"), None, None, None, None, false, false).unwrap();
-        run_add(tmp.path(), "b", Some("anthropic"), None, None, None, None, false, false).unwrap();
+        run_add(
+            tmp.path(),
+            "a",
+            Some("openai"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+        )
+        .unwrap();
+        run_add(
+            tmp.path(),
+            "b",
+            Some("anthropic"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+        )
+        .unwrap();
         let config = Config::load(tmp.path()).unwrap();
         assert!(config.llm_endpoints.endpoints[0].is_default);
         assert!(!config.llm_endpoints.endpoints[1].is_default);
@@ -392,8 +480,30 @@ mod tests {
     #[test]
     fn cli_endpoint_add_explicit_default_clears_others() {
         let tmp = setup_dir();
-        run_add(tmp.path(), "a", Some("openai"), None, None, None, None, false, false).unwrap();
-        run_add(tmp.path(), "b", Some("anthropic"), None, None, None, None, true, false).unwrap();
+        run_add(
+            tmp.path(),
+            "a",
+            Some("openai"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+        )
+        .unwrap();
+        run_add(
+            tmp.path(),
+            "b",
+            Some("anthropic"),
+            None,
+            None,
+            None,
+            None,
+            true,
+            false,
+        )
+        .unwrap();
         let config = Config::load(tmp.path()).unwrap();
         assert!(!config.llm_endpoints.endpoints[0].is_default);
         assert!(config.llm_endpoints.endpoints[1].is_default);
@@ -411,8 +521,30 @@ mod tests {
     #[test]
     fn cli_endpoint_list_with_data() {
         let tmp = setup_dir();
-        run_add(tmp.path(), "ep1", Some("openai"), None, Some("gpt-4o"), Some("sk-1"), None, true, false).unwrap();
-        run_add(tmp.path(), "ep2", Some("anthropic"), None, None, None, None, false, false).unwrap();
+        run_add(
+            tmp.path(),
+            "ep1",
+            Some("openai"),
+            None,
+            Some("gpt-4o"),
+            Some("sk-1"),
+            None,
+            true,
+            false,
+        )
+        .unwrap();
+        run_add(
+            tmp.path(),
+            "ep2",
+            Some("anthropic"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+        )
+        .unwrap();
         run_list(tmp.path(), false).unwrap();
         run_list(tmp.path(), true).unwrap();
     }
@@ -422,11 +554,35 @@ mod tests {
     #[test]
     fn cli_endpoint_remove_cleans_up() {
         let tmp = setup_dir();
-        run_add(tmp.path(), "x", Some("openai"), None, None, None, None, false, false).unwrap();
-        assert_eq!(Config::load(tmp.path()).unwrap().llm_endpoints.endpoints.len(), 1);
+        run_add(
+            tmp.path(),
+            "x",
+            Some("openai"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            Config::load(tmp.path())
+                .unwrap()
+                .llm_endpoints
+                .endpoints
+                .len(),
+            1
+        );
 
         run_remove(tmp.path(), "x", false).unwrap();
-        assert!(Config::load(tmp.path()).unwrap().llm_endpoints.endpoints.is_empty());
+        assert!(
+            Config::load(tmp.path())
+                .unwrap()
+                .llm_endpoints
+                .endpoints
+                .is_empty()
+        );
     }
 
     #[test]
@@ -439,8 +595,30 @@ mod tests {
     #[test]
     fn cli_endpoint_remove_default_promotes_next() {
         let tmp = setup_dir();
-        run_add(tmp.path(), "a", Some("openai"), None, None, None, None, true, false).unwrap();
-        run_add(tmp.path(), "b", Some("anthropic"), None, None, None, None, false, false).unwrap();
+        run_add(
+            tmp.path(),
+            "a",
+            Some("openai"),
+            None,
+            None,
+            None,
+            None,
+            true,
+            false,
+        )
+        .unwrap();
+        run_add(
+            tmp.path(),
+            "b",
+            Some("anthropic"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+        )
+        .unwrap();
 
         run_remove(tmp.path(), "a", false).unwrap();
         let config = Config::load(tmp.path()).unwrap();
@@ -454,13 +632,45 @@ mod tests {
     #[test]
     fn cli_endpoint_set_default_switches() {
         let tmp = setup_dir();
-        run_add(tmp.path(), "a", Some("openai"), None, None, None, None, true, false).unwrap();
-        run_add(tmp.path(), "b", Some("anthropic"), None, None, None, None, false, false).unwrap();
+        run_add(
+            tmp.path(),
+            "a",
+            Some("openai"),
+            None,
+            None,
+            None,
+            None,
+            true,
+            false,
+        )
+        .unwrap();
+        run_add(
+            tmp.path(),
+            "b",
+            Some("anthropic"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+        )
+        .unwrap();
 
         run_set_default(tmp.path(), "b", false).unwrap();
         let config = Config::load(tmp.path()).unwrap();
-        let a = config.llm_endpoints.endpoints.iter().find(|e| e.name == "a").unwrap();
-        let b = config.llm_endpoints.endpoints.iter().find(|e| e.name == "b").unwrap();
+        let a = config
+            .llm_endpoints
+            .endpoints
+            .iter()
+            .find(|e| e.name == "a")
+            .unwrap();
+        let b = config
+            .llm_endpoints
+            .endpoints
+            .iter()
+            .find(|e| e.name == "b")
+            .unwrap();
         assert!(!a.is_default);
         assert!(b.is_default);
     }
@@ -489,7 +699,9 @@ mod tests {
                 let _ = stream.read(&mut buf);
                 let resp = format!(
                     "HTTP/1.1 {} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    status, body.len(), body,
+                    status,
+                    body.len(),
+                    body,
                 );
                 let _ = stream.write_all(resp.as_bytes());
                 let _ = stream.flush();
@@ -588,15 +800,42 @@ mod tests {
     fn cli_endpoint_full_lifecycle() {
         let tmp = setup_dir();
 
-        run_add(tmp.path(), "ep-a", Some("openai"), None, Some("gpt-4o"), Some("sk-a"), None, true, false).unwrap();
-        run_add(tmp.path(), "ep-b", Some("anthropic"), None, Some("sonnet"), Some("sk-b"), None, false, false).unwrap();
+        run_add(
+            tmp.path(),
+            "ep-a",
+            Some("openai"),
+            None,
+            Some("gpt-4o"),
+            Some("sk-a"),
+            None,
+            true,
+            false,
+        )
+        .unwrap();
+        run_add(
+            tmp.path(),
+            "ep-b",
+            Some("anthropic"),
+            None,
+            Some("sonnet"),
+            Some("sk-b"),
+            None,
+            false,
+            false,
+        )
+        .unwrap();
 
         run_list(tmp.path(), false).unwrap();
         run_list(tmp.path(), true).unwrap();
 
         run_set_default(tmp.path(), "ep-b", false).unwrap();
         let config = Config::load(tmp.path()).unwrap();
-        let b = config.llm_endpoints.endpoints.iter().find(|e| e.name == "ep-b").unwrap();
+        let b = config
+            .llm_endpoints
+            .endpoints
+            .iter()
+            .find(|e| e.name == "ep-b")
+            .unwrap();
         assert!(b.is_default);
 
         run_remove(tmp.path(), "ep-a", false).unwrap();

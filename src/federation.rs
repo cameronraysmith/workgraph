@@ -1213,8 +1213,14 @@ fn merge_agent(target: &Agent, source: &Agent) -> Agent {
         deployment_history: target.deployment_history.clone(),
         attractor_weight: target.attractor_weight,
         staleness_flags: target.staleness_flags.clone(),
-        preferred_model: target.preferred_model.clone().or_else(|| source.preferred_model.clone()),
-        preferred_provider: target.preferred_provider.clone().or_else(|| source.preferred_provider.clone()),
+        preferred_model: target
+            .preferred_model
+            .clone()
+            .or_else(|| source.preferred_model.clone()),
+        preferred_provider: target
+            .preferred_provider
+            .clone()
+            .or_else(|| source.preferred_provider.clone()),
     }
 }
 

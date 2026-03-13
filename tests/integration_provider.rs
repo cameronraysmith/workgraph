@@ -450,8 +450,14 @@ provider = "openai"
     std::fs::write(tmp.path().join("config.toml"), config_content).unwrap();
 
     // The evaluator should route to Anthropic
-    let eval_provider =
-        create_provider_ext(tmp.path(), "claude-sonnet-4-6", Some("anthropic"), None, None).unwrap();
+    let eval_provider = create_provider_ext(
+        tmp.path(),
+        "claude-sonnet-4-6",
+        Some("anthropic"),
+        None,
+        None,
+    )
+    .unwrap();
     assert_eq!(eval_provider.name(), "anthropic");
 
     // The triage should route to OpenAI

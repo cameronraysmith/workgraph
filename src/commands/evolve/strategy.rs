@@ -56,7 +56,10 @@ impl Strategy {
     pub fn needs_no_evals(self) -> bool {
         matches!(
             self,
-            Self::GapAnalysis | Self::Randomisation | Self::BizarreIdeation | Self::CoordinatorEvolution
+            Self::GapAnalysis
+                | Self::Randomisation
+                | Self::BizarreIdeation
+                | Self::CoordinatorEvolution
         )
     }
 

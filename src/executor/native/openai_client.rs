@@ -267,27 +267,23 @@ impl OpenAiClient {
         model: &str,
         workgraph_dir: Option<&std::path::Path>,
     ) -> Result<Self> {
-        let api_key = endpoint
-            .resolve_api_key(workgraph_dir)?
-            .ok_or_else(|| {
-                let env_vars = crate::config::EndpointConfig::env_var_names_for_provider(
-                    &endpoint.provider,
-                );
-                let env_hint = if env_vars.is_empty() {
-                    String::new()
-                } else {
-                    format!(" Set {} environment variable,", env_vars[0])
-                };
-                anyhow!(
-                    "No API key found for endpoint '{}'.{} or configure api_key / api_key_file.",
-                    endpoint.name,
-                    env_hint,
-                )
-            })?;
-        let base_url = endpoint
-            .url
-            .as_deref()
-            .unwrap_or_else(|| crate::config::EndpointConfig::default_url_for_provider(&endpoint.provider));
+        let api_key = endpoint.resolve_api_key(workgraph_dir)?.ok_or_else(|| {
+            let env_vars =
+                crate::config::EndpointConfig::env_var_names_for_provider(&endpoint.provider);
+            let env_hint = if env_vars.is_empty() {
+                String::new()
+            } else {
+                format!(" Set {} environment variable,", env_vars[0])
+            };
+            anyhow!(
+                "No API key found for endpoint '{}'.{} or configure api_key / api_key_file.",
+                endpoint.name,
+                env_hint,
+            )
+        })?;
+        let base_url = endpoint.url.as_deref().unwrap_or_else(|| {
+            crate::config::EndpointConfig::default_url_for_provider(&endpoint.provider)
+        });
         let base_url = if base_url.is_empty() {
             None
         } else {
@@ -582,10 +578,7 @@ impl OpenAiClient {
         let mut backoff_ms = 1000u64;
 
         loop {
-            match self
-                .streaming_attempt(&url, &oai_request)
-                .await
-            {
+            match self.streaming_attempt(&url, &oai_request).await {
                 Ok(response) => return Ok(response),
                 Err(e) => {
                     if retry_count < max_retries {
@@ -653,7 +646,10 @@ impl OpenAiClient {
                 Err(e) => {
                     // Connection dropped mid-stream
                     if chunk_count == 0 {
-                        return Err(anyhow!("Stream connection failed before receiving data: {}", e));
+                        return Err(anyhow!(
+                            "Stream connection failed before receiving data: {}",
+                            e
+                        ));
                     }
                     eprintln!(
                         "[openai-client] Stream interrupted after {} chunks: {}",
@@ -663,7 +659,11 @@ impl OpenAiClient {
                     if finish_reason.is_some() {
                         break;
                     }
-                    return Err(anyhow!("Stream interrupted after {} chunks: {}", chunk_count, e));
+                    return Err(anyhow!(
+                        "Stream interrupted after {} chunks: {}",
+                        chunk_count,
+                        e
+                    ));
                 }
             };
             buffer.push_str(&String::from_utf8_lossy(&chunk));

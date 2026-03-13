@@ -71,13 +71,8 @@ pub fn run_fanout(
 
     // Partition evaluations
     let agency_dir = dir.join("agency");
-    let all_slices = partition::partition_evaluations(
-        evaluations,
-        roles,
-        tradeoffs,
-        &agency_dir,
-        &run_id,
-    );
+    let all_slices =
+        partition::partition_evaluations(evaluations, roles, tradeoffs, &agency_dir, &run_id);
 
     // Filter to requested strategies, skip empty slices (unless strategy needs no evals)
     let slices: Vec<(Strategy, AnalyzerSlice)> = all_slices
@@ -98,7 +93,16 @@ pub fn run_fanout(
     }
 
     if dry_run {
-        print_dry_run(&slices, &run_id, budget, autopoietic, max_iterations, cycle_delay, json, evaluations.len());
+        print_dry_run(
+            &slices,
+            &run_id,
+            budget,
+            autopoietic,
+            max_iterations,
+            cycle_delay,
+            json,
+            evaluations.len(),
+        );
         // Clean up run dir since this is dry run
         let _ = fs::remove_dir_all(&run_dir);
         return Ok(());
@@ -172,13 +176,8 @@ pub fn run_fanout(
             ModelTier::Opus => "opus",
         };
 
-        let description = build_analyzer_prompt(
-            *strategy,
-            &run_id,
-            &skill_doc,
-            &slice.summary,
-            &agency_dir,
-        );
+        let description =
+            build_analyzer_prompt(*strategy, &run_id, &skill_doc, &slice.summary, &agency_dir);
 
         let analyzer_task = Task {
             id: task_id.clone(),
@@ -243,7 +242,13 @@ Write to `.workgraph/evolve-runs/{run_id}/synthesis-result.json`:
         run_id = run_id,
         input_files = analyzer_task_ids
             .iter()
-            .map(|id| format!("- `{}`", id.replace(&format!("-{}", run_id), &format!("-proposals-{}.json", run_id))))
+            .map(|id| format!(
+                "- `{}`",
+                id.replace(
+                    &format!("-{}", run_id),
+                    &format!("-proposals-{}.json", run_id)
+                )
+            ))
             .collect::<Vec<_>>()
             .join("\n"),
         budget = budget.map_or("unlimited".to_string(), |b| b.to_string()),
@@ -598,16 +603,13 @@ fn print_dry_run(
             .map(|b| b.to_string())
             .unwrap_or_else(|| "unlimited".into())
     );
-    println!("Autopoietic:     {}", if autopoietic { "yes" } else { "no" });
+    println!(
+        "Autopoietic:     {}",
+        if autopoietic { "yes" } else { "no" }
+    );
     if autopoietic {
-        println!(
-            "Max iterations:  {}",
-            max_iterations.unwrap_or(3)
-        );
-        println!(
-            "Cycle delay:     {}s",
-            cycle_delay.unwrap_or(3600)
-        );
+        println!("Max iterations:  {}", max_iterations.unwrap_or(3));
+        println!("Cycle delay:     {}s", cycle_delay.unwrap_or(3600));
     }
 
     println!("\nStrategy Slices:");
@@ -653,23 +655,11 @@ fn print_dry_run(
             run_id
         );
     }
-    println!(
-        "         └── .evolve-synthesize-{}",
-        run_id
-    );
-    println!(
-        "              └── .evolve-apply-{}",
-        run_id
-    );
-    println!(
-        "                   └── .evolve-evaluate-{}",
-        run_id
-    );
+    println!("         └── .evolve-synthesize-{}", run_id);
+    println!("              └── .evolve-apply-{}", run_id);
+    println!("                   └── .evolve-evaluate-{}", run_id);
     if autopoietic {
-        println!(
-            "                        └── [cycle back to {}]",
-            partition
-        );
+        println!("                        └── [cycle back to {}]", partition);
     }
 }
 
@@ -763,19 +753,8 @@ mod tests {
 
         let config = Config::load_or_default(&wg_dir);
         let result = run_fanout(
-            &wg_dir,
-            true, // dry_run
-            None,
-            None,
-            None,
-            false,
-            false,
-            None,
-            None,
-            &roles,
-            &tradeoffs,
-            &evals,
-            &config,
+            &wg_dir, true, // dry_run
+            None, None, None, false, false, None, None, &roles, &tradeoffs, &evals, &config,
         );
         assert!(result.is_ok());
 
@@ -802,18 +781,7 @@ mod tests {
 
         let config = Config::load_or_default(&wg_dir);
         let result = run_fanout(
-            &wg_dir,
-            false,
-            None,
-            None,
-            None,
-            false,
-            false,
-            None,
-            None,
-            &roles,
-            &tradeoffs,
-            &evals,
+            &wg_dir, false, None, None, None, false, false, None, None, &roles, &tradeoffs, &evals,
             &config,
         );
         assert!(result.is_ok());
@@ -822,7 +790,11 @@ mod tests {
         // Should have: partition + analyzers + synthesize + apply + evaluate
         let task_count = graph.tasks().count();
         // At minimum: partition + some analyzers + synthesize + apply + evaluate
-        assert!(task_count >= 5, "Expected at least 5 tasks, got {}", task_count);
+        assert!(
+            task_count >= 5,
+            "Expected at least 5 tasks, got {}",
+            task_count
+        );
 
         // Verify synthesize depends on analyzers
         let synthesize = graph
@@ -1019,19 +991,8 @@ mod tests {
 
         let config = Config::load_or_default(&wg_dir);
         run_fanout(
-            &wg_dir,
-            false,
-            None,
-            None,
-            None,
-            false,
-            false, // autopoietic = false
-            None,
-            None,
-            &roles,
-            &tradeoffs,
-            &evals,
-            &config,
+            &wg_dir, false, None, None, None, false, false, // autopoietic = false
+            None, None, &roles, &tradeoffs, &evals, &config,
         )
         .unwrap();
 
@@ -1086,19 +1047,10 @@ mod tests {
 
         let config = Config::load_or_default(&wg_dir);
         run_fanout(
-            &wg_dir,
-            false,
-            None,
-            None,
-            None,
-            false,
-            true,  // autopoietic
-            None,  // default max_iterations
-            None,  // default cycle_delay
-            &roles,
-            &tradeoffs,
-            &evals,
-            &config,
+            &wg_dir, false, None, None, None, false, true, // autopoietic
+            None, // default max_iterations
+            None, // default cycle_delay
+            &roles, &tradeoffs, &evals, &config,
         )
         .unwrap();
 
@@ -1110,7 +1062,10 @@ mod tests {
             .unwrap();
 
         let cycle_config = evaluate.cycle_config.as_ref().unwrap();
-        assert_eq!(cycle_config.max_iterations, 3, "Default max_iterations should be 3");
+        assert_eq!(
+            cycle_config.max_iterations, 3,
+            "Default max_iterations should be 3"
+        );
         assert_eq!(
             cycle_config.delay,
             Some("3600s".to_string()),

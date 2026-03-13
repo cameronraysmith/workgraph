@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
 use anyhow::Result;
@@ -3339,10 +3339,8 @@ impl VizApp {
         // immediately read it so chat text appears token-by-token.
         if self.chat.awaiting_response {
             let prev = self.chat.streaming_text.clone();
-            let streaming = workgraph::chat::read_streaming(
-                &self.workgraph_dir,
-                self.active_coordinator_id,
-            );
+            let streaming =
+                workgraph::chat::read_streaming(&self.workgraph_dir, self.active_coordinator_id);
             if streaming != prev {
                 self.chat.streaming_text = streaming;
                 // Also check outbox in case the response just completed.
@@ -3388,7 +3386,10 @@ impl VizApp {
             // Messages panel: check if the message file for the viewed task changed.
             if self.right_panel_tab == RightPanelTab::Messages {
                 if let Some(task_id) = self.selected_task_id().map(String::from) {
-                    let msg_path = self.workgraph_dir.join("messages").join(format!("{}.jsonl", task_id));
+                    let msg_path = self
+                        .workgraph_dir
+                        .join("messages")
+                        .join(format!("{}.jsonl", task_id));
                     let msg_mtime = std::fs::metadata(&msg_path).and_then(|m| m.modified()).ok();
                     if msg_mtime != self.last_messages_mtime {
                         self.last_messages_mtime = msg_mtime;
@@ -3413,11 +3414,14 @@ impl VizApp {
 
             // Chat outbox: check for new coordinator responses.
             if self.right_panel_tab == RightPanelTab::Chat || self.chat.awaiting_response {
-                let outbox_path = self.workgraph_dir
+                let outbox_path = self
+                    .workgraph_dir
                     .join("chat")
                     .join(self.active_coordinator_id.to_string())
                     .join("outbox.jsonl");
-                let outbox_mtime = std::fs::metadata(&outbox_path).and_then(|m| m.modified()).ok();
+                let outbox_mtime = std::fs::metadata(&outbox_path)
+                    .and_then(|m| m.modified())
+                    .ok();
                 if outbox_mtime != self.last_chat_outbox_mtime {
                     self.last_chat_outbox_mtime = outbox_mtime;
                     self.check_coordinator_status();
@@ -3971,7 +3975,6 @@ impl VizApp {
                         }
                     }
                     if let Some(dims) = eval.get("dimensions").and_then(|v| v.as_object()) {
-
                         let priority_order: &[&str] = if is_flip {
                             &[
                                 "semantic_match",
@@ -4026,15 +4029,36 @@ impl VizApp {
                         if let Some(notes) = eval.get("notes").and_then(|v| v.as_str()) {
                             if let Some(json_start) = notes.find("\n\nFLIP metadata: {") {
                                 let json_str = &notes[json_start + "\n\nFLIP metadata: ".len()..];
-                                if let Ok(meta) = serde_json::from_str::<serde_json::Value>(json_str) {
-                                    if let Some(inf_model) = meta.get("inference_model").and_then(|v| v.as_str()) {
-                                        if let Some(cmp_model) = meta.get("comparison_model").and_then(|v| v.as_str()) {
-                                            lines.push(format!("  Models: {} → {}", inf_model, cmp_model));
+                                if let Ok(meta) =
+                                    serde_json::from_str::<serde_json::Value>(json_str)
+                                {
+                                    if let Some(inf_model) =
+                                        meta.get("inference_model").and_then(|v| v.as_str())
+                                    {
+                                        if let Some(cmp_model) =
+                                            meta.get("comparison_model").and_then(|v| v.as_str())
+                                        {
+                                            lines.push(format!(
+                                                "  Models: {} → {}",
+                                                inf_model, cmp_model
+                                            ));
                                         }
                                     }
-                                    if let Some(prompt) = meta.get("inferred_prompt").and_then(|v| v.as_str()) {
-                                        let preview: String = prompt.lines().next().unwrap_or("").chars().take(80).collect();
-                                        let suffix = if preview.len() < prompt.len() { "…" } else { "" };
+                                    if let Some(prompt) =
+                                        meta.get("inferred_prompt").and_then(|v| v.as_str())
+                                    {
+                                        let preview: String = prompt
+                                            .lines()
+                                            .next()
+                                            .unwrap_or("")
+                                            .chars()
+                                            .take(80)
+                                            .collect();
+                                        let suffix = if preview.len() < prompt.len() {
+                                            "…"
+                                        } else {
+                                            ""
+                                        };
                                         lines.push(format!("  Inferred: {}{}", preview, suffix));
                                     }
                                 }
@@ -7572,7 +7596,10 @@ impl VizApp {
             entries.push(ConfigEntry {
                 key: "tiers.standard".into(),
                 label: "Standard".into(),
-                value: effective.standard.clone().unwrap_or_else(|| "sonnet".into()),
+                value: effective
+                    .standard
+                    .clone()
+                    .unwrap_or_else(|| "sonnet".into()),
                 edit_kind: ConfigEditKind::TextInput,
                 section: ConfigSection::ModelTiers,
             });
@@ -7611,11 +7638,7 @@ impl VizApp {
                 let role_cfg = config.models.get_role(role);
                 let resolved = config.resolve_model_for_role(role);
                 let source = config.resolve_model_source(role);
-                let resolved_display = format!(
-                    "{} ({})",
-                    resolved.model,
-                    source
-                );
+                let resolved_display = format!("{} ({})", resolved.model, source);
                 let model_val = role_cfg
                     .and_then(|c| c.model.clone())
                     .unwrap_or_else(|| "(inherit)".into());
@@ -8000,7 +8023,9 @@ impl VizApp {
                                         if let Some(c) = slot {
                                             c.tier = None;
                                         }
-                                    } else if let Ok(tier) = new_value.parse::<workgraph::config::Tier>() {
+                                    } else if let Ok(tier) =
+                                        new_value.parse::<workgraph::config::Tier>()
+                                    {
                                         if let Some(c) = slot {
                                             c.tier = Some(tier);
                                         } else {
@@ -8222,11 +8247,7 @@ impl VizApp {
             .insert(ep_name.clone(), EndpointTestStatus::Testing);
         // Run test in background
         self.exec_command(
-            vec![
-                "endpoints".to_string(),
-                "test".to_string(),
-                ep_name.clone(),
-            ],
+            vec!["endpoints".to_string(), "test".to_string(), ep_name.clone()],
             CommandEffect::EndpointTest(ep_name),
         );
     }
@@ -10986,11 +11007,7 @@ mod tui_config_panel_tests {
         app.save_config_entry();
 
         let config = Config::load(&app.workgraph_dir).unwrap();
-        let triage_tier = config
-            .models
-            .triage
-            .as_ref()
-            .and_then(|c| c.tier);
+        let triage_tier = config.models.triage.as_ref().and_then(|c| c.tier);
         assert_eq!(triage_tier, Some(workgraph::config::Tier::Premium));
 
         // Set an endpoint for evaluator
@@ -11030,11 +11047,7 @@ mod tui_config_panel_tests {
         app.save_config_entry();
 
         let config = Config::load(&app.workgraph_dir).unwrap();
-        let triage_tier = config
-            .models
-            .triage
-            .as_ref()
-            .and_then(|c| c.tier);
+        let triage_tier = config.models.triage.as_ref().and_then(|c| c.tier);
         assert_eq!(triage_tier, None);
 
         // Clear endpoint (set to inherit)
@@ -11074,8 +11087,14 @@ mod tui_config_panel_tests {
             .find(|e| e.key == resolved_key)
             .expect("resolved entry for triage should exist");
         // Label should contain "Triage" and an arrow
-        assert!(entry.label.contains("Triage"), "label should contain role name");
-        assert!(entry.label.contains("→"), "label should contain arrow for resolved display");
+        assert!(
+            entry.label.contains("Triage"),
+            "label should contain role name"
+        );
+        assert!(
+            entry.label.contains("→"),
+            "label should contain arrow for resolved display"
+        );
     }
 }
 

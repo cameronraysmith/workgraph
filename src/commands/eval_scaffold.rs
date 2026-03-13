@@ -234,8 +234,7 @@ pub fn scaffold_full_pipeline(
     // 1. Create .place-* task (no deps — runs first; agent adds edges to main task)
     if config.agency.auto_place && graph.get_task(&place_task_id).is_none() {
         let placement_context = build_placement_context(graph, task_id);
-        let placer_model =
-            config.resolve_model_for_role(workgraph::config::DispatchRole::Placer);
+        let placer_model = config.resolve_model_for_role(workgraph::config::DispatchRole::Placer);
         let place_task = Task {
             id: place_task_id.clone(),
             title: format!("Place: {}", task_id),
@@ -1155,13 +1154,8 @@ mod tests {
         let mut graph = WorkGraph::new();
         graph.add_node(Node::Task(make_task(".evaluate-foo", "Eval Foo")));
 
-        let modified = scaffold_full_pipeline(
-            dir.path(),
-            &mut graph,
-            ".evaluate-foo",
-            "Eval Foo",
-            &config,
-        );
+        let modified =
+            scaffold_full_pipeline(dir.path(), &mut graph, ".evaluate-foo", "Eval Foo", &config);
         assert!(!modified);
     }
 
@@ -1233,7 +1227,10 @@ mod tests {
         // Now scaffold_full_pipeline runs (publish path) — must still create
         // .place-* and .assign-* despite the eval-scheduled tag
         let modified = scaffold_full_pipeline(dir.path(), &mut graph, "foo", "Foo Task", &config);
-        assert!(modified, "scaffold_full_pipeline should have created .place and .assign");
+        assert!(
+            modified,
+            "scaffold_full_pipeline should have created .place and .assign"
+        );
 
         assert!(
             graph.get_task(".place-foo").is_some(),

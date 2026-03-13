@@ -55,7 +55,10 @@ pub(crate) fn spawn_agent_inner(
         if let Some(ref agent_hash) = task_agent_for_audit {
             let agents_dir = dir.join("agency/cache/agents");
             match agency::find_agent_by_prefix(&agents_dir, agent_hash) {
-                Ok(agent) => (agent.preferred_model.clone(), agent.preferred_provider.clone()),
+                Ok(agent) => (
+                    agent.preferred_model.clone(),
+                    agent.preferred_provider.clone(),
+                ),
                 Err(_) => (None, None),
             }
         } else {
@@ -249,10 +252,9 @@ pub(crate) fn spawn_agent_inner(
     let endpoint_config = effective_endpoint
         .as_ref()
         .and_then(|name| config.llm_endpoints.find_by_name(name));
-    let effective_endpoint_url: Option<String> =
-        endpoint_config.and_then(|ep| ep.url.clone());
-    let effective_api_key: Option<String> = endpoint_config
-        .and_then(|ep| ep.resolve_api_key(Some(dir)).ok().flatten());
+    let effective_endpoint_url: Option<String> = endpoint_config.and_then(|ep| ep.url.clone());
+    let effective_api_key: Option<String> =
+        endpoint_config.and_then(|ep| ep.resolve_api_key(Some(dir)).ok().flatten());
 
     // Build the inner command string first
     let inner_command = build_inner_command(

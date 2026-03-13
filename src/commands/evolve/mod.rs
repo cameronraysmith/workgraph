@@ -2,8 +2,8 @@ mod deferred;
 mod fanout;
 mod meta;
 mod operations;
-pub(crate) mod partition;
 mod parser;
+pub(crate) mod partition;
 mod prompt;
 mod strategy;
 pub(crate) mod synthesize;
@@ -637,7 +637,8 @@ mod tests {
         for i in 0..prompts.len() {
             for j in (i + 1)..prompts.len() {
                 assert_ne!(
-                    prompts[i], prompts[j],
+                    prompts[i],
+                    prompts[j],
                     "Prompts for {} and {} should be different",
                     strategies[i].label(),
                     strategies[j].label()
