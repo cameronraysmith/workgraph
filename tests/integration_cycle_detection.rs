@@ -5349,3 +5349,195 @@ fn test_cycle_abandoned_member_stays_abandoned_after_reset() {
     assert_eq!(graph.get_task("b").unwrap().status, Status::Abandoned);
     assert_eq!(graph.get_task("b").unwrap().loop_iteration, 0);
 }
+
+// ===========================================================================
+// Converged scope: --converged should complete current iteration before stopping
+// ===========================================================================
+
+#[test]
+fn test_converged_non_header_member_stops_cycle() {
+    // Cycle: A → B → A. B is config owner (header). A signals --converged.
+    // Both Done. The cycle should NOT iterate because A has the converged tag,
+    // even though A is not the config owner.
+    let mut a = make_task_with_status("a", "A (worker)", Status::Done);
+    a.after = vec!["b".to_string()];
+    a.tags = vec!["converged".to_string()];
+
+    let mut b = make_task_with_status("b", "B (header)", Status::Done);
+    b.after = vec!["a".to_string()];
+    b.cycle_config = Some(CycleConfig {
+        max_iterations: 5,
+        guard: None,
+        delay: None,
+        no_converge: false,
+        restart_on_failure: true,
+        max_failure_restarts: None,
+    });
+
+    let mut graph = build_graph(vec![a, b]);
+    let analysis = graph.compute_cycle_analysis();
+
+    let reactivated = evaluate_cycle_iteration(&mut graph, "a", &analysis);
+
+    assert!(
+        reactivated.is_empty(),
+        "Should NOT iterate when any member has 'converged' tag, got: {:?}",
+        reactivated
+    );
+    assert_eq!(graph.get_task("a").unwrap().status, Status::Done);
+    assert_eq!(graph.get_task("b").unwrap().status, Status::Done);
+}
+
+#[test]
+fn test_converged_current_iteration_completes_before_stopping() {
+    // Cycle: A → B → A. A is header (has cycle_config).
+    // A completes with --converged but B is still Open.
+    // B should still be ready (current iteration should complete).
+    let mut a = make_task_with_status("a", "A (header)", Status::Done);
+    a.after = vec!["b".to_string()];
+    a.tags = vec!["converged".to_string()];
+    a.cycle_config = Some(CycleConfig {
+        max_iterations: 5,
+        guard: None,
+        delay: None,
+        no_converge: false,
+        restart_on_failure: true,
+        max_failure_restarts: None,
+    });
+
+    let mut b = make_task_with_status("b", "B (worker)", Status::Open);
+    b.after = vec!["a".to_string()];
+
+    let mut graph = build_graph(vec![a, b]);
+    let analysis = graph.compute_cycle_analysis();
+
+    // evaluate_cycle_iteration should NOT reactivate (B is not done yet)
+    let reactivated = evaluate_cycle_iteration(&mut graph, "a", &analysis);
+    assert!(
+        reactivated.is_empty(),
+        "Should not reactivate while B is still Open"
+    );
+
+    // B should be ready because A (its dependency) is Done
+    let ready = ready_tasks_cycle_aware(&graph, &analysis);
+    let ready_ids: Vec<&str> = ready.iter().map(|t| t.id.as_str()).collect();
+    assert!(
+        ready_ids.contains(&"b"),
+        "B should be ready — its dependency A is Done. Ready: {:?}",
+        ready_ids
+    );
+
+    // Now mark B as Done and re-evaluate
+    graph.get_task_mut("b").unwrap().status = Status::Done;
+    let analysis = graph.compute_cycle_analysis();
+    let reactivated = evaluate_cycle_iteration(&mut graph, "b", &analysis);
+
+    // Cycle should NOT reactivate because A has the converged tag
+    assert!(
+        reactivated.is_empty(),
+        "Should NOT iterate after current iteration completes with converged member"
+    );
+    assert_eq!(graph.get_task("a").unwrap().status, Status::Done);
+    assert_eq!(graph.get_task("b").unwrap().status, Status::Done);
+}
+
+#[test]
+fn test_converged_last_member_in_iteration_no_hang() {
+    // Cycle: A → B → A. A is header. B signals --converged (last to complete).
+    // Both Done. Cycle should stop cleanly.
+    let mut a = make_task_with_status("a", "A (header)", Status::Done);
+    a.after = vec!["b".to_string()];
+    a.cycle_config = Some(CycleConfig {
+        max_iterations: 5,
+        guard: None,
+        delay: None,
+        no_converge: false,
+        restart_on_failure: true,
+        max_failure_restarts: None,
+    });
+
+    let mut b = make_task_with_status("b", "B (worker)", Status::Done);
+    b.after = vec!["a".to_string()];
+    b.tags = vec!["converged".to_string()];
+
+    let mut graph = build_graph(vec![a, b]);
+    let analysis = graph.compute_cycle_analysis();
+
+    let reactivated = evaluate_cycle_iteration(&mut graph, "b", &analysis);
+
+    assert!(
+        reactivated.is_empty(),
+        "Should NOT iterate when last member signals converged"
+    );
+    assert_eq!(graph.get_task("a").unwrap().status, Status::Done);
+    assert_eq!(graph.get_task("b").unwrap().status, Status::Done);
+}
+
+#[test]
+fn test_converged_multiple_members_same_iteration() {
+    // Cycle: A → B → C → A. A is header. Both B and C signal --converged.
+    // All Done. Cycle should stop.
+    let mut a = make_task_with_status("a", "A (header)", Status::Done);
+    a.after = vec!["c".to_string()];
+    a.cycle_config = Some(CycleConfig {
+        max_iterations: 5,
+        guard: None,
+        delay: None,
+        no_converge: false,
+        restart_on_failure: true,
+        max_failure_restarts: None,
+    });
+
+    let mut b = make_task_with_status("b", "B", Status::Done);
+    b.after = vec!["a".to_string()];
+    b.tags = vec!["converged".to_string()];
+
+    let mut c = make_task_with_status("c", "C", Status::Done);
+    c.after = vec!["b".to_string()];
+    c.tags = vec!["converged".to_string()];
+
+    let mut graph = build_graph(vec![a, b, c]);
+    let analysis = graph.compute_cycle_analysis();
+
+    let reactivated = evaluate_cycle_iteration(&mut graph, "c", &analysis);
+
+    assert!(
+        reactivated.is_empty(),
+        "Should NOT iterate when multiple members signal converged"
+    );
+    assert_eq!(graph.get_task("a").unwrap().status, Status::Done);
+    assert_eq!(graph.get_task("b").unwrap().status, Status::Done);
+    assert_eq!(graph.get_task("c").unwrap().status, Status::Done);
+}
+
+#[test]
+fn test_converged_non_header_with_evaluate_all() {
+    // Same as test_converged_non_header_member_stops_cycle but using
+    // evaluate_all_cycle_iterations (the coordinator's safety-net path).
+    let mut a = make_task_with_status("a", "A (worker)", Status::Done);
+    a.after = vec!["b".to_string()];
+    a.tags = vec!["converged".to_string()];
+
+    let mut b = make_task_with_status("b", "B (header)", Status::Done);
+    b.after = vec!["a".to_string()];
+    b.cycle_config = Some(CycleConfig {
+        max_iterations: 5,
+        guard: None,
+        delay: None,
+        no_converge: false,
+        restart_on_failure: true,
+        max_failure_restarts: None,
+    });
+
+    let mut graph = build_graph(vec![a, b]);
+    let analysis = graph.compute_cycle_analysis();
+
+    let reactivated = evaluate_all_cycle_iterations(&mut graph, &analysis);
+
+    assert!(
+        reactivated.is_empty(),
+        "evaluate_all should also respect non-header converged tags"
+    );
+    assert_eq!(graph.get_task("a").unwrap().status, Status::Done);
+    assert_eq!(graph.get_task("b").unwrap().status, Status::Done);
+}

@@ -1328,19 +1328,28 @@ fn reactivate_cycle(
         return vec![];
     }
 
-    // Check convergence tag on config owner — but only if no external guard
+    // Check convergence tag on ANY cycle member — but only if no external guard
     // is set and no_converge is false. When a guard is present, the guard is
     // authoritative over convergence. When no_converge is set, convergence
     // signals are always ignored.
+    //
+    // Any member can signal convergence (not just the config owner). Since we
+    // only reach this point after ALL members are terminal, the current
+    // iteration has already completed — convergence only prevents the NEXT
+    // iteration from starting.
     let guard_is_set =
         cycle_config.guard.is_some() && !matches!(cycle_config.guard, Some(LoopGuard::Always));
 
-    if !guard_is_set
-        && !cycle_config.no_converge
-        && let Some(owner) = graph.get_task(config_owner_id)
-        && owner.tags.contains(&"converged".to_string())
-    {
-        return vec![];
+    if !guard_is_set && !cycle_config.no_converge {
+        let any_converged = members.iter().any(|mid| {
+            graph
+                .get_task(mid)
+                .map(|t| t.tags.contains(&"converged".to_string()))
+                .unwrap_or(false)
+        });
+        if any_converged {
+            return vec![];
+        }
     }
 
     // Check max_iterations — use the NEXT iteration value so that
