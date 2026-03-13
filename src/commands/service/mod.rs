@@ -2038,6 +2038,11 @@ pub fn run_status(dir: &Path, json: bool) -> Result<()> {
     // Load coordinator state (persisted by daemon, reflects effective config + runtime)
     let coord = CoordinatorState::load_or_default(dir);
 
+    // Compaction progress
+    let config = workgraph::config::Config::load_or_default(dir);
+    let compaction_threshold = config.effective_compaction_threshold();
+    let compactor_state = workgraph::service::compactor::CompactorState::load(dir);
+
     // Log file info
     let log_path = log_file_path(dir);
     let log_path_str = log_path.to_string_lossy().to_string();
@@ -2070,6 +2075,12 @@ pub fn run_status(dir: &Path, json: bool) -> Result<()> {
                 "agents_alive": coord.agents_alive,
                 "tasks_ready": coord.tasks_ready,
                 "agents_spawned_last_tick": coord.agents_spawned,
+            },
+            "compaction": {
+                "accumulated_tokens": coord.accumulated_tokens,
+                "threshold": compaction_threshold,
+                "last_compaction": compactor_state.last_compaction,
+                "compaction_count": compactor_state.compaction_count,
             },
             "log": {
                 "path": log_path_str,
@@ -2137,6 +2148,31 @@ pub fn run_status(dir: &Path, json: bool) -> Result<()> {
             );
         } else {
             println!("  No ticks yet");
+        }
+        if compaction_threshold > 0 {
+            let pct = if compaction_threshold > 0 {
+                ((coord.accumulated_tokens as f64 / compaction_threshold as f64) * 100.0).min(100.0)
+                    as u8
+            } else {
+                0
+            };
+            let last_str = match compactor_state.last_compaction {
+                Some(ref ts) => {
+                    if let Ok(parsed) = ts.parse::<chrono::DateTime<chrono::Utc>>() {
+                        let ago = chrono::Utc::now()
+                            .signed_duration_since(parsed)
+                            .num_seconds();
+                        format!("last: {} ago", workgraph::format_duration(ago, true))
+                    } else {
+                        "last: unknown".to_string()
+                    }
+                }
+                None => "last: never".to_string(),
+            };
+            println!(
+                "Compaction: {}/{} tokens ({}%) — {}",
+                coord.accumulated_tokens, compaction_threshold, pct, last_str
+            );
         }
         println!("Log: {}", log_path_str);
         if !recent_errors.is_empty() || !recent_fatals.is_empty() {

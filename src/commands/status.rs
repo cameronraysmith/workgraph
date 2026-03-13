@@ -18,6 +18,7 @@ use workgraph::check::{OrphanRef, check_orphans};
 use workgraph::graph::Status;
 use workgraph::parser::load_graph;
 use workgraph::query::ready_tasks;
+use workgraph::service::compactor::CompactorState;
 use workgraph::service::{AgentRegistry, AgentStatus};
 
 use super::dead_agents::is_process_alive;
@@ -86,6 +87,15 @@ struct DanglingDep {
     relation: String,
 }
 
+/// Compaction progress info
+#[derive(Debug, Clone, serde::Serialize)]
+struct CompactionInfo {
+    accumulated_tokens: u64,
+    threshold: u64,
+    percent: u8,
+    last_compaction: Option<String>,
+}
+
 /// Full status output
 #[derive(Debug, Clone, serde::Serialize)]
 struct StatusOutput {
@@ -93,6 +103,8 @@ struct StatusOutput {
     coordinator: CoordinatorInfo,
     agents: AgentSummaryInfo,
     tasks: TaskSummaryInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compaction: Option<CompactionInfo>,
     recent: Vec<RecentActivityEntry>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     dangling_deps: Vec<DanglingDep>,
@@ -123,10 +135,17 @@ fn gather_status(dir: &Path) -> Result<StatusOutput> {
     // 4. Task summary
     let tasks = gather_task_summary(dir)?;
 
-    // 5. Recent activity
+    // 5. Compaction progress (only when service is running)
+    let compaction = if service.running {
+        gather_compaction_info(dir)
+    } else {
+        None
+    };
+
+    // 6. Recent activity
     let recent = gather_recent_activity(dir)?;
 
-    // 6. Dangling dependencies
+    // 7. Dangling dependencies
     let dangling_deps = gather_dangling_deps(dir);
 
     Ok(StatusOutput {
@@ -134,6 +153,7 @@ fn gather_status(dir: &Path) -> Result<StatusOutput> {
         coordinator,
         agents,
         tasks,
+        compaction,
         recent,
         dangling_deps,
     })
@@ -365,6 +385,32 @@ fn gather_recent_activity(dir: &Path) -> Result<Vec<RecentActivityEntry>> {
     Ok(recent)
 }
 
+fn gather_compaction_info(dir: &Path) -> Option<CompactionInfo> {
+    let config = workgraph::config::Config::load_or_default(dir);
+    let threshold = config.effective_compaction_threshold();
+    if threshold == 0 {
+        return None;
+    }
+
+    let coord = CoordinatorState::load_or_default(dir);
+    let accumulated = coord.accumulated_tokens;
+    let percent = if threshold > 0 {
+        ((accumulated as f64 / threshold as f64) * 100.0).min(100.0) as u8
+    } else {
+        0
+    };
+
+    let compactor = CompactorState::load(dir);
+    let last_compaction = compactor.last_compaction;
+
+    Some(CompactionInfo {
+        accumulated_tokens: accumulated,
+        threshold,
+        percent,
+        last_compaction,
+    })
+}
+
 fn gather_dangling_deps(dir: &Path) -> Vec<DanglingDep> {
     let path = super::graph_path(dir);
     if !path.exists() {
@@ -410,7 +456,28 @@ fn print_status(status: &StatusOutput) {
         status.coordinator.poll_interval
     );
 
-    // Line 3+: Agent summary
+    // Line 3: Compaction progress (when service is running)
+    if let Some(ref c) = status.compaction {
+        let tokens_display = format_tokens(c.accumulated_tokens);
+        let threshold_display = format_tokens(c.threshold);
+        let last_str = match c.last_compaction {
+            Some(ref ts) => {
+                if let Ok(parsed) = ts.parse::<DateTime<Utc>>() {
+                    let ago = Utc::now().signed_duration_since(parsed).num_seconds();
+                    format!("last: {} ago", workgraph::format_duration(ago, true))
+                } else {
+                    "last: unknown".to_string()
+                }
+            }
+            None => "last: never".to_string(),
+        };
+        println!(
+            "Compaction: {}/{} tokens ({}%) — {}",
+            tokens_display, threshold_display, c.percent, last_str
+        );
+    }
+
+    // Line 4+: Agent summary
     println!();
     if status.agents.alive == 0 && status.agents.dead == 0 {
         println!("Agents: none");
@@ -482,6 +549,20 @@ fn print_status(status: &StatusOutput) {
             };
             println!("  {}  {} [done]", entry.time, title_display);
         }
+    }
+}
+
+/// Format token count in human-friendly form (e.g. 47000 → "47k", 1500 → "1.5k", 500 → "500")
+fn format_tokens(tokens: u64) -> String {
+    if tokens >= 1000 {
+        let k = tokens as f64 / 1000.0;
+        if (k - k.round()).abs() < 0.05 {
+            format!("{}k", k.round() as u64)
+        } else {
+            format!("{:.1}k", k)
+        }
+    } else {
+        format!("{}", tokens)
     }
 }
 
@@ -734,5 +815,31 @@ mod tests {
         // No graph file at all
         let dangling = gather_dangling_deps(temp_dir.path());
         assert!(dangling.is_empty());
+    }
+
+    #[test]
+    fn test_format_tokens() {
+        assert_eq!(format_tokens(0), "0");
+        assert_eq!(format_tokens(500), "500");
+        assert_eq!(format_tokens(999), "999");
+        assert_eq!(format_tokens(1000), "1k");
+        assert_eq!(format_tokens(1500), "1.5k");
+        assert_eq!(format_tokens(47000), "47k");
+        assert_eq!(format_tokens(100000), "100k");
+        assert_eq!(format_tokens(160000), "160k");
+    }
+
+    #[test]
+    fn test_gather_compaction_info_no_service() {
+        let temp_dir = TempDir::new().unwrap();
+        // No coordinator state file → should still return Some with defaults
+        let info = gather_compaction_info(temp_dir.path());
+        // With default config, threshold should be non-zero (160k from default model)
+        assert!(info.is_some());
+        let info = info.unwrap();
+        assert_eq!(info.accumulated_tokens, 0);
+        assert!(info.threshold > 0);
+        assert_eq!(info.percent, 0);
+        assert!(info.last_compaction.is_none());
     }
 }
