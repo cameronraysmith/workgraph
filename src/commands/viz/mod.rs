@@ -232,7 +232,7 @@ pub(crate) fn filter_internal_tasks<'a>(
         internal_ids.insert(task.id.as_str());
 
         if let Some(pid) = system_task_parent_id(&task.id)
-            && task.status == Status::InProgress
+            && !task.status.is_terminal()
         {
             let annotation = compute_phase_annotation(task);
             annotations
@@ -268,13 +268,13 @@ pub(crate) fn filter_internal_tasks_running_only<'a>(
 ) -> (Vec<&'a Task>, HashMap<String, AnnotationInfo>) {
     let mut annotations: HashMap<String, AnnotationInfo> = HashMap::new();
 
-    // Compute phase annotations for in-progress internal tasks
+    // Compute phase annotations for non-terminal internal tasks
     for task in &tasks {
         if !is_internal_task(task) {
             continue;
         }
         if let Some(pid) = system_task_parent_id(&task.id)
-            && task.status == Status::InProgress
+            && !task.status.is_terminal()
         {
             let annotation = compute_phase_annotation(task);
             annotations
@@ -1230,7 +1230,7 @@ mod tests {
     #[test]
     fn test_filter_internal_tasks_running_only_computes_annotations() {
         // filter_internal_tasks_running_only should compute phase annotations
-        // for in-progress internal tasks, just like filter_internal_tasks does.
+        // for non-terminal internal tasks (Open and InProgress).
         let mut graph = WorkGraph::new();
         let task_b = make_task("b", "Task B");
         let mut place_b =
@@ -1238,7 +1238,7 @@ mod tests {
         place_b.status = Status::InProgress;
         let mut assign_b =
             make_internal_task(".assign-b", "Assign agent to b", "assignment", vec!["b"]);
-        assign_b.status = Status::Open; // not in-progress, should not annotate
+        assign_b.status = Status::Open; // non-terminal, should annotate
 
         graph.add_node(Node::Task(task_b));
         graph.add_node(Node::Task(place_b));
@@ -1254,7 +1254,7 @@ mod tests {
         assert!(ids.contains(".place-b"));
         assert!(ids.contains(".assign-b"));
 
-        // b should have a placing annotation from the in-progress .place-b
+        // b should have annotations from both the in-progress .place-b and open .assign-b
         assert!(annots.contains_key("b"), "Expected annotation for task b");
         let b_annot = &annots["b"];
         assert!(
@@ -1262,6 +1262,110 @@ mod tests {
             "Expected 'placing' in annotation, got: {}",
             b_annot.text
         );
+        assert!(
+            b_annot.text.contains("assigning"),
+            "Expected 'assigning' in annotation for open .assign-b, got: {}",
+            b_annot.text
+        );
         assert!(b_annot.dot_task_ids.contains(&".place-b".to_string()));
+        assert!(b_annot.dot_task_ids.contains(&".assign-b".to_string()));
+    }
+
+    #[test]
+    fn test_task_visible_during_placement_with_open_internal_tasks() {
+        // When a task is blocked on Open agency pipeline tasks (.place-*, .assign-*),
+        // it should still be visible in the filtered output with placement annotations.
+        // This is the key scenario: user creates a task, coordinator scaffolds the
+        // agency pipeline, and the task should immediately show "[⊞ placing] [⊞ assigning]"
+        // even before any agent picks up the internal tasks.
+        let mut graph = WorkGraph::new();
+
+        let mut parent = make_task("my-task", "My Task");
+        parent.status = Status::Open;
+        parent.after = vec![".assign-my-task".to_string()];
+
+        let place = Task {
+            id: ".place-my-task".to_string(),
+            title: "Place: my-task".to_string(),
+            status: Status::Open,
+            tags: vec!["placement".to_string(), "agency".to_string()],
+            ..Task::default()
+        };
+
+        let assign = Task {
+            id: ".assign-my-task".to_string(),
+            title: "Assign agent for: my-task".to_string(),
+            status: Status::Open,
+            after: vec![".place-my-task".to_string()],
+            before: vec!["my-task".to_string()],
+            tags: vec!["assignment".to_string(), "agency".to_string()],
+            ..Task::default()
+        };
+
+        graph.add_node(Node::Task(parent));
+        graph.add_node(Node::Task(place));
+        graph.add_node(Node::Task(assign));
+
+        let annotations: HashMap<String, AnnotationInfo> = HashMap::new();
+        let (filtered, annots) =
+            filter_internal_tasks(&graph, graph.tasks().collect(), &annotations);
+        let ids: HashSet<&str> = filtered.iter().map(|t| t.id.as_str()).collect();
+
+        // Parent task should be visible
+        assert!(ids.contains("my-task"), "Parent task should be visible during placement");
+        // Internal tasks should be hidden
+        assert!(!ids.contains(".place-my-task"), "Internal place task should be hidden");
+        assert!(!ids.contains(".assign-my-task"), "Internal assign task should be hidden");
+
+        // Parent should have annotations from the Open internal tasks
+        assert!(annots.contains_key("my-task"), "Expected annotation for my-task");
+        let annot = &annots["my-task"];
+        assert!(
+            annot.text.contains("placing"),
+            "Expected 'placing' annotation, got: {}",
+            annot.text
+        );
+        assert!(
+            annot.text.contains("assigning"),
+            "Expected 'assigning' annotation, got: {}",
+            annot.text
+        );
+    }
+
+    #[test]
+    fn test_done_internal_tasks_do_not_annotate() {
+        // When internal tasks are Done (placement complete), no annotation should appear.
+        let mut graph = WorkGraph::new();
+
+        let mut parent = make_task("my-task", "My Task");
+        parent.status = Status::Open;
+        parent.after = vec![".assign-my-task".to_string()];
+
+        let mut assign = Task {
+            id: ".assign-my-task".to_string(),
+            title: "Assign agent for: my-task".to_string(),
+            status: Status::Done,
+            before: vec!["my-task".to_string()],
+            tags: vec!["assignment".to_string(), "agency".to_string()],
+            ..Task::default()
+        };
+        assign.completed_at = Some("2024-01-01T00:00:00Z".to_string());
+
+        graph.add_node(Node::Task(parent));
+        graph.add_node(Node::Task(assign));
+
+        let annotations: HashMap<String, AnnotationInfo> = HashMap::new();
+        let (filtered, annots) =
+            filter_internal_tasks(&graph, graph.tasks().collect(), &annotations);
+
+        // Parent should be visible
+        let ids: HashSet<&str> = filtered.iter().map(|t| t.id.as_str()).collect();
+        assert!(ids.contains("my-task"));
+
+        // No annotations (internal task is Done)
+        assert!(
+            !annots.contains_key("my-task"),
+            "Done internal tasks should not produce annotations"
+        );
     }
 }
