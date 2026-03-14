@@ -16,7 +16,7 @@ use workgraph::graph::{Node, Status, Task, WorkGraph};
 
 /// Tags that mark tasks as part of the evaluation/assignment infrastructure.
 /// Tasks with these tags do not get their own eval tasks (no meta-evaluation).
-const DOMINATED_TAGS: &[&str] = &["evaluation", "assignment", "evolution", "flip", "placement"];
+const DOMINATED_TAGS: &[&str] = &["evaluation", "assignment", "flip", "placement"];
 
 /// Returns true if FLIP should run for a given task, based on global config
 /// and the task's `flip-eval` tag.
