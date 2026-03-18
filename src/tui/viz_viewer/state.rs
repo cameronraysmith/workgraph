@@ -7298,7 +7298,7 @@ impl VizApp {
                 .llm_endpoints
                 .endpoints
                 .iter()
-                .any(|ep| ep.provider == provider && (ep.api_key.is_some() || ep.api_key_file.is_some()))
+                .any(|ep| ep.provider == provider && (ep.api_key.is_some() || ep.api_key_file.is_some() || ep.api_key_env.is_some()))
         };
         let key_label = |name: &str, status: &str, provider: &str| -> String {
             let icon = match status {
