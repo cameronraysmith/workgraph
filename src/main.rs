@@ -1110,6 +1110,11 @@ fn main() -> Result<()> {
             AgencyCommands::Reject { id, note } => {
                 commands::evolve::run_deferred_reject(&workgraph_dir, &id, note.as_deref())
             }
+            AgencyCommands::Import {
+                csv_path,
+                dry_run,
+                tag,
+            } => commands::agency_import::run(&workgraph_dir, &csv_path, dry_run, tag.as_deref()),
             AgencyCommands::Push {
                 target,
                 entity_ids,
@@ -2137,6 +2142,24 @@ fn main() -> Result<()> {
             api_key.as_deref(),
             max_turns,
         ),
+        Commands::ApplyPlacement {
+            output_dir,
+            source_task_id,
+        } => {
+            let output_path = std::path::Path::new(&output_dir);
+            let raw_stream = output_path.join("raw_stream.jsonl");
+            match commands::placement::parse_and_apply(&raw_stream, &source_task_id, &workgraph_dir)
+            {
+                Ok(msg) => {
+                    eprintln!("[apply-placement] {}", msg);
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("[apply-placement] FAILED: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
         Commands::Key { command } => match command {
             KeyCommands::Set {
                 provider,

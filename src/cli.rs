@@ -1565,6 +1565,16 @@ pub enum Commands {
         #[arg(long, default_value = "100")]
         max_turns: usize,
     },
+
+    /// Apply placement agent output (internal, called by wrapper script)
+    #[command(name = "apply-placement", hide = true)]
+    ApplyPlacement {
+        /// Path to the agent output directory (contains raw_stream.jsonl)
+        output_dir: String,
+
+        /// Source task ID (the task being placed, without .place- prefix)
+        source_task_id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2510,6 +2520,20 @@ pub enum AgencyCommands {
         dry_run: bool,
     },
 
+    /// Import Agency's starter.csv primitives into WorkGraph
+    Import {
+        /// Path to the CSV file to import
+        csv_path: String,
+
+        /// Show what would be imported without writing files
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Provenance tag (default: agency-import)
+        #[arg(long)]
+        tag: Option<String>,
+    },
+
     /// Push local entities to another agency store
     Push {
         /// Target store (path, named remote, or directory)
@@ -3121,6 +3145,7 @@ pub fn command_name(cmd: &Commands) -> &'static str {
         Commands::Model { .. } => "model",
         Commands::Key { .. } => "key",
         Commands::NativeExec { .. } => "native-exec",
+        Commands::ApplyPlacement { .. } => "apply-placement",
     }
 }
 

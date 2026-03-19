@@ -1,6 +1,7 @@
 pub mod abandon;
 pub mod add;
 pub mod agency_create;
+pub mod agency_import;
 pub mod agency_init;
 pub mod agency_merge;
 pub mod agency_migrate;
@@ -69,6 +70,7 @@ pub mod next;
 pub mod notify;
 pub mod pause;
 pub mod peer;
+pub mod placement;
 pub mod plan;
 pub mod quickstart;
 pub mod ready;

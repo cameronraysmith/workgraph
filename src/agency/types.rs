@@ -566,4 +566,8 @@ pub struct TaskAssignmentRecord {
     pub composition_id: String,
     pub timestamp: String,
     pub mode: AssignmentMode,
+    /// Agency-side task ID, populated when assignment came from Agency.
+    /// Used to POST evaluation results back to Agency.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agency_task_id: Option<String>,
 }
