@@ -144,6 +144,7 @@ open → [claim] → in-progress → [done] → done
                                                                      → [reject] → open (retry)
                               → [fail] → failed → [retry] → open
                               → [abandon] → abandoned
+                              → [wait] → waiting → [condition met] → in-progress
 ```
 
 **Note:** `wg submit` is deprecated. Use `wg done`. The `wg approve` and `wg reject` commands are active — they handle tasks in `pending-validation` state (tasks created with `--verify`).
@@ -222,6 +223,7 @@ wg service resume           # Resume dispatching
 | `wg add "X" --no-place` | Skip automatic placement analysis |
 | `wg add "X" --place-near a,b` | Placement hint: near these tasks |
 | `wg add "X" --place-before a,b` | Placement hint: before these tasks |
+| `wg add "X" --repo peer-name` | Create task in a peer workgraph (by name or path) |
 | `wg edit <id> --title "New" --description "New"` | Edit task fields |
 | `wg edit <id> --add-after X --remove-after Y` | Modify dependencies |
 | `wg edit <id> --add-after X --max-iterations 3` | Add cycle back-edge |
@@ -237,6 +239,8 @@ wg service resume           # Resume dispatching
 | `wg edit <id> --no-converge` | Force all cycle iterations |
 | `wg edit <id> --no-restart-on-failure` | Disable cycle restart on failure |
 | `wg edit <id> --max-failure-restarts 2` | Cap failure-triggered restarts |
+| `wg add-dep <task> <dep>` | Add a dependency edge between two existing tasks |
+| `wg rm-dep <task> <dep>` | Remove a dependency edge between two tasks |
 
 ### Task state transitions
 
@@ -248,8 +252,15 @@ wg service resume           # Resume dispatching
 | `wg done <id> --converged` | Complete task and signal cycle convergence |
 | `wg approve <id>` | Approve a task in pending-validation (transitions to done) |
 | `wg reject <id> --reason "why"` | Reject a task in pending-validation (reopens for retry) |
+| `wg publish <id>` | Publish a draft task (validates deps, resumes subgraph) |
+| `wg publish <id> --only` | Publish single task only (skip subgraph propagation) |
 | `wg pause <id>` | Pause task (coordinator skips it) |
 | `wg resume <id>` | Resume a paused task |
+| `wg wait <id> --until "condition"` | Park task as Waiting until condition is met |
+| `wg wait <id> --until "task:dep=done"` | Wait for another task to complete |
+| `wg wait <id> --until "timer:5m"` | Wait for a timer duration |
+| `wg wait <id> --until "message"` | Wait for a message |
+| `wg wait <id> --checkpoint "summary"` | Save progress checkpoint when parking |
 | `wg fail <id> --reason "why"` | Mark task failed |
 | `wg retry <id>` | Retry failed task |
 | `wg abandon <id> --reason "why"` | Abandon permanently |
@@ -270,6 +281,9 @@ wg service resume           # Resume dispatching
 | `wg log <id> --list` | View task log entries |
 | `wg impact <id>` | What depends on this task |
 | `wg status` | Quick one-screen overview |
+| `wg discover` | Show recently completed tasks and artifacts (last 24h) |
+| `wg discover --since 7d` | Custom time window (e.g. 30m, 24h, 7d) |
+| `wg discover --with-artifacts` | Include artifact paths in output |
 
 ### Visualization
 
@@ -347,6 +361,9 @@ wg service resume           # Resume dispatching
 | `wg dead-agents --purge` | Purge dead/done/failed agents from registry |
 | `wg dead-agents --purge --delete-dirs` | Also delete agent work directories when purging |
 | `wg dead-agents --threshold 30` | Override heartbeat timeout threshold (minutes) |
+| `wg heartbeat <agent-id>` | Record agent heartbeat |
+| `wg heartbeat --check` | Check for stale agents (no heartbeat within threshold) |
+| `wg heartbeat --threshold 10` | Override stale threshold in minutes (default: 5) |
 
 ### Messaging
 
@@ -367,6 +384,22 @@ wg service resume           # Resume dispatching
 | `wg chat --clear` | Clear chat history |
 | `wg chat --attachment path/to/file` | Attach a file to the message |
 | `wg chat --coordinator 1` | Target a specific coordinator (multi-coordinator) |
+
+### Notifications & integrations
+
+| Command | Purpose |
+|---------|---------|
+| `wg notify <task>` | Send task notification to Matrix room |
+| `wg notify <task> --room "#room"` | Target specific Matrix room |
+| `wg notify <task> -m "message"` | Include custom message with notification |
+| `wg matrix listen` | Start Matrix message listener |
+| `wg matrix send "message"` | Send a message to a Matrix room |
+| `wg matrix status` | Show Matrix connection status |
+| `wg matrix login` | Login with password (caches access token) |
+| `wg matrix logout` | Logout and clear cached credentials |
+| `wg telegram listen` | Start Telegram bot listener |
+| `wg telegram send "message"` | Send a message to configured Telegram chat |
+| `wg telegram status` | Show Telegram configuration status |
 
 ### Housekeeping & maintenance
 
@@ -496,6 +529,11 @@ wg service resume           # Resume dispatching
 | `wg models add` | Add a custom model to the local registry |
 | `wg models set-default <id>` | Set the default model |
 | `wg models init` | Initialize models.yaml with defaults |
+| `wg endpoints list` | List all configured LLM endpoints |
+| `wg endpoints add` | Add a new LLM endpoint |
+| `wg endpoints remove <name>` | Remove an endpoint by name |
+| `wg endpoints set-default <name>` | Set an endpoint as the default |
+| `wg endpoints test` | Test endpoint connectivity (hits /models API) |
 | `wg key set <provider>` | Configure an API key for a provider |
 | `wg key check` | Validate API key availability and status |
 | `wg key list` | Show key configuration status for all providers |
@@ -534,12 +572,26 @@ wg service resume           # Resume dispatching
 | `wg config --model opus` | Set default model |
 | `wg config --max-agents 5` | Set agent limit |
 | `wg config --max-coordinators 2` | Set max concurrent coordinator sessions |
+| `wg config --coordinator-interval 30` | Set coordinator poll interval in seconds |
+| `wg config --poll-interval 60` | Set service daemon background poll interval in seconds |
+| `wg config --coordinator-executor claude` | Set coordinator executor |
 | `wg config --auto-evaluate true` | Enable auto-evaluation |
 | `wg config --auto-assign true` | Enable auto-assignment |
 | `wg config --auto-place true` | Enable automatic placement analysis on new tasks |
 | `wg config --auto-create true` | Enable automatic creator agent invocation |
+| `wg config --auto-triage true` | Enable automatic triage of dead agents |
 | `wg config --creator-agent <hash>` | Set creator agent (content-hash) |
 | `wg config --creator-model <model>` | Set model for creator agents |
+| `wg config --assigner-model <model>` | Set model for assigner agents |
+| `wg config --evaluator-model <model>` | Set model for evaluator agents |
+| `wg config --evolver-model <model>` | Set model for evolver agents |
+| `wg config --assigner-agent <hash>` | Set assigner agent (content-hash) |
+| `wg config --evaluator-agent <hash>` | Set evaluator agent (content-hash) |
+| `wg config --evolver-agent <hash>` | Set evolver agent (content-hash) |
+| `wg config --triage-model haiku` | Set model for triage (default: haiku) |
+| `wg config --triage-timeout 30` | Set timeout in seconds for triage calls |
+| `wg config --triage-max-log-bytes 50000` | Max bytes to read from agent output log for triage |
+| `wg config --retention-heuristics "policy"` | Set retention heuristics (prose policy for evolver) |
 | `wg config --eval-gate-threshold 0.7` | Set eval gate threshold (0.0-1.0) |
 | `wg config --eval-gate-all true` | Apply eval gate to all tasks (not just eval-gate tagged) |
 | `wg config --flip-enabled true` | Enable FLIP (roundtrip intent fidelity) evaluation |
@@ -552,13 +604,20 @@ wg service resume           # Resume dispatching
 | `wg config --retry-context-tokens 2000` | Max tokens of previous-attempt context on retry |
 | `wg config --install-global` | Install project config as global default |
 | `wg config --viz-edge-color mixed` | Viz edge color style (gray/white/mixed) |
+| `wg config --tui-counters uptime,active` | TUI time counters (uptime, cumulative, active, session) |
 | `wg config --tiers` | Show current tier-to-model assignments |
 | `wg config --tier standard=gpt-4o` | Set which model a tier uses |
 | `wg config --models` | Show all model routing assignments (per-role) |
 | `wg config --set-model <role> <model>` | Set model for a dispatch role |
 | `wg config --set-provider <role> <provider>` | Set provider for a dispatch role |
+| `wg config --set-endpoint <role> <endpoint>` | Bind a named endpoint to a dispatch role |
+| `wg config --role-model <role>=<model>` | Set model for dispatch role (key=value syntax) |
+| `wg config --role-provider <role>=<provider>` | Set provider for dispatch role (key=value syntax) |
 | `wg config --set-key <provider> --file <path>` | Set API key file for a provider |
 | `wg config --check-key` | Check OpenRouter API key validity |
+| `wg config --registry` | Show all model registry entries |
+| `wg config --registry-add --id <id> --provider <p> --reg-model <m> --reg-tier <t>` | Add model to registry |
+| `wg config --registry-remove <id>` | Remove model from registry |
 
 ### Output options
 
