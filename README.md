@@ -75,11 +75,27 @@ wg add "Implement auth" \
   --skill security \
   --deliverable src/auth.rs
 
-# Task with per-task model override
+# Task with per-task model override and provider selection
 wg add "Quick formatting fix" --model haiku
+wg add "Use GPT for this" --provider openai --model gpt-4o
+
+# Execution weight controls what the agent can do
+wg add "Quick lint fix" --exec-mode shell       # no LLM, just runs shell command
+wg add "Research task" --exec-mode light         # read-only tools
+wg add "Full implementation" --exec-mode full    # default: all tools
 
 # Task requiring review before completion
 wg add "Security audit" --verify "All findings documented with severity ratings"
+
+# Scheduling: delay or absolute time gate
+wg add "Follow-up check" --delay 1h             # becomes ready 1h after deps complete
+wg add "Deploy window" --not-before 2026-03-20T09:00:00Z  # ISO 8601
+
+# Placement hints and paused creation
+wg add "Related work" --place-near auth-task    # hint: place near related task
+wg add "Urgent fix" --place-before deploy-task  # hint: place before this task
+wg add "Standalone" --no-place                  # skip automatic placement
+wg add "Draft idea" --paused                    # created but not dispatched
 
 # Task with visibility for cross-org sharing
 wg add "Public API design" --visibility public
@@ -95,7 +111,10 @@ wg add "Complex refactor" --context-scope full  # everything: full graph + logs
 wg edit my-task --title "Better title"
 wg edit my-task --add-after other-task
 wg edit my-task --remove-tag stale --add-tag urgent
-wg edit my-task --model opus
+wg edit my-task --model opus --provider anthropic
+wg edit my-task --exec-mode light
+wg edit my-task --verify "cargo test passes"
+wg edit my-task --delay 30m --not-before 2026-03-20T09:00:00Z
 wg edit my-task --add-skill security --remove-skill docs
 ```
 
@@ -300,7 +319,7 @@ The service reads from `.workgraph/config.toml`:
 [coordinator]
 max_agents = 4         # max parallel agents (default: 4)
 poll_interval = 60     # seconds between safety-net ticks (default: 60)
-executor = "claude"    # executor for spawned agents (default: "claude")
+executor = "claude"    # executor: "claude" (default), "amplifier", or "shell"
 model = "opus"         # model override for all spawned agents (optional)
 
 [agent]
@@ -328,6 +347,8 @@ wg config --executor shell
 # Agency settings
 wg config --auto-evaluate true
 wg config --auto-assign true
+wg config --auto-place true           # automatic task placement
+wg config --auto-create true          # automatic task creation
 wg config --assigner-model haiku
 wg config --evaluator-model opus
 wg config --evolver-model opus
@@ -339,6 +360,18 @@ wg config --creator-model opus
 # Triage settings
 wg config --auto-triage true
 wg config --triage-model haiku
+
+# Eval gate and FLIP settings
+wg config --eval-gate-threshold 0.7
+wg config --flip-enabled true
+
+# Model registry and routing
+wg config --registry add my-model     # manage model registry
+wg config --set-model sonnet          # set default model
+wg config --role-model evaluator opus # per-role model routing
+
+# Multi-coordinator
+wg config --max-coordinators 3
 
 # Inspect merged config (shows source: global, local, or default)
 wg config --list
@@ -362,9 +395,15 @@ wg service start --max-agents 8 --executor shell --interval 120 --model haiku
 | `wg service stop --force` | Immediately SIGKILL the daemon |
 | `wg service status` | Show daemon PID, uptime, agent summary, coordinator state |
 | `wg service reload` | Re-read config.toml without restarting |
+| `wg service restart` | Graceful stop then start |
 | `wg service pause` | Pause coordinator (running agents continue, no new spawns) |
 | `wg service resume` | Resume coordinator (immediate tick) |
 | `wg service install` | Generate a systemd user service file |
+| `wg service tick` | Run a single coordinator tick (debug) |
+| `wg service create-coordinator` | Create a new coordinator session |
+| `wg service stop-coordinator` | Stop a running coordinator session |
+| `wg service archive-coordinator` | Archive a coordinator session |
+| `wg service delete-coordinator` | Delete a coordinator session |
 
 Reload lets you change settings at runtime:
 
@@ -444,6 +483,27 @@ wg service reload
 **Cost tips:** Use **haiku** for simple formatting/linting, **sonnet** for typical coding, **opus** for complex reasoning and architecture.
 
 **Alternative providers:** Workgraph supports [OpenRouter](https://openrouter.ai/) and any OpenAI-compatible API. Configure an endpoint with `wg endpoints add` and use full model IDs like `deepseek/deepseek-chat-v3`. See [docs/guides/openrouter-setup.md](docs/guides/openrouter-setup.md) for details.
+
+### Model registry
+
+Manage the model registry and per-role routing:
+
+```bash
+wg model list                      # show all models (built-in + user-defined)
+wg model add my-model --provider openrouter --model-id deepseek/deepseek-chat-v3
+wg model remove my-model
+wg model set-default sonnet        # set default dispatch model
+wg model routing                   # show per-role model routing
+wg model set --role evaluator opus # set model for a specific dispatch role
+```
+
+### API key management
+
+```bash
+wg key set anthropic               # configure a provider's API key
+wg key check                       # validate key availability
+wg key list                        # show key status for all providers
+```
 
 ### The TUI
 
@@ -638,6 +698,11 @@ For interactive conversation with the coordinator agent, use `wg chat`:
 
 ```bash
 wg chat "What's the status of the auth refactor?"
+wg chat -i                                       # interactive REPL mode
+wg chat "Here's the spec" --attachment spec.pdf   # attach a file
+wg chat --coordinator 2 "Status?"                 # target a specific coordinator
+wg chat --history                                 # show chat history
+wg chat --clear                                   # clear chat history
 ```
 
 See [docs/COMMANDS.md](docs/COMMANDS.md) for full messaging options.
@@ -713,6 +778,13 @@ wg add "Write draft" --id write --after review \
 
 # Delay between iterations
 wg edit write --cycle-delay "5m"
+
+# Force all iterations (agents cannot signal --converged)
+wg edit write --no-converge
+
+# Control failure behavior
+wg edit write --no-restart-on-failure            # don't restart cycle on failure
+wg edit write --max-failure-restarts 5           # cap failure-triggered restarts
 ```
 
 When a cycle completes an iteration (all members reach `done`), the cycle header and all members are reset to `open` with `loop_iteration` incremented.
@@ -815,7 +887,7 @@ wg trace show <task-id> --animate    # animated replay of execution over time
 
 ## Key concepts
 
-**Tasks** have a status (`open`, `in-progress`, `done`, `failed`, `abandoned`, `blocked`, `pending-validation`, `waiting`) and can block other tasks. Tasks can carry a per-task `model` override, an `agent` identity assignment, a `visibility` field (`internal`, `public`, `peer`) controlling what information is shared during trace exports, and a `context_scope` (`clean`, `task`, `graph`, `full`) controlling how much context the agent receives at dispatch.
+**Tasks** have a status (`open`, `in-progress`, `done`, `failed`, `abandoned`, `blocked`, `pending-validation`, `waiting`) and can block other tasks. Tasks can carry a per-task `model` override (with optional `provider`), an `agent` identity assignment, a `visibility` field (`internal`, `public`, `peer`) controlling what information is shared during trace exports, a `context_scope` (`clean`, `task`, `graph`, `full`) controlling how much context the agent receives at dispatch, and an `exec_mode` (`full`, `light`, `bare`, `shell`) controlling the agent's tool access.
 
 **Agents** are humans or AIs that do work. They can be AI agents (with a role and tradeoff that shape their behavior) or human agents (with contact info and a human executor like Matrix or email). All agents share the same identity model: capabilities, trust levels, rate, and capacity.
 
@@ -863,6 +935,13 @@ wg func make-adaptive <id>  # upgrade to adaptive (adds trace memory)
 wg func bootstrap     # bootstrap the extraction meta-function
 wg func list          # list available function templates
 wg func show <id>     # inspect a function template
+
+wg compact            # distill graph state into context.md
+wg sweep              # detect and recover orphaned tasks
+wg checkpoint <id> -s "summary"  # save checkpoint for long tasks
+wg stats              # time counters and agent statistics
+wg model list         # model registry management
+wg key list           # API key status
 ```
 
 See [docs/COMMANDS.md](docs/COMMANDS.md) for the full command reference including `viz`, `plan`, `coordinate`, `archive`, `reschedule`, and more.
@@ -872,6 +951,11 @@ See [docs/COMMANDS.md](docs/COMMANDS.md) for the full command reference includin
 ```bash
 wg log <id> "message"     # add progress notes to a task
 wg artifact <id> path     # record a file produced by a task
+wg compact                # distill graph state into context.md
+wg sweep                  # detect and recover orphaned in-progress tasks
+wg checkpoint <id> -s "progress summary"  # save checkpoint for long tasks
+wg stats                  # show time counters and agent statistics
+wg exec <id>              # execute a task's shell command (claim + run + done/fail)
 wg viz --mermaid          # generate Mermaid flowchart output
 wg viz --graph            # 2D spatial layout with box-drawing characters
 wg archive                # archive completed tasks
