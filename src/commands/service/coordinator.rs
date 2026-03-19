@@ -992,6 +992,78 @@ fn build_auto_assign_tasks(
             ..Default::default()
         };
 
+        // Try Agency assignment if configured
+        if config.agency.assignment_source.as_deref() == Some("agency")
+            && config.agency.agency_server_url.is_some()
+        {
+            let task_title_ref = task_title.as_str();
+            let task_desc_ref = task_desc.as_deref().unwrap_or("");
+            match agency::request_agency_assignment(
+                task_title_ref,
+                task_desc_ref,
+                &config.agency,
+            ) {
+                Ok(response) => {
+                    eprintln!(
+                        "[coordinator] Agency assignment for '{}': agency_task_id={}",
+                        source_id, response.agency_task_id,
+                    );
+
+                    // Mark the .assign-* task as Done
+                    let now = Utc::now().to_rfc3339();
+                    if let Some(assign_task) = graph.get_task_mut(&assign_task_id) {
+                        assign_task.status = Status::Done;
+                        assign_task.description = Some(format!(
+                            "Agency assignment for '{}': agency_task_id={}",
+                            source_id, response.agency_task_id,
+                        ));
+                        assign_task.started_at = Some(now.clone());
+                        assign_task.completed_at = Some(now);
+                        assign_task.exec_mode = Some("bare".to_string());
+                        assign_task.log.push(LogEntry {
+                            timestamp: Utc::now().to_rfc3339(),
+                            actor: Some("coordinator".to_string()),
+                            message: format!(
+                                "Assigned via Agency (agency_task_id={})",
+                                response.agency_task_id,
+                            ),
+                        });
+                    }
+
+                    // Persist TaskAssignmentRecord with Agency source
+                    let record = TaskAssignmentRecord {
+                        task_id: source_id.clone(),
+                        agent_id: String::new(),
+                        composition_id: String::new(),
+                        timestamp: Utc::now().to_rfc3339(),
+                        mode: AssignmentMode::Learning(experiment.clone()),
+                        agency_task_id: Some(response.agency_task_id.clone()),
+                        assignment_source: AssignmentSource::Agency {
+                            agency_task_id: response.agency_task_id,
+                        },
+                    };
+
+                    let assignments_dir = agency_dir.join("assignments");
+                    if let Err(e) = save_assignment_record(&record, &assignments_dir) {
+                        eprintln!(
+                            "[coordinator] Warning: failed to save assignment record for '{}': {}",
+                            source_id, e,
+                        );
+                    }
+
+                    save_graph(graph, &graph_path(dir)).ok();
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[coordinator] Warning: Agency assignment failed for '{}' ({}), falling back to native",
+                        source_id, e,
+                    );
+                    // Fall through to native LLM assigner
+                }
+            }
+        }
+
         // Run lightweight LLM call for assignment
         let (verdict, assign_token_usage) = match super::assignment::run_lightweight_assignment(
             config,

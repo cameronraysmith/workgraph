@@ -107,9 +107,69 @@ fn run_auto_assign(dir: &Path, path: &Path, task_id: &str) -> Result<()> {
     let agency_dir = dir.join("agency");
     let agents_dir = agency_dir.join("cache/agents");
 
-    // Load the graph to verify the task exists
+    // Load the graph to verify the task exists and get task details
     let graph = load_graph(path).context("Failed to load graph")?;
-    let _task = graph.get_task_or_err(task_id)?;
+    let task = graph.get_task_or_err(task_id)?;
+
+    let config = Config::load_or_default(dir);
+
+    // Try Agency assignment if configured
+    if config.agency.assignment_source.as_deref() == Some("agency")
+        && config.agency.agency_server_url.is_some()
+    {
+        let task_title = &task.title;
+        let task_desc = task.description.as_deref().unwrap_or("");
+        match agency::request_agency_assignment(
+            task_title,
+            task_desc,
+            &config.agency,
+        ) {
+            Ok(response) => {
+                eprintln!(
+                    "[assign] Agency assignment for '{}': agency_task_id={}",
+                    task_id, response.agency_task_id,
+                );
+
+                // Save assignment record with Agency source
+                let assignments_dir = agency_dir.join("assignments");
+                let record = agency::TaskAssignmentRecord {
+                    task_id: task_id.to_string(),
+                    agent_id: String::new(),
+                    composition_id: String::new(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    mode: agency::AssignmentMode::Learning(agency::AssignmentExperiment {
+                        base_composition: None,
+                        dimension: agency::ExperimentDimension::NovelComposition,
+                        bizarre_ideation: false,
+                        ucb_scores: std::collections::HashMap::new(),
+                    }),
+                    agency_task_id: Some(response.agency_task_id.clone()),
+                    assignment_source: agency::AssignmentSource::Agency {
+                        agency_task_id: response.agency_task_id,
+                    },
+                };
+                if let Err(e) = agency::save_assignment_record(&record, &assignments_dir) {
+                    eprintln!(
+                        "Warning: failed to save assignment record for '{}': {}",
+                        task_id, e
+                    );
+                }
+
+                println!(
+                    "Assigned task '{}' via Agency (prompt rendered externally)",
+                    task_id
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: Agency assignment failed ({}), falling back to native",
+                    e
+                );
+                // Fall through to native assignment
+            }
+        }
+    }
 
     // Load all available agents
     let all_agents = agency::load_all_agents_or_warn(&agents_dir);
