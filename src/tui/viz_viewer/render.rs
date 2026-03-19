@@ -5091,6 +5091,44 @@ fn draw_status_bar(frame: &mut Frame, app: &VizApp, area: Rect) {
         }
     }
 
+    // Cycle timing indicators
+    if !app.cycle_timing.is_empty() {
+        spans.push(Span::styled("| ", Style::default().fg(Color::DarkGray)));
+        for (i, ct) in app.cycle_timing.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::styled(" ", Style::default()));
+            }
+            // Compact label: task_id[iter/max, timing]
+            let short_id = if ct.task_id.len() > 12 {
+                format!("{}…", &ct.task_id[..ct.task_id.floor_char_boundary(11)])
+            } else {
+                ct.task_id.clone()
+            };
+            let timing = if let Some(secs) = ct.next_due_in_secs {
+                if secs > 0 {
+                    format!("in {}", format_duration_compact(secs as u64))
+                } else {
+                    "ready".to_string()
+                }
+            } else if let Some(ago) = ct.last_completed_ago_secs {
+                format!("{}ago", format_duration_compact(ago as u64))
+            } else {
+                "–".to_string()
+            };
+            let color = match ct.status {
+                workgraph::graph::Status::InProgress => Color::Green,
+                workgraph::graph::Status::Open => Color::Yellow,
+                workgraph::graph::Status::Done => Color::Cyan,
+                _ => Color::DarkGray,
+            };
+            spans.push(Span::styled(
+                format!("⟳{}[{}/{}·{}]", short_id, ct.iteration, ct.max_iterations, timing),
+                Style::default().fg(color),
+            ));
+        }
+        spans.push(Span::styled(" ", Style::default()));
+    }
+
     // Scroll position
     spans.push(Span::styled("| ", Style::default().fg(Color::DarkGray)));
     spans.push(Span::styled(

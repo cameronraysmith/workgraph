@@ -15,7 +15,7 @@ use ratatui::layout::Rect;
 
 use crate::commands::viz::{VizOptions, VizOutput};
 use workgraph::config::Config;
-use workgraph::graph::{Status, TokenUsage, format_tokens, parse_token_usage_live};
+use workgraph::graph::{CycleAnalysis, Status, TokenUsage, format_tokens, parse_token_usage_live};
 use workgraph::models::load_model_choices;
 use workgraph::parser::load_graph;
 use workgraph::{AgentRegistry, AgentStatus};
@@ -1805,6 +1805,22 @@ pub struct TaskCounts {
     pub archived: usize,
 }
 
+/// Active cycle timing info for status bar display.
+pub struct CycleTimingEntry {
+    /// Task ID of the cycle header (config owner).
+    pub task_id: String,
+    /// 1-based iteration number.
+    pub iteration: u32,
+    /// Max iterations configured.
+    pub max_iterations: u32,
+    /// Seconds since last iteration completed (None if never completed).
+    pub last_completed_ago_secs: Option<i64>,
+    /// Seconds until next iteration is due (None if unknown, negative if overdue).
+    pub next_due_in_secs: Option<i64>,
+    /// Current status of the cycle header.
+    pub status: Status,
+}
+
 /// A single fuzzy match result for a line.
 pub struct FuzzyLineMatch {
     /// Index into the original `lines`/`plain_lines` arrays.
@@ -1860,6 +1876,8 @@ pub struct VizApp {
     pub total_usage: TokenUsage,
     /// Per-task token usage keyed by task ID (for computing visible-task totals).
     pub task_token_map: HashMap<String, TokenUsage>,
+    /// Active cycle timing info (refreshed with graph stats).
+    pub cycle_timing: Vec<CycleTimingEntry>,
 
     // ── Token display toggle ──
     /// When true, show total workgraph token usage; when false, show visible-tasks only.
@@ -2223,6 +2241,7 @@ impl VizApp {
                 cache_creation_input_tokens: 0,
             },
             task_token_map: HashMap::new(),
+            cycle_timing: Vec::new(),
             show_total_tokens: false,
             show_help: false,
             show_system_tasks: false,
@@ -3452,6 +3471,65 @@ impl VizApp {
         self.total_usage = total_usage;
         self.task_token_map = task_token_map;
 
+        // Compute cycle timing from graph.
+        {
+            let cycle_analysis = CycleAnalysis::from_graph(graph);
+            let utc_now = chrono::Utc::now();
+            let mut entries = Vec::new();
+
+            for cycle in &cycle_analysis.cycles {
+                let config_owner = cycle.members.iter().find_map(|mid| {
+                    let task = graph.get_task(mid)?;
+                    task.cycle_config.as_ref()?;
+                    Some(task)
+                });
+
+                let Some(owner) = config_owner else {
+                    continue;
+                };
+                let cc = owner.cycle_config.as_ref().unwrap();
+
+                let last_completed = owner
+                    .last_iteration_completed_at
+                    .as_ref()
+                    .or(owner.completed_at.as_ref())
+                    .cloned();
+
+                let last_ago = last_completed.as_ref().and_then(|ts| {
+                    let parsed = ts.parse::<chrono::DateTime<chrono::Utc>>().ok()?;
+                    Some(utc_now.signed_duration_since(parsed).num_seconds())
+                });
+
+                let next_due_in = owner
+                    .ready_after
+                    .as_ref()
+                    .and_then(|ts| ts.parse::<chrono::DateTime<chrono::Utc>>().ok())
+                    .or_else(|| {
+                        let delay_secs = cc
+                            .delay
+                            .as_ref()
+                            .and_then(|d| workgraph::graph::parse_delay(d))?;
+                        let last_ts = last_completed
+                            .as_ref()?
+                            .parse::<chrono::DateTime<chrono::Utc>>()
+                            .ok()?;
+                        Some(last_ts + chrono::Duration::seconds(delay_secs as i64))
+                    })
+                    .map(|next_ts| (next_ts - utc_now).num_seconds());
+
+                entries.push(CycleTimingEntry {
+                    task_id: owner.id.clone(),
+                    iteration: owner.loop_iteration + 1,
+                    max_iterations: cc.max_iterations,
+                    last_completed_ago_secs: last_ago,
+                    next_due_in_secs: next_due_in,
+                    status: owner.status,
+                });
+            }
+
+            self.cycle_timing = entries;
+        }
+
         // Refresh coordinator message statuses for all tasks.
         self.task_message_statuses = graph
             .tasks()
@@ -4408,6 +4486,55 @@ impl VizApp {
             lines.push(String::new());
         }
 
+        // ── Cycle ──
+        if let Some(ref cc) = task.cycle_config {
+            lines.push("── Cycle ──".to_string());
+            lines.push(format!(
+                "  Iteration: {}/{}",
+                task.loop_iteration + 1,
+                cc.max_iterations
+            ));
+            if let Some(ref delay) = cc.delay {
+                lines.push(format!("  Delay:     {}", delay));
+            }
+            let now = chrono::Utc::now();
+            if let Some(ref last_ts) = task.last_iteration_completed_at {
+                if let Ok(parsed) = last_ts.parse::<chrono::DateTime<chrono::Utc>>() {
+                    let ago = now.signed_duration_since(parsed).num_seconds();
+                    lines.push(format!(
+                        "  Last iter: {} ago",
+                        workgraph::format_duration(ago, true)
+                    ));
+                }
+            }
+            // Next due: use ready_after if present, otherwise compute from last_completed + delay
+            let next_due = task.ready_after.clone().or_else(|| {
+                let delay_secs =
+                    cc.delay.as_ref().and_then(|d| workgraph::graph::parse_delay(d))?;
+                let last_ts = task
+                    .last_iteration_completed_at
+                    .as_ref()?
+                    .parse::<chrono::DateTime<chrono::Utc>>()
+                    .ok()?;
+                let next = last_ts + chrono::Duration::seconds(delay_secs as i64);
+                Some(next.to_rfc3339())
+            });
+            if let Some(ref next_ts) = next_due {
+                if let Ok(parsed) = next_ts.parse::<chrono::DateTime<chrono::Utc>>() {
+                    if parsed > now {
+                        let secs = (parsed - now).num_seconds();
+                        lines.push(format!(
+                            "  Next due:  in {}",
+                            workgraph::format_duration(secs, true)
+                        ));
+                    } else {
+                        lines.push("  Next due:  ready now".to_string());
+                    }
+                }
+            }
+            lines.push(String::new());
+        }
+
         // ── Failure reason ──
         if let Some(ref reason) = task.failure_reason {
             lines.push("── Failure ──".to_string());
@@ -4542,6 +4669,54 @@ impl VizApp {
                     "  Duration:  {}",
                     workgraph::format_duration(dur, false)
                 ));
+            }
+            lines.push(String::new());
+        }
+
+        // ── Cycle ──
+        if let Some(ref cc) = task.cycle_config {
+            lines.push("── Cycle ──".to_string());
+            lines.push(format!(
+                "  Iteration: {}/{}",
+                task.loop_iteration + 1,
+                cc.max_iterations
+            ));
+            if let Some(ref delay) = cc.delay {
+                lines.push(format!("  Delay:     {}", delay));
+            }
+            let now = chrono::Utc::now();
+            if let Some(ref last_ts) = task.last_iteration_completed_at {
+                if let Ok(parsed) = last_ts.parse::<chrono::DateTime<chrono::Utc>>() {
+                    let ago = now.signed_duration_since(parsed).num_seconds();
+                    lines.push(format!(
+                        "  Last iter: {} ago",
+                        workgraph::format_duration(ago, true)
+                    ));
+                }
+            }
+            let next_due = task.ready_after.clone().or_else(|| {
+                let delay_secs =
+                    cc.delay.as_ref().and_then(|d| workgraph::graph::parse_delay(d))?;
+                let last_ts = task
+                    .last_iteration_completed_at
+                    .as_ref()?
+                    .parse::<chrono::DateTime<chrono::Utc>>()
+                    .ok()?;
+                let next = last_ts + chrono::Duration::seconds(delay_secs as i64);
+                Some(next.to_rfc3339())
+            });
+            if let Some(ref next_ts) = next_due {
+                if let Ok(parsed) = next_ts.parse::<chrono::DateTime<chrono::Utc>>() {
+                    if parsed > now {
+                        let secs = (parsed - now).num_seconds();
+                        lines.push(format!(
+                            "  Next due:  in {}",
+                            workgraph::format_duration(secs, true)
+                        ));
+                    } else {
+                        lines.push("  Next due:  ready now".to_string());
+                    }
+                }
             }
             lines.push(String::new());
         }
@@ -5128,6 +5303,7 @@ impl VizApp {
                 cache_creation_input_tokens: 0,
             },
             task_token_map: HashMap::new(),
+            cycle_timing: Vec::new(),
             show_total_tokens: false,
             show_help: false,
             show_system_tasks: false,
