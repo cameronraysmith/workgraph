@@ -2849,7 +2849,12 @@ pub fn coordinator_tick(
         eprintln!("[coordinator] Spawning paused: global zero-output backoff active");
         let cycle_analysis = graph.compute_cycle_analysis();
         let final_ready = ready_tasks_with_peers_cycle_aware(&graph, dir, &cycle_analysis);
-        let ready_count = final_ready.len();
+        // Exclude compact-loop tasks from ready count — they're handled by
+        // the daemon's compaction subsystem, not by agent spawning.
+        let ready_count = final_ready
+            .iter()
+            .filter(|t| !t.tags.iter().any(|tag| tag == "compact-loop"))
+            .count();
         return Ok(TickResult {
             agents_alive: alive_count,
             tasks_ready: ready_count,
@@ -2860,7 +2865,12 @@ pub fn coordinator_tick(
     // Phase 6: Spawn agents on ready tasks
     let cycle_analysis = graph.compute_cycle_analysis();
     let final_ready = ready_tasks_with_peers_cycle_aware(&graph, dir, &cycle_analysis);
-    let ready_count = final_ready.len();
+    // Exclude compact-loop tasks from ready count — they're handled by
+    // the daemon's compaction subsystem, not by agent spawning.
+    let ready_count = final_ready
+        .iter()
+        .filter(|t| !t.tags.iter().any(|tag| tag == "compact-loop"))
+        .count();
     drop(final_ready);
     // Resolve task agent model: CLI override > models.task_agent > models.default > agent.model
     let effective_model = model.map(String::from).unwrap_or_else(|| {
