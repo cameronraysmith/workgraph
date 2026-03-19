@@ -1,4 +1,6 @@
-//! HTTP bridge for communicating with Agency's evaluation API.
+//! HTTP bridge for communicating with Agency's evaluation and assignment APIs.
+
+use serde::{Deserialize, Serialize};
 
 use super::store::AgencyError;
 use super::types::Evaluation;
@@ -123,6 +125,111 @@ pub fn post_evaluation_to_agency(
     Ok(())
 }
 
+/// Response from Agency's assignment endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgencyAssignmentResponse {
+    pub rendered_prompt: String,
+    pub agency_task_id: String,
+    pub primitive_ids: Vec<String>,
+}
+
+/// Request assignment from the Agency server.
+///
+/// POSTs to `{agency_server_url}/projects/{project_id}/assign` with the
+/// task title and description. Returns the rendered prompt, Agency's task
+/// ID, and the primitive IDs used in the composition.
+///
+/// Returns `Err` on connection failure or missing configuration — the
+/// caller is responsible for fallback to native assignment.
+pub fn request_agency_assignment(
+    title: &str,
+    description: &str,
+    config: &AgencyConfig,
+) -> Result<AgencyAssignmentResponse, AgencyError> {
+    let server_url = config
+        .agency_server_url
+        .as_deref()
+        .filter(|u| !u.is_empty())
+        .ok_or_else(|| {
+            AgencyError::NotFound("agency_server_url not configured".to_string())
+        })?;
+
+    let project_id = config
+        .agency_project_id
+        .as_deref()
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| {
+            AgencyError::NotFound("agency_project_id not configured".to_string())
+        })?;
+
+    let token = match &config.agency_token_path {
+        Some(path) => match fs::read_to_string(path) {
+            Ok(t) => t.trim().to_string(),
+            Err(e) => {
+                return Err(AgencyError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("could not read agency token from '{}': {}", path, e),
+                )));
+            }
+        },
+        None => String::new(),
+    };
+
+    let url = format!(
+        "{}/projects/{}/assign",
+        server_url.trim_end_matches('/'),
+        project_id
+    );
+
+    let payload = serde_json::json!({
+        "title": title,
+        "description": description,
+    });
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| {
+            AgencyError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("could not build HTTP client: {}", e),
+            ))
+        })?;
+
+    let mut request = client.post(&url).json(&payload);
+    if !token.is_empty() {
+        request = request.bearer_auth(&token);
+    }
+
+    let resp = request.send().map_err(|e| {
+        AgencyError::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            format!("agency assignment request to {} failed: {}", url, e),
+        ))
+    })?;
+
+    if !resp.status().is_success() {
+        return Err(AgencyError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!(
+                "agency assignment request to {} returned status {}",
+                url,
+                resp.status()
+            ),
+        )));
+    }
+
+    let body = resp.text().map_err(|e| {
+        AgencyError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("could not read agency assignment response body: {}", e),
+        ))
+    })?;
+
+    let response: AgencyAssignmentResponse = serde_json::from_str(&body)?;
+    Ok(response)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +349,48 @@ mod tests {
         let result = post_evaluation_to_agency(&eval, "agency-task-1", &config);
         // Graceful: returns Ok even though token file doesn't exist
         assert!(result.is_ok());
+    }
+
+    // --- Assignment client tests ---
+
+    #[test]
+    fn test_agency_assignment_no_server_url() {
+        let config = AgencyConfig::default();
+        let result = request_agency_assignment("Task", "desc", &config);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("agency_server_url"), "error: {}", err);
+    }
+
+    #[test]
+    fn test_agency_assignment_no_project_id() {
+        let mut config = AgencyConfig::default();
+        config.agency_server_url = Some("http://127.0.0.1:1".to_string());
+        let result = request_agency_assignment("Task", "desc", &config);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("agency_project_id"), "error: {}", err);
+    }
+
+    #[test]
+    fn test_agency_assignment_unreachable_server() {
+        let mut config = AgencyConfig::default();
+        config.agency_server_url = Some("http://127.0.0.1:1".to_string());
+        config.agency_project_id = Some("proj-1".to_string());
+        let result = request_agency_assignment("Task", "desc", &config);
+        assert!(result.is_err(), "should fail on unreachable server");
+    }
+
+    #[test]
+    fn test_agency_assignment_response_parse() {
+        let json = r#"{
+            "rendered_prompt": "You are a Programmer...",
+            "agency_task_id": "agency-42",
+            "primitive_ids": ["prim-a", "prim-b"]
+        }"#;
+        let resp: AgencyAssignmentResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.rendered_prompt, "You are a Programmer...");
+        assert_eq!(resp.agency_task_id, "agency-42");
+        assert_eq!(resp.primitive_ids, vec!["prim-a", "prim-b"]);
     }
 }
