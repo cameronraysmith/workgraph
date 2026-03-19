@@ -55,6 +55,17 @@ wg add <TITLE> [OPTIONS]
 | `--max-iterations <N>` | Maximum cycle iterations — sets `CycleConfig` on this task, making it a cycle header |
 | `--cycle-guard <EXPR>` | Guard condition for cycle iteration: `task:<id>=<status>` or `always` |
 | `--cycle-delay <DUR>` | Delay between cycle iterations (e.g., `30s`, `5m`, `1h`) |
+| `--exec-mode <MODE>` | Execution weight: `full` (default), `light` (read-only tools), `bare` (wg CLI only), `shell` (no LLM) |
+| `--provider <PROVIDER>` | Provider for this task: `anthropic`, `openai`, `openrouter`, `local` |
+| `--paused` | Create the task in paused state (default for interactive use) |
+| `--no-place` | Skip automatic placement — make task immediately available for dispatch |
+| `--place-near <IDS>` | Placement hint: place near these tasks (comma-separated IDs) |
+| `--place-before <IDS>` | Placement hint: place before these tasks (comma-separated IDs) |
+| `--delay <DUR>` | Delay before task becomes ready (e.g., `30s`, `5m`, `1h`, `1d`) |
+| `--not-before <TIMESTAMP>` | Absolute timestamp before which task won't be dispatched (ISO 8601) |
+| `--no-converge` | Force all cycle iterations to run (agents cannot signal convergence) |
+| `--no-restart-on-failure` | Disable automatic cycle restart on failure (restart is on by default) |
+| `--max-failure-restarts <N>` | Maximum failure-triggered cycle restarts (default: 3) |
 | `--context-scope <SCOPE>` | Context scope for prompt assembly: `clean`, `task`, `graph`, `full` (see below) |
 
 **Context scopes** control how much context the coordinator assembles into the agent's prompt. Each level includes everything from the previous level:
@@ -129,7 +140,14 @@ wg edit <ID> [OPTIONS]
 | `--cycle-delay <DUR>` | Set delay between cycle iterations |
 | `--visibility <LEVEL>` | Set task visibility zone: `internal`, `peer`, `public` |
 | `--context-scope <SCOPE>` | Set context scope for prompt assembly: `clean`, `task`, `graph`, `full` |
-| `--exec-mode <MODE>` | Set execution mode: `full` (default) or `bare` (lightweight, no file I/O tools) |
+| `--exec-mode <MODE>` | Set execution weight: `full` (default), `light` (read-only tools), `bare` (wg CLI only), `shell` (no LLM) |
+| `--provider <PROVIDER>` | Update provider for this task (`anthropic`, `openai`, `openrouter`, `local`) |
+| `--verify <CRITERIA>` | Set or update verification criteria (shell command that must pass before done) |
+| `--delay <DUR>` | Delay before task becomes ready (e.g., `30s`, `5m`, `1h`, `1d`) |
+| `--not-before <TIMESTAMP>` | Absolute timestamp before which task won't be dispatched (ISO 8601) |
+| `--no-converge` | Force all cycle iterations to run (agents cannot signal convergence) |
+| `--no-restart-on-failure` | Disable automatic cycle restart on failure |
+| `--max-failure-restarts <N>` | Maximum failure-triggered cycle restarts (default: 3) |
 
 Triggers a `graph_changed` IPC notification to the service daemon, so the coordinator picks up changes immediately.
 
@@ -156,8 +174,17 @@ wg edit my-task --cycle-delay "5m"
 # Reduce context for a simple task
 wg edit my-task --context-scope clean
 
-# Use bare execution mode (no file I/O tools)
+# Use bare execution mode (wg CLI only)
 wg edit my-task --exec-mode bare
+
+# Set or update verification criteria
+wg edit my-task --verify "cargo test test_feature passes"
+
+# Set a provider
+wg edit my-task --provider openrouter
+
+# Schedule a delay
+wg edit my-task --delay 1h
 ```
 
 ---
@@ -2039,6 +2066,22 @@ wg service stop --kill-agents
 
 ---
 
+### `wg service restart`
+
+Restart the service daemon (graceful stop then start).
+
+```bash
+wg service restart
+```
+
+**Example:**
+```bash
+wg service restart
+# Gracefully stops the daemon and starts it again with the same config
+```
+
+---
+
 ### `wg service status`
 
 Show daemon PID, uptime, agent summary, and coordinator state.
@@ -2151,6 +2194,82 @@ wg service install
 ```bash
 wg service install
 # Outputs a systemd unit file; follow instructions to enable auto-start
+```
+
+### `wg service create-coordinator`
+
+Create a new coordinator session.
+
+```bash
+wg service create-coordinator [--name <NAME>]
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--name <NAME>` | Optional name for the coordinator |
+
+**Example:**
+```bash
+wg service create-coordinator --name "release-v2"
+# Creates a new coordinator session with the given name
+```
+
+---
+
+### `wg service delete-coordinator`
+
+Delete a coordinator session.
+
+```bash
+wg service delete-coordinator <ID>
+```
+
+**Arguments:**
+- `ID` — Coordinator ID to delete (required)
+
+**Example:**
+```bash
+wg service delete-coordinator 2
+# Permanently removes coordinator session 2
+```
+
+---
+
+### `wg service archive-coordinator`
+
+Archive a coordinator session (mark as Done).
+
+```bash
+wg service archive-coordinator <ID>
+```
+
+**Arguments:**
+- `ID` — Coordinator ID to archive (required)
+
+**Example:**
+```bash
+wg service archive-coordinator 1
+# Marks coordinator 1 as Done — preserved in history but no longer active
+```
+
+---
+
+### `wg service stop-coordinator`
+
+Stop a coordinator session (kill agent, reset to Open).
+
+```bash
+wg service stop-coordinator <ID>
+```
+
+**Arguments:**
+- `ID` — Coordinator ID to stop (required)
+
+**Example:**
+```bash
+wg service stop-coordinator 1
+# Kills the coordinator agent and resets the session to Open
 ```
 
 ---
@@ -2324,6 +2443,7 @@ wg chat [OPTIONS] [MESSAGE]
 | `--clear` | Clear chat history |
 | `--timeout <TIMEOUT>` | Timeout in seconds waiting for response (default: 120) |
 | `--attachment <ATTACHMENT>` | Attach a file (copied to `.workgraph/attachments/`) |
+| `--coordinator <ID>` | Target coordinator ID (default: 0) — for multi-coordinator setups |
 
 **Examples:**
 ```bash
@@ -2345,6 +2465,199 @@ wg chat "Review this file" --attachment src/main.rs
 ## Model and Endpoint Management
 
 See [docs/models.md](models.md) for the full guide including architecture, security model, and common configurations.
+
+### `wg model`
+
+Model registry and routing management.
+
+```bash
+wg model <SUBCOMMAND>
+```
+
+**Subcommands:**
+| Subcommand | Description |
+|------------|-------------|
+| `list` | Show all models in the registry (built-in + user-defined) |
+| `add <ALIAS>` | Add or update a model in the config registry |
+| `remove <ALIAS>` | Remove a model from the config registry |
+| `set-default <ALIAS>` | Set the default model for agent dispatch |
+| `routing` | Show per-role model routing configuration |
+| `set <ROLE> <MODEL>` | Set the model for a specific dispatch role |
+
+#### `wg model list`
+
+```bash
+wg model list [--tier <TIER>]
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--tier <TIER>` | Filter by tier: `fast`, `standard`, `premium` |
+
+#### `wg model add`
+
+```bash
+wg model add <ALIAS> --provider <PROVIDER> [OPTIONS]
+```
+
+**Arguments:**
+- `ALIAS` — Short alias for the model (e.g., `gpt-4o`, `claude-via-openrouter`)
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--provider <PROVIDER>` | Provider: `anthropic`, `openai`, `openrouter`, `local` (required) |
+| `--model-id <ID>` | Full API model identifier (defaults to alias if omitted) |
+| `--tier <TIER>` | Quality tier: `fast`, `standard`, `premium` (default: `standard`) |
+| `--endpoint <NAME>` | Named endpoint to use for this model |
+| `--context-window <N>` | Context window in tokens |
+| `--cost-in <N>` | Cost per million input tokens (USD) |
+| `--cost-out <N>` | Cost per million output tokens (USD) |
+| `--global` | Write to global config (`~/.workgraph/config.toml`) |
+
+#### `wg model remove`
+
+```bash
+wg model remove <ALIAS> [--force] [--global]
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--force` | Skip confirmation for entries referenced by roles |
+| `--global` | Write to global config |
+
+#### `wg model set-default`
+
+```bash
+wg model set-default <ALIAS> [--global]
+```
+
+Sets the default model for agent dispatch. The alias must exist in the registry.
+
+#### `wg model routing`
+
+```bash
+wg model routing
+```
+
+Show per-role model routing configuration.
+
+#### `wg model set`
+
+```bash
+wg model set <ROLE> <MODEL> [OPTIONS]
+```
+
+**Arguments:**
+- `ROLE` — Role name (e.g., `default`, `evaluator`, `triage`, `compactor`)
+- `MODEL` — Model alias or ID
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--provider <PROVIDER>` | Also set provider for this role |
+| `--endpoint <ENDPOINT>` | Also set endpoint for this role |
+| `--tier <TIER>` | Set tier override instead of direct model |
+| `--global` | Write to global config |
+
+**Examples:**
+```bash
+# List all models
+wg model list
+
+# Filter by tier
+wg model list --tier premium
+
+# Add a model
+wg model add gpt-4o --provider openai --tier standard --cost-in 2.5 --cost-out 10.0
+
+# Set the default model
+wg model set-default sonnet
+
+# Show routing
+wg model routing
+
+# Set evaluator to use opus
+wg model set evaluator opus
+
+# Set triage to use haiku via openrouter
+wg model set triage haiku --provider openrouter
+```
+
+---
+
+### `wg key`
+
+Manage API keys for LLM providers.
+
+```bash
+wg key <SUBCOMMAND>
+```
+
+**Subcommands:**
+| Subcommand | Description |
+|------------|-------------|
+| `set <PROVIDER>` | Configure an API key for a provider |
+| `check [PROVIDER]` | Validate API key availability and status |
+| `list` | Show key configuration status for all providers |
+
+#### `wg key set`
+
+```bash
+wg key set <PROVIDER> [OPTIONS]
+```
+
+**Arguments:**
+- `PROVIDER` — Provider name (e.g., `openrouter`, `anthropic`, `openai`)
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--env <VAR>` | Reference an environment variable by name |
+| `--file <PATH>` | Path to a file containing the key |
+| `--value <VALUE>` | Store key value directly (written to `~/.workgraph/keys/<provider>.key`, NOT to config) |
+| `--global` | Apply to global config (`~/.workgraph/config.toml`) |
+
+#### `wg key check`
+
+```bash
+wg key check [PROVIDER]
+```
+
+Validate API key availability and status. Omit provider to check all.
+
+#### `wg key list`
+
+```bash
+wg key list
+```
+
+Show key configuration status for all providers.
+
+**Examples:**
+```bash
+# Set a key from a file
+wg key set openrouter --file ~/.secrets/openrouter.key
+
+# Set a key from an environment variable
+wg key set anthropic --env ANTHROPIC_API_KEY
+
+# Store a key value directly
+wg key set openai --value sk-abc123...
+
+# Check all keys
+wg key check
+
+# Check a specific provider
+wg key check openrouter
+
+# Show key status
+wg key list
+```
+
+---
 
 ### `wg models`
 
@@ -2613,8 +2926,11 @@ With no options (or `--show`), displays current configuration.
 | `--coordinator-interval <SECS>` | Set coordinator tick interval |
 | `--poll-interval <SECS>` | Set service daemon background poll interval |
 | `--coordinator-executor <NAME>` | Set coordinator executor |
+| `--max-coordinators <N>` | Set max concurrent coordinator agents (LLM sessions). Default: 4 |
 | `--auto-evaluate <BOOL>` | Enable/disable automatic evaluation |
 | `--auto-assign <BOOL>` | Enable/disable automatic identity assignment |
+| `--auto-place <BOOL>` | Enable/disable automatic placement analysis on new tasks |
+| `--auto-create <BOOL>` | Enable/disable automatic creator agent invocation |
 | `--assigner-model <MODEL>` | Set model for assigner agents |
 | `--evaluator-model <MODEL>` | Set model for evaluator agents |
 | `--evolver-model <MODEL>` | Set model for evolver agents |
@@ -2624,10 +2940,31 @@ With no options (or `--show`), displays current configuration.
 | `--creator-agent <HASH>` | Set creator agent (content-hash) |
 | `--creator-model <MODEL>` | Set model for creator agents |
 | `--retention-heuristics <TEXT>` | Set retention heuristics (prose policy for evolver) |
+| `--max-child-tasks <N>` | Max tasks a single agent can create per execution (default: 10) |
+| `--max-task-depth <N>` | Max depth of task dependency chains from root (default: 8) |
 | `--auto-triage <BOOL>` | Enable/disable automatic triage of dead agents |
 | `--triage-model <MODEL>` | Set model for triage (default: haiku) |
 | `--triage-timeout <SECS>` | Set timeout for triage calls (default: 30) |
 | `--triage-max-log-bytes <N>` | Set max bytes for triage log reading (default: 50000) |
+| `--eval-gate-threshold <N>` | Set evaluation gate threshold (0.0–1.0). Evaluations below this score reject the original task. Only applies to tasks tagged `eval-gate` unless `--eval-gate-all` is set |
+| `--eval-gate-all <BOOL>` | Apply eval gate to ALL evaluated tasks, not just those tagged `eval-gate` |
+| `--flip-enabled <BOOL>` | Enable or disable FLIP (roundtrip intent fidelity) evaluation |
+| `--flip-inference-model <MODEL>` | Model for FLIP inference phase (reconstructing prompt from output) |
+| `--flip-comparison-model <MODEL>` | Model for FLIP comparison phase (scoring similarity) |
+| `--flip-verification-threshold <N>` | FLIP score threshold for triggering verification (default: 0.7) |
+| `--flip-verification-model <MODEL>` | Model for FLIP-triggered verification agents (default: opus) |
+| `--chat-history <BOOL>` | Enable/disable chat history persistence across TUI restarts |
+| `--chat-history-max <N>` | Maximum number of chat messages to persist (default: 1000) |
+| `--tui-counters <LIST>` | TUI time counters (comma-separated: `uptime`, `cumulative`, `active`, `session`) |
+| `--retry-context-tokens <N>` | Max tokens of previous-attempt context to inject on retry (default: 2000, 0 = disabled) |
+| `--viz-edge-color <STYLE>` | Viz edge color style: `gray` (default), `white`, or `mixed` |
+| `--install-global` | Install project config as global default (`~/.workgraph/config.toml`) |
+| `--force` | Skip confirmation when overwriting existing global config |
+| `--homeserver <URL>` | Set Matrix homeserver URL |
+| `--username <USER>` | Set Matrix username |
+| `--password <PASS>` | Set Matrix password |
+| `--access-token <TOKEN>` | Set Matrix access token |
+| `--room <ROOM>` | Set Matrix default room |
 | `--models` | Show all model routing assignments (per-role model+provider) |
 | `--set-model <ROLE> <MODEL>` | Set model for a dispatch role |
 | `--set-provider <ROLE> <PROVIDER>` | Set provider for a dispatch role |
@@ -2635,7 +2972,7 @@ With no options (or `--show`), displays current configuration.
 | `--role-model <ROLE=MODEL>` | Set model for a role (key=value syntax) |
 | `--role-provider <ROLE=PROVIDER>` | Set provider for a role (key=value syntax) |
 | `--registry` | Show all model registry entries (built-in + user-defined) |
-| `--registry-add` | Add a model to the registry (use with --id, --provider, etc.) |
+| `--registry-add` | Add a model to the registry (use with `--id`, `--provider`, `--reg-model`, `--reg-tier`, `--endpoint`, `--context-window`, `--cost-input`, `--cost-output`) |
 | `--registry-remove <ID>` | Remove a model from the registry |
 | `--tiers` | Show current tier→model assignments |
 | `--tier <TIER=MODEL_ID>` | Set which model a tier uses (e.g., `--tier standard=gpt-4o`) |
@@ -2681,6 +3018,25 @@ wg config --registry-add --id gpt-4o --provider openai --reg-model gpt-4o --reg-
 # API key management
 wg config --set-key openrouter --file ~/.secrets/openrouter.key
 wg config --check-key
+
+# Eval gate and FLIP
+wg config --eval-gate-threshold 0.7 --eval-gate-all true
+wg config --flip-enabled true --flip-verification-threshold 0.7
+
+# Automation flags
+wg config --auto-place true --auto-create true
+
+# Multi-coordinator
+wg config --max-coordinators 6
+
+# Chat history
+wg config --chat-history true --chat-history-max 500
+
+# Install project config as global default
+wg config --install-global
+
+# Matrix integration
+wg config --homeserver https://matrix.example.com --username bot --room '#ops:example.com'
 ```
 
 ---
@@ -2850,6 +3206,32 @@ wg compact
 ```bash
 wg compact
 # Distills current graph state into .workgraph/context.md for context preservation
+```
+
+---
+
+### `wg sweep`
+
+Detect and recover orphaned in-progress tasks with dead agents.
+
+```bash
+wg sweep [--dry-run]
+```
+
+Sweep detects in-progress tasks whose assigned agent has died, been marked Dead, or is missing from the registry. It resets them to Open so the coordinator can re-dispatch. Safe to run anytime — it is idempotent.
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Only report orphaned tasks, don't fix them |
+
+**Examples:**
+```bash
+wg sweep --dry-run
+# Preview orphaned tasks without fixing them
+
+wg sweep
+# Reset all orphaned in-progress tasks to Open
 ```
 
 ---
