@@ -1101,6 +1101,7 @@ fn build_auto_assign_tasks(
             composition_id: resolved_agent.id.clone(),
             timestamp: Utc::now().to_rfc3339(),
             mode: assignment_mode,
+            agency_task_id: None,
         };
 
         let assignments_dir = agency_dir.join("assignments");

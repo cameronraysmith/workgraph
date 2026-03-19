@@ -109,14 +109,18 @@ fn build_placement_context(graph: &WorkGraph, task_id: &str) -> String {
 
     ctx.push_str("\n## Your job\n");
     ctx.push_str(&format!(
-        "Add `--after` or `--before` edges to the MAIN task '{}' only.\n",
+        "Decide where task '{}' belongs in the dependency graph.\n",
         task_id
     ));
-    ctx.push_str("Do NOT modify .assign-*, .flip-*, .evaluate-*, or any other dot-task.\n");
-    ctx.push_str("Use: wg edit ");
+    ctx.push_str("Do NOT modify .assign-*, .flip-*, .evaluate-*, or any other dot-task.\n\n");
+    ctx.push_str("## Output format (CRITICAL)\n");
+    ctx.push_str("You MUST output EXACTLY one line as the LAST LINE of your response:\n");
+    ctx.push_str("- A `wg edit` command to add edges: `wg edit ");
     ctx.push_str(task_id);
-    ctx.push_str(" --after <dep-id>  (or --before <dep-id>)\n");
-    ctx.push_str("If no placement changes are needed, do nothing (no-op is valid).\n");
+    ctx.push_str(" --after <dep-id>` (or `--before <dep-id>`, or both)\n");
+    ctx.push_str("- OR the word `no-op` if no placement changes are needed\n\n");
+    ctx.push_str("You may reason about the placement above the last line, but the LAST LINE\n");
+    ctx.push_str("must be the command or `no-op`. Do NOT run any commands yourself.\n");
 
     ctx
 }
@@ -1126,15 +1130,26 @@ mod tests {
 
         let place = graph.get_task(".place-foo").unwrap();
         let desc = place.description.as_deref().unwrap_or("");
-        // Description must restrict edges to the main task
+        // Description must reference the task being placed
         assert!(
-            desc.contains("MAIN task") || desc.contains("main task"),
-            "Placement task description should restrict edges to main task, got: {}",
+            desc.contains("task 'foo'"),
+            "Placement task description should reference the task being placed, got: {}",
             desc
         );
         assert!(
             desc.contains("Do NOT") || desc.contains("do not"),
             "Placement task description should prohibit modifying dot-tasks, got: {}",
+            desc
+        );
+        // Structured output format: must tell agent to output command on last line
+        assert!(
+            desc.contains("LAST LINE"),
+            "Placement task description should specify structured output format, got: {}",
+            desc
+        );
+        assert!(
+            desc.contains("Do NOT run any commands"),
+            "Placement task description should prohibit running commands, got: {}",
             desc
         );
         // Minimal context: should NOT contain full task description content

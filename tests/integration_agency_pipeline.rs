@@ -1019,9 +1019,10 @@ fn publish_place_task_description_restricts_to_main_task_only() {
     let place = graph.get_task(".place-my-task").unwrap();
     let desc = place.description.as_deref().unwrap_or("");
 
+    // Description must reference the task being placed
     assert!(
-        desc.contains("MAIN task") || desc.contains("main task"),
-        "Placement task description should restrict edges to the main task, got:\n{}",
+        desc.contains("task 'my-task'"),
+        "Placement task description should reference the task being placed, got:\n{}",
         desc
     );
     assert!(
@@ -1034,6 +1035,17 @@ fn publish_place_task_description_restricts_to_main_task_only() {
     assert!(
         mentions_dot_tasks,
         "Description should mention that dot-tasks must not be modified, got:\n{}",
+        desc
+    );
+    // Structured output: must specify command-on-last-line format
+    assert!(
+        desc.contains("LAST LINE"),
+        "Placement task description should specify structured output format, got:\n{}",
+        desc
+    );
+    assert!(
+        desc.contains("Do NOT run any commands"),
+        "Placement task description should prohibit running commands, got:\n{}",
         desc
     );
 }
