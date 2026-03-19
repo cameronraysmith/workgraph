@@ -28,9 +28,10 @@ pub use ipc::{IpcRequest, IpcResponse};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::IsTerminal;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read as _, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::{Arc, Mutex};
@@ -186,6 +187,33 @@ pub fn tail_log(dir: &Path, n: usize, level_filter: Option<&str>) -> Vec<String>
         .into_iter()
         .rev()
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Binary hash for self-restart detection
+// ---------------------------------------------------------------------------
+
+/// Compute SHA-256 of the file at `path`.
+///
+/// Uses streaming reads to avoid loading the entire binary into memory at once.
+/// Returns the 32-byte digest on success.
+fn compute_exe_hash(path: &Path) -> std::io::Result<[u8; 32]> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher.finalize().into())
+}
+
+/// Format first 12 hex chars of a 32-byte hash for log messages.
+fn short_hash(hash: &[u8; 32]) -> String {
+    hex::encode(&hash[..6])
 }
 
 /// Default socket path (project-specific, inside .workgraph dir)
@@ -1611,6 +1639,36 @@ pub fn run_daemon(
         socket_path,
     ));
 
+    // --- Binary self-restart detection ---
+    // Record the exe path and its metadata at startup so we can detect when
+    // `cargo install` (or similar) replaces the binary on disk.  We use
+    // mtime + size as the cheap per-tick check (instant), then compute a
+    // SHA-256 hash to confirm the content actually changed and the write is
+    // complete.  The initial reference hash is computed in a background thread
+    // to avoid blocking the main loop (important for large debug binaries).
+    let exe_path = std::env::current_exe().ok();
+    let exe_initial_meta = exe_path.as_ref().and_then(|p| fs::metadata(p).ok());
+    let original_args: Vec<String> = std::env::args().collect();
+    let exe_hash_receiver: Option<std::sync::mpsc::Receiver<[u8; 32]>> =
+        exe_path.as_ref().map(|p| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let path = p.clone();
+            std::thread::spawn(move || {
+                if let Ok(h) = compute_exe_hash(&path) {
+                    let _ = tx.send(h);
+                }
+            });
+            rx
+        });
+    let mut exe_initial_hash: Option<[u8; 32]> = None;
+    if let (Some(p), Some(meta)) = (&exe_path, &exe_initial_meta) {
+        logger.info(&format!(
+            "Binary change detection armed: {} (size={})",
+            p.display(),
+            meta.len(),
+        ));
+    }
+
     // Ensure socket directory exists
     if let Some(parent) = socket.parent()
         && !parent.exists()
@@ -2032,6 +2090,113 @@ pub fn run_daemon(
                     }
                     coord_state.save(&dir);
                     logger.error(&format!("Coordinator tick error: {}", e));
+                }
+            }
+
+            // --- Binary self-restart check ---
+            // After each tick, see if the wg binary on disk has been replaced
+            // (e.g. by `cargo install --path .`).  If so, exec-replace the
+            // current process with the new binary, preserving all CLI args.
+            //
+            // Flow: (1) compute initial hash on first tick (lazy, avoids
+            // blocking startup), (2) cheap mtime+size gate each tick,
+            // (3) hash only when metadata changes, (4) compare to initial
+            // hash to avoid false restarts on `touch`.
+            if let Some(path) = &exe_path {
+                // Check if the background hash computation has finished.
+                if exe_initial_hash.is_none() {
+                    if let Some(rx) = &exe_hash_receiver {
+                        if let Ok(h) = rx.try_recv() {
+                            logger.info(&format!(
+                                "Binary hash recorded: {}",
+                                short_hash(&h),
+                            ));
+                            exe_initial_hash = Some(h);
+                        }
+                    }
+                }
+
+                // Cheap metadata check: skip hash if mtime+size unchanged.
+                if let (Some(initial_meta), Some(old_hash)) =
+                    (&exe_initial_meta, &exe_initial_hash)
+                {
+                    let meta_changed = fs::metadata(path).ok().is_some_and(|m| {
+                        m.modified().ok() != initial_meta.modified().ok()
+                            || m.len() != initial_meta.len()
+                    });
+                    if meta_changed {
+                        logger.info("Binary metadata changed, verifying with hash...");
+                        if let Ok(hash1) = compute_exe_hash(path) {
+                            if hash1 == *old_hash {
+                                // Content unchanged (e.g. `touch`), no restart.
+                                logger.info("Binary content unchanged despite metadata change");
+                            } else {
+                                // Content differs — wait and re-hash for stability.
+                                std::thread::sleep(Duration::from_secs(1));
+                                match compute_exe_hash(path) {
+                                    Ok(hash2) if hash2 == hash1 => {
+                                        logger.info(&format!(
+                                            "Detected wg binary change (old: {}, new: {}), restarting service...",
+                                            short_hash(old_hash),
+                                            short_hash(&hash1),
+                                        ));
+
+                                        // Pre-exec cleanup: save coordinator state.
+                                        coord_state.save(&dir);
+
+                                        // Shut down coordinator agents (LLM sessions).
+                                        // Running task agents are separate processes
+                                        // and survive exec.
+                                        let agents_to_shutdown: Vec<(u32, coordinator_agent::CoordinatorAgent)> =
+                                            coordinator_agents.drain().collect();
+                                        for (cid, agent) in agents_to_shutdown {
+                                            logger.info(&format!(
+                                                "Shutting down coordinator agent {} before exec-restart",
+                                                cid
+                                            ));
+                                            agent.shutdown();
+                                        }
+
+                                        // Remove the socket so the new process can
+                                        // re-bind. The listener fd is closed by exec().
+                                        let _ = fs::remove_file(&socket);
+
+                                        logger.info(&format!(
+                                            "Exec-replacing with: {} {}",
+                                            path.display(),
+                                            original_args[1..].join(" "),
+                                        ));
+
+                                        // exec() replaces the process image — only
+                                        // returns on error.
+                                        use std::os::unix::process::CommandExt;
+                                        let err = process::Command::new(path)
+                                            .args(&original_args[1..])
+                                            .exec();
+                                        // If we get here, exec failed.
+                                        logger.error(&format!(
+                                            "Exec-restart failed: {}. Continuing with old binary.",
+                                            err
+                                        ));
+                                        // Update stored hash so we don't retry.
+                                        exe_initial_hash = Some(hash1);
+                                    }
+                                    Ok(_) => {
+                                        // Hash changed between checks — still writing.
+                                        logger.info(
+                                            "Binary hash unstable (mid-write?), deferring restart check",
+                                        );
+                                    }
+                                    Err(e) => {
+                                        logger.warn(&format!(
+                                            "Failed to re-read binary for restart check: {}",
+                                            e
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -3359,5 +3524,50 @@ mod tests {
             Status::Open,
             ".compact-0 should remain Open when blocked"
         );
+    }
+
+    #[test]
+    fn test_compute_exe_hash_known_file() {
+        // Create a temp file with known content and verify hash is deterministic.
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("test_binary");
+        fs::write(&path, b"hello world").unwrap();
+
+        let hash1 = compute_exe_hash(&path).unwrap();
+        let hash2 = compute_exe_hash(&path).unwrap();
+        assert_eq!(hash1, hash2, "hashing the same file twice should be identical");
+
+        // Verify against known SHA-256 of "hello world"
+        let expected = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+        assert_eq!(hex::encode(hash1), expected);
+    }
+
+    #[test]
+    fn test_compute_exe_hash_detects_change() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("test_binary");
+        fs::write(&path, b"version 1").unwrap();
+        let hash1 = compute_exe_hash(&path).unwrap();
+
+        fs::write(&path, b"version 2").unwrap();
+        let hash2 = compute_exe_hash(&path).unwrap();
+        assert_ne!(hash1, hash2, "different content should produce different hashes");
+    }
+
+    #[test]
+    fn test_compute_exe_hash_nonexistent() {
+        let result = compute_exe_hash(Path::new("/nonexistent/binary"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_short_hash_format() {
+        let hash = [0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89,
+                     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let s = short_hash(&hash);
+        assert_eq!(s, "abcdef012345");
+        assert_eq!(s.len(), 12, "short_hash should produce 12 hex chars");
     }
 }
