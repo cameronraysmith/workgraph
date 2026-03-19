@@ -20,40 +20,61 @@ Tasks are the fundamental units of work. Each task has:
 
 - **id**: Unique identifier (auto-generated from title or specified manually)
 - **title**: Human-readable description of the work
-- **status**: Current state (open, in-progress, done, failed, abandoned)
+- **description**: Detailed body text, acceptance criteria, etc.
+- **status**: Current state (open, blocked, in-progress, pending-validation, done, failed, abandoned, waiting)
 - **after**: List of task IDs that must complete before this task can start
+- **before**: List of task IDs that this task blocks
 - **assigned**: Agent currently working on the task
 - **estimate**: Optional hours and/or cost estimate
+- **tags**: Labels for filtering and categorization
 - **skills**: Required capabilities to complete the task
 - **inputs**: Files or context needed to start work
 - **deliverables**: Expected outputs when complete
 - **artifacts**: Actual produced outputs (populated on completion)
+- **model**: Preferred LLM model override (e.g., `opus`, `sonnet`, `haiku`)
+- **provider**: LLM provider override (`anthropic`, `openai`, `openrouter`, `local`)
+- **verify**: Validation criteria — triggers `pending-validation` gate on completion
+- **exec_mode**: Agent capability tier (`full`, `light`, `bare`, `shell`)
+- **visibility**: Trace export zone (`internal`, `public`, `peer`)
+- **context_scope**: How much context the coordinator injects (`clean`, `task`, `graph`, `full`)
+- **not_before**: Earliest dispatch time (ISO 8601)
+- **cycle_config**: Cycle iteration settings (`max_iterations`, convergence, etc.)
+- **retry_count / max_retries**: Retry tracking and limits
 
 ### Status Flow
 
 ```
-     ┌──────────────────────────────────┐
-     │                                  │
-     v                                  │
-   open ──────> in-progress ──────> done
-     │              │                   │
-     │              │                   │
-     │              v                   │
-     │          failed ────> (retry) ───┘
+     ┌────────────────────────────────────────────────────────┐
+     │                                                        │
+     v                                                        │
+   open ──────> in-progress ──────> done                      │
+     │              │    │                                    │
+     │              │    └──> pending-validation               │
+     │              │              │         │                │
+     │              │              v         v                │
+     │              │            done    open (rejected)       │
+     │              │                                         │
+     │              ├──> waiting ──────> in-progress (resumed) │
+     │              │                                         │
+     │              v                                         │
+     │          failed ──────────> (retry) ───────────────────┘
      │              │
      │              v
      │         abandoned
      │
-     └──────────────────────────────────> abandoned
+     └────────────────────────────────────────────────────────> abandoned
 ```
 
-- **open**: Task exists but work has not started
+- **open**: Task exists but work has not started; all dependencies are met
+- **blocked**: Task has incomplete `after` dependencies (derived — transitions to open when unblocked)
 - **in-progress**: Task has been claimed and is being worked on
-- **done**: Task completed successfully
-- **failed**: Task attempted but failed (can be retried)
+- **pending-validation**: Agent called `wg done`, but `--verify` criteria require review (`wg approve` / `wg reject`)
+- **done**: Task completed successfully (and validated, if applicable)
+- **failed**: Task attempted but failed (can be retried with `wg retry`)
 - **abandoned**: Task will not be completed (terminal state)
+- **waiting**: Task is paused, waiting for an external event or manual intervention (`wg resume` to continue)
 
-A task is **waiting** (derived state) when any of its `after` dependencies are not yet terminal. Only ready (unblocked, open) tasks appear in `wg ready`.
+Only **ready** (open, unblocked) tasks appear in `wg ready`.
 
 ### Agents
 
@@ -273,6 +294,10 @@ wg list --json | jq '[.[] | select(.status == "open")] | length'
 # Get IDs of ready tasks
 wg ready --json | jq -r '.[].id'
 ```
+
+### Peer Workgraphs
+
+Workgraph instances in separate repositories can communicate via the peer system. Register peers with `wg peer add <name> <path>` and create cross-repo tasks with `wg add "Task" --repo <peer>`. See the [Command Reference](./COMMANDS.md) for details.
 
 ## See Also
 

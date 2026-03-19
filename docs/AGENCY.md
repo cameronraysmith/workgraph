@@ -19,6 +19,7 @@ A role defines **what** an agent does.
 | `performance` | Aggregated evaluation scores | No (mutable) |
 | `lineage` | Evolutionary history | No (mutable) |
 | `default_context_scope` | Default context scope for tasks dispatched with this role (`clean`, `task`, `graph`, `full`) | No (mutable) |
+| `default_exec_mode` | Default execution mode for tasks with this role (`full`, `light`, `bare`, `shell`) | No (mutable) |
 
 ### Tradeoff
 
@@ -374,6 +375,11 @@ wg evolve run                                     # full cycle, all strategies
 wg evolve run --strategy mutation --budget 3      # targeted changes
 wg evolve run --model opus                        # use specific model
 wg evolve run --dry-run                           # preview without applying
+wg evolve run --autopoietic                       # enable autopoietic cycle mode
+wg evolve run --autopoietic --max-iterations 5    # cycle with custom iteration limit (default: 3)
+wg evolve run --autopoietic --cycle-delay 1800    # custom delay between iterations (default: 3600s)
+wg evolve run --force-fanout                      # force fan-out mode even with <50 evaluations
+wg evolve run --single-shot                       # force legacy single-shot mode even with ≥50 evaluations
 ```
 
 ## CLI Reference
@@ -451,6 +457,8 @@ wg evaluate show [--task <id>] [--agent <id>] [--source <glob>] [--limit <N>]
 
 ```bash
 wg evolve run [--strategy <name>] [--budget <N>] [--model <model>] [--dry-run]
+              [--autopoietic] [--max-iterations <N>] [--cycle-delay <secs>]
+              [--force-fanout] [--single-shot]
 ```
 
 ### `wg agency stats`
@@ -869,16 +877,38 @@ placer_agent = ""                  # content-hash of placer agent
 retention_heuristics = ""          # prose policy for retirement decisions
 triage_timeout = 30                # timeout in seconds for triage calls
 triage_max_log_bytes = 50000       # max bytes of agent log to read for triage
+auto_assign_grace_seconds = 10    # seconds after task creation before auto-assign eligible
+
+# Evaluation gate settings
+eval_gate_threshold = 0.7         # evaluations below this score reject the task (None = disabled)
+eval_gate_all = false             # apply eval gate to ALL tasks, not just those tagged 'eval-gate'
 
 # FLIP settings
 flip_enabled = false               # enable FLIP fidelity evaluation (default: false)
-flip_verification_threshold = 0.7  # FLIP score below this triggers Opus verification
+flip_inference_model = "sonnet"   # model for FLIP inference phase (reconstructing prompt)
+flip_comparison_model = "haiku"   # model for FLIP comparison phase (scoring similarity)
+flip_verification_threshold = 0.7  # FLIP score below this triggers verification
+flip_verification_model = "opus"  # model for FLIP-triggered verification agents
 
 # Auto-evolve settings
 auto_evolve = false                # enable automatic evolution cycles
 evolution_interval = 7200          # minimum seconds between cycles (default: 2h)
 evolution_threshold = 10           # new evals needed to trigger (default: 10)
 evolution_budget = 5               # max operations per auto-evolve cycle
+evolution_reactive_threshold = 0.4 # avg score below this triggers reactive evolution
+
+# Learning/exploration settings
+exploration_interval = 20         # force learning assignment every N tasks (0 = disabled)
+cache_population_threshold = 0.8  # score threshold for populating composition cache
+ucb_exploration_constant = 1.414  # UCB exploration constant C for primitive selection
+novelty_bonus_multiplier = 1.5    # multiplier for low-attractor-weight primitives
+bizarre_ideation_interval = 10    # force bizarre ideation every N learning assignments (0 = disabled)
+
+# Agency server integration
+agency_server_url = ""            # URL of Agency server for evaluation feedback (empty = disabled)
+agency_token_path = ""            # path to file containing Agency API token
+agency_project_id = ""            # project ID on the Agency server
+assignment_source = ""            # default assignment source label (e.g. "native", "agency")
 
 # Per-role model routing (alternative to legacy model fields above)
 [models.flip_inference]
@@ -910,6 +940,12 @@ wg config --creator-agent abc123
 wg config --retention-heuristics "Retire roles scoring below 0.3 after 10 evaluations"
 wg config --triage-timeout 30
 wg config --triage-max-log-bytes 50000
+wg config --eval-gate-threshold 0.7
+wg config --eval-gate-all true
 wg config --flip-enabled true
+wg config --flip-inference-model sonnet
+wg config --flip-comparison-model haiku
+wg config --flip-verification-threshold 0.7
+wg config --flip-verification-model opus
 wg config --auto-evolve true
 ```
