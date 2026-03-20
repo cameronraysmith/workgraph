@@ -363,6 +363,11 @@ impl AgentRegistry {
         self.agents.values().find(|a| a.task_id == task_id)
     }
 
+    /// Get mutable agent by task ID (returns first match)
+    pub fn get_agent_by_task_mut(&mut self, task_id: &str) -> Option<&mut AgentEntry> {
+        self.agents.values_mut().find(|a| a.task_id == task_id)
+    }
+
     /// Update heartbeat for an agent
     pub fn heartbeat(&mut self, agent_id: &str) -> bool {
         if let Some(agent) = self.agents.get_mut(agent_id) {

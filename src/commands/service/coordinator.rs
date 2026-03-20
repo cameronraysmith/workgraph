@@ -25,7 +25,7 @@ use workgraph::query::ready_tasks_with_peers_cycle_aware;
 use workgraph::service::registry::AgentRegistry;
 
 use super::triage;
-use crate::commands::{graph_path, is_process_alive, spawn};
+use crate::commands::{graph_path, is_process_alive, kill_process_graceful, spawn};
 
 /// Result of a single coordinator tick
 pub struct TickResult {
@@ -66,6 +66,45 @@ fn cleanup_and_count_alive(
         }
         Err(e) => {
             eprintln!("[coordinator] Reconciliation warning: {}", e);
+        }
+    }
+
+    // Task-status-aware reaping: detect agents whose tasks are Done/Failed
+    // but whose processes are still alive (e.g., Claude CLI hung after `wg done`).
+    // Send SIGTERM to free the agent slot.
+    {
+        let graph = load_graph(graph_path).context("Failed to load graph for task-aware reaping")?;
+        let mut locked_registry = AgentRegistry::load_locked(dir)?;
+        let mut killed = Vec::new();
+        for agent in locked_registry.registry.agents.values() {
+            if !agent.is_alive() || !is_process_alive(agent.pid) {
+                continue;
+            }
+            if let Some(task) = graph.get_task(&agent.task_id) {
+                if task.status.is_terminal() {
+                    eprintln!(
+                        "[coordinator] Agent {} (PID {}) still alive but task '{}' is {:?} — sending SIGTERM",
+                        agent.id, agent.pid, agent.task_id, task.status
+                    );
+                    killed.push((agent.id.clone(), agent.pid));
+                }
+            }
+        }
+        for (agent_id, pid) in &killed {
+            if let Some(agent) = locked_registry.get_agent_mut(agent_id) {
+                agent.status = workgraph::service::registry::AgentStatus::Dead;
+                if agent.completed_at.is_none() {
+                    agent.completed_at = Some(Utc::now().to_rfc3339());
+                }
+            }
+            let _ = kill_process_graceful(*pid, 5);
+        }
+        if !killed.is_empty() {
+            locked_registry.save_ref()?;
+            eprintln!(
+                "[coordinator] Killed {} zombie agent(s) with completed tasks",
+                killed.len()
+            );
         }
     }
 

@@ -100,6 +100,20 @@ fn run_inner(dir: &Path, id: &str, reason: Option<&str>, eval_reject: bool) -> R
     save_graph(&graph, &path).context("Failed to save graph")?;
     super::notify_graph_changed(dir);
 
+    // Update agent registry to reflect task failure.
+    // Without this, the registry entry stays at Working until the daemon's
+    // periodic triage detects the dead process.
+    if let Ok(mut locked_registry) = AgentRegistry::load_locked(dir) {
+        if let Some(agent) = locked_registry.get_agent_by_task_mut(id) {
+            use workgraph::service::registry::AgentStatus;
+            agent.status = AgentStatus::Failed;
+            if agent.completed_at.is_none() {
+                agent.completed_at = Some(Utc::now().to_rfc3339());
+            }
+        }
+        let _ = locked_registry.save_ref();
+    }
+
     if !cycle_reactivated.is_empty() {
         println!(
             "  Cycle failure restart: re-activated {} task(s): {:?}",
@@ -423,5 +437,40 @@ mod tests {
         let graph = load_graph(&path).unwrap();
         let task = graph.get_task("t1").unwrap();
         assert_eq!(task.retry_count, 1); // Unchanged
+    }
+
+    #[test]
+    fn test_fail_updates_agent_registry() {
+        // When a task is marked failed, the agent registry entry should also
+        // transition to Failed so the agent slot is freed immediately.
+        use workgraph::service::registry::{AgentRegistry, AgentStatus};
+
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+
+        let mut task = make_task("t1", "Test task", Status::InProgress);
+        task.assigned = Some("agent-1".to_string());
+        setup_workgraph(dir_path, vec![task]);
+
+        // Set up a registry with an agent working on this task
+        let mut registry = AgentRegistry::new();
+        registry.register_agent(99999, "t1", "claude", "/tmp/output.log");
+        registry.save(dir_path).unwrap();
+
+        let result = run(dir_path, "t1", Some("test failure"));
+        assert!(result.is_ok());
+
+        // Verify registry was updated
+        let registry = AgentRegistry::load(dir_path).unwrap();
+        let agent = registry.get_agent("agent-1").unwrap();
+        assert_eq!(
+            agent.status,
+            AgentStatus::Failed,
+            "Agent registry should be updated to Failed when task fails"
+        );
+        assert!(
+            agent.completed_at.is_some(),
+            "Agent should have a completed_at timestamp"
+        );
     }
 }
