@@ -159,6 +159,41 @@ TASK STATE COMMANDS
   wg done <task-id> --converged  # Complete and STOP the loop
   wg fail <task-id> --reason  # Mark failed (can be retried)
   wg abandon <task-id>        # Give up permanently
+  wg wait <task-id> --until "condition"  # Park task until condition is met
+  wg resume <task-id>         # Resume a paused/waiting task
+
+  Wait conditions:
+    --until "task:dep-a=done"   # Wait for another task to reach a status
+    --until "timer:5m"          # Wait for a timer (e.g., 5m, 1h, 2d)
+    --until "message"           # Wait for a message to arrive
+    --until "human"             # Wait for manual intervention
+
+  wg reschedule <task-id> --after 24   # Ready after 24 hours from now
+  wg reschedule <task-id> --at <ISO>   # Ready at a specific timestamp
+
+VALIDATION (--verify gate)
+─────────────────────────────────────────
+  Tasks created with --verify have an extra gate before completion:
+
+  wg add "Task" --verify "cargo test passes"  # Set validation criteria
+  wg done <task-id>           # Moves to pending-validation (not done yet!)
+  wg approve <task-id>        # Approve → transitions to Done
+  wg reject <task-id> --reason "Tests failing"  # Reject → reopens task
+
+  After max rejections, the task transitions to Failed instead of reopening.
+
+MESSAGING
+─────────────────────────────────────────
+  Inter-agent and task-scoped messaging:
+
+  wg msg send <task-id> "message"    # Send a message to a task
+  wg msg list <task-id>              # List all messages for a task
+  wg msg read <task-id>              # Read unread messages (marks as read)
+  wg msg poll <task-id>              # Poll for new messages (exit code 0/1)
+
+  Agents MUST check messages before and after working on a task. Unreplied
+  messages mean the task is not complete. Use --agent <id> with read/poll
+  to filter by your agent identity.
 
 CONTEXT & ARTIFACTS
 ─────────────────────────────────────────
@@ -256,6 +291,17 @@ HOUSEKEEPING
   wg gc --dry-run               # Preview what would be removed
   wg gc --include-done          # Also remove done tasks (default: only failed+abandoned)
   wg gc --older 7d              # Only gc tasks older than 7 days
+
+DISCOVERY & PUBLISHING
+─────────────────────────────────────────
+  wg discover                       # Show tasks completed in the last 24h
+  wg discover --since 7d            # Completed in the last 7 days
+  wg discover --with-artifacts      # Include artifact paths in output
+
+  wg publish <task-id>              # Publish a draft task (validates deps, resumes subgraph)
+  wg publish <task-id> --only       # Publish just this task (skip subgraph propagation)
+
+  wg reclaim <task-id> --from <actor> --to <actor>  # Reclaim task from dead agent
 
 GROWING THE GRAPH
 ─────────────────────────────────────────
@@ -498,8 +544,41 @@ fn json_output() -> serde_json::Value {
                 "done": "Mark task complete",
                 "done_converged": "Complete task and stop loop (wg done <id> --converged)",
                 "fail": "Mark failed (can be retried)",
-                "abandon": "Give up permanently"
+                "abandon": "Give up permanently",
+                "wait": "Park task until condition met (wg wait <id> --until \"condition\")",
+                "resume": "Resume a paused/waiting task",
+                "reschedule": "Set not_before timestamp (wg reschedule <id> --after 24)"
             }
+        },
+        "validation": {
+            "description": "Tasks with --verify have a pending-validation gate before completion.",
+            "create": "wg add \"task\" --verify \"cargo test passes\"",
+            "approve": "wg approve <task-id>",
+            "reject": "wg reject <task-id> --reason \"reason\"",
+            "note": "After max rejections, the task transitions to Failed instead of reopening."
+        },
+        "messaging": {
+            "description": "Inter-agent and task-scoped messaging. Agents must check messages before and after working.",
+            "send": "wg msg send <task-id> \"message\"",
+            "list": "wg msg list <task-id>",
+            "read": "wg msg read <task-id>",
+            "poll": "wg msg poll <task-id>",
+            "agent_filter": "Use --agent <id> with read/poll to filter by agent identity"
+        },
+        "wait_conditions": {
+            "description": "Park a task until a condition is met.",
+            "task": "wg wait <id> --until \"task:dep-a=done\"",
+            "timer": "wg wait <id> --until \"timer:5m\"",
+            "message": "wg wait <id> --until \"message\"",
+            "human": "wg wait <id> --until \"human\""
+        },
+        "discovery_publishing": {
+            "discover": "wg discover",
+            "discover_since": "wg discover --since 7d",
+            "discover_artifacts": "wg discover --with-artifacts",
+            "publish": "wg publish <task-id>",
+            "publish_only": "wg publish <task-id> --only",
+            "reclaim": "wg reclaim <task-id> --from <actor> --to <actor>"
         },
         "exec_modes": {
             "description": "Control agent capabilities per task.",
@@ -1021,8 +1100,11 @@ mod tests {
             "MANUAL MODE",
             "DISCOVERING & ADDING WORK",
             "TASK STATE COMMANDS",
+            "VALIDATION (--verify gate)",
+            "MESSAGING",
             "CONTEXT & ARTIFACTS",
             "CYCLES",
+            "DISCOVERY & PUBLISHING",
             "HOUSEKEEPING",
             "GROWING THE GRAPH",
             "TIPS",
@@ -1039,5 +1121,46 @@ mod tests {
         for section in &required_sections {
             assert!(text.contains(section), "Missing section: {}", section);
         }
+    }
+
+    #[test]
+    fn test_quickstart_text_contains_wait_command() {
+        assert!(QUICKSTART_TEXT.contains("wg wait"));
+        assert!(QUICKSTART_TEXT.contains("--until"));
+        assert!(QUICKSTART_TEXT.contains("task:dep-a=done"));
+        assert!(QUICKSTART_TEXT.contains("timer:5m"));
+    }
+
+    #[test]
+    fn test_quickstart_text_contains_messaging() {
+        assert!(QUICKSTART_TEXT.contains("MESSAGING"));
+        assert!(QUICKSTART_TEXT.contains("wg msg send"));
+        assert!(QUICKSTART_TEXT.contains("wg msg read"));
+        assert!(QUICKSTART_TEXT.contains("wg msg poll"));
+    }
+
+    #[test]
+    fn test_quickstart_text_contains_validation() {
+        assert!(QUICKSTART_TEXT.contains("VALIDATION"));
+        assert!(QUICKSTART_TEXT.contains("wg approve"));
+        assert!(QUICKSTART_TEXT.contains("wg reject"));
+        assert!(QUICKSTART_TEXT.contains("pending-validation"));
+    }
+
+    #[test]
+    fn test_quickstart_text_contains_discover_publish() {
+        assert!(QUICKSTART_TEXT.contains("DISCOVERY & PUBLISHING"));
+        assert!(QUICKSTART_TEXT.contains("wg discover"));
+        assert!(QUICKSTART_TEXT.contains("wg publish"));
+        assert!(QUICKSTART_TEXT.contains("wg reclaim"));
+    }
+
+    #[test]
+    fn test_json_output_has_new_command_sections() {
+        let output = json_output();
+        assert!(output.get("validation").is_some());
+        assert!(output.get("messaging").is_some());
+        assert!(output.get("wait_conditions").is_some());
+        assert!(output.get("discovery_publishing").is_some());
     }
 }

@@ -37,7 +37,9 @@ Tasks are the fundamental units of work. Each task has:
 - **exec_mode**: Agent capability tier (`full`, `light`, `bare`, `shell`)
 - **visibility**: Trace export zone (`internal`, `public`, `peer`)
 - **context_scope**: How much context the coordinator injects (`clean`, `task`, `graph`, `full`)
+- **delay**: Delay before dispatch (e.g., `1h`, `30m`)
 - **not_before**: Earliest dispatch time (ISO 8601)
+- **placement_hints**: Hints for auto-placement (`no_place`, `place_near`, `place_before`)
 - **cycle_config**: Cycle iteration settings (`max_iterations`, convergence, etc.)
 - **retry_count / max_retries**: Retry tracking and limits
 
