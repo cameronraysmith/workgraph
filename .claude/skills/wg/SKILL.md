@@ -47,6 +47,9 @@ wg status                # Quick one-screen overview
 wg watch                 # Stream events as JSON lines (live tail)
 wg viz                   # ASCII dependency graph
 wg tui                   # Interactive TUI dashboard
+wg chat "How is task X?" # Ask the coordinator a question
+wg chat -i               # Interactive chat with the coordinator
+wg chat --history        # Review past coordinator conversations
 ```
 
 ### What you do NOT do as coordinator
@@ -55,7 +58,18 @@ wg tui                   # Interactive TUI dashboard
 - **Don't `wg spawn`** — the service spawns agents automatically
 - **Don't work on tasks yourself** — spawned agents do the work
 
-Always use `wg done` to complete tasks. Do NOT use `wg submit` (deprecated). Tasks with `--verify` enter a `pending-validation` state and need `wg approve` or `wg reject` to finalize.
+Always use `wg done` to complete tasks. Tasks with `--verify` enter a `pending-validation` state and need `wg approve` or `wg reject` to finalize.
+
+### Reviewing completed work
+
+Tasks created with `--verify` land in `pending-validation` when agents mark them done. As coordinator, review and finalize:
+
+```bash
+wg list --status pending-validation   # See tasks awaiting review
+wg show <task-id>                     # Inspect work and artifacts
+wg approve <task-id>                  # Accept — transitions to done
+wg reject <task-id> --reason "why"    # Reject — reopens for retry (or fails after max rejections)
+```
 
 ## If you ARE a spawned agent working on a task
 
@@ -66,6 +80,16 @@ wg show <task-id>        # Understand what to do
 wg context <task-id>     # See inputs from dependencies
 wg log <task-id> "msg"   # Log progress as you work
 wg done <task-id>        # Mark complete when finished
+```
+
+### Checking and sending messages
+
+Other agents or the coordinator may send you messages with updated requirements or feedback. Check for messages periodically and always reply:
+
+```bash
+wg msg read <task-id> --agent $WG_AGENT_ID   # Read unread messages (marks as read)
+wg msg send <task-id> "Acknowledged — working on it"  # Reply to messages
+wg msg poll <task-id> --agent $WG_AGENT_ID   # Poll without blocking (exit 0 = new, 1 = none)
 ```
 
 If you discover new work while working:
@@ -147,7 +171,7 @@ open → [claim] → in-progress → [done] → done
                               → [wait] → waiting → [condition met] → in-progress
 ```
 
-**Note:** `wg submit` is deprecated. Use `wg done`. The `wg approve` and `wg reject` commands are active — they handle tasks in `pending-validation` state (tasks created with `--verify`).
+**Note:** The `wg approve` and `wg reject` commands handle tasks in `pending-validation` state (tasks created with `--verify`).
 
 ## Cycles (repeating workflows)
 
