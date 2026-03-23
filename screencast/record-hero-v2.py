@@ -23,8 +23,8 @@ import sys
 import time
 
 # -- Configuration ---------------------------------------------------------
-COLS = 140
-ROWS = 40
+COLS = 65
+ROWS = 38
 FPS = 15
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -32,26 +32,26 @@ DEMO_DIR = f"/tmp/wg-hero-demo-{os.getpid()}"
 SESSION = f"wg-hero-{os.getpid()}"
 CAST_FILE = os.path.join(SCRIPT_DIR, "recordings", "hero-v2-raw.cast")
 
-PROMPT = "Build a recipe API with auth, search, and tests."
+PROMPT = "Build a recipe API with auth and search"
 
 TASKS = [
-    ("Design API schema", "design-api", None),
-    ("Set up database", "setup-db", "design-api"),
-    ("Build auth module", "build-auth", "design-api"),
-    ("User CRUD endpoints", "user-endpoints", "setup-db,build-auth"),
-    ("Search and filtering", "search-api", "setup-db"),
+    ("Design API", "design-api", None),
+    ("Setup database", "setup-db", "design-api"),
+    ("Build auth", "build-auth", "design-api"),
+    ("User endpoints", "user-endpoints", "setup-db,build-auth"),
+    ("Search API", "search-api", "setup-db"),
     ("Integration tests", "int-tests", "user-endpoints,search-api"),
 ]
 
 CHAT_RESPONSE = (
-    "I'll break this down into a task graph:\n\n"
-    "1. **design-api** \u2014 Define the REST API schema\n"
-    "2. **setup-db** \u2192 database models (after design)\n"
-    "3. **build-auth** \u2192 JWT auth module (after design)\n"
-    "4. **user-endpoints** \u2192 CRUD operations (after db + auth)\n"
-    "5. **search-api** \u2192 search & filtering (after db)\n"
-    "6. **int-tests** \u2192 integration tests (after endpoints + search)\n\n"
-    "Tasks 2-3 and 4-5 run in parallel. Creating the graph now..."
+    "Breaking this into a task graph:\n\n"
+    "1. **design-api** \u2014 REST API schema\n"
+    "2. **setup-db** \u2192 database models\n"
+    "3. **build-auth** \u2192 JWT auth module\n"
+    "4. **user-endpoints** \u2192 CRUD ops\n"
+    "5. **search-api** \u2192 search & filter\n"
+    "6. **int-tests** \u2192 integration tests\n\n"
+    "2-3 and 4-5 run in parallel. Creating now..."
 )
 
 # Progression batches: (task_ids, hold_time_seconds)
@@ -260,12 +260,12 @@ def record():
         time.sleep(2.5)
 
         # Show wg add with a task
-        type_naturally("wg add \"Parse user input\" --id parse-input")
+        type_naturally("wg add \"Parse input\" --id parse-input")
         send_keys("Enter")
         time.sleep(1.5)
 
         # Show wg add with dependency
-        type_naturally("wg add \"Validate schema\" --after parse-input --id validate-schema")
+        type_naturally("wg add \"Validate\" --after parse-input")
         send_keys("Enter")
         time.sleep(1.5)
 
