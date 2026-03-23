@@ -8,6 +8,8 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
+extern crate libc;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -100,10 +102,10 @@ fn start_daemon(wg_dir: &Path) -> &Path {
 
 /// Stop the daemon, ignoring errors (best-effort cleanup).
 fn stop_daemon(wg_dir: &Path) {
-    let _ = wg_cmd(wg_dir, &["service", "stop"]);
+    let _ = wg_cmd(wg_dir, &["service", "stop", "--force", "--kill-agents"]);
 }
 
-/// Guard that stops the daemon when dropped, ensuring cleanup.
+/// Guard that stops the daemon when dropped, ensuring cleanup even on panic.
 struct DaemonGuard<'a> {
     wg_dir: &'a Path,
 }
@@ -118,6 +120,19 @@ impl<'a> DaemonGuard<'a> {
 impl Drop for DaemonGuard<'_> {
     fn drop(&mut self) {
         stop_daemon(self.wg_dir);
+
+        // Belt-and-suspenders: read PID from state.json and kill directly
+        // in case `wg service stop` itself fails or the daemon is unresponsive.
+        let state_path = self.wg_dir.join("service").join("state.json");
+        if let Ok(content) = std::fs::read_to_string(&state_path) {
+            if let Ok(state) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(pid) = state["pid"].as_u64() {
+                    unsafe {
+                        libc::kill(pid as i32, libc::SIGKILL);
+                    }
+                }
+            }
+        }
     }
 }
 

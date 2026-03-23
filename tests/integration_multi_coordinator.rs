@@ -11,6 +11,8 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
+extern crate libc;
+
 // ---------------------------------------------------------------------------
 // Helpers (mirrors integration_chat.rs)
 // ---------------------------------------------------------------------------
@@ -96,7 +98,7 @@ fn start_daemon(wg_dir: &Path) -> &Path {
 }
 
 fn stop_daemon(wg_dir: &Path) {
-    let _ = wg_cmd(wg_dir, &["service", "stop"]);
+    let _ = wg_cmd(wg_dir, &["service", "stop", "--force", "--kill-agents"]);
 }
 
 struct DaemonGuard<'a> {
@@ -113,6 +115,17 @@ impl<'a> DaemonGuard<'a> {
 impl Drop for DaemonGuard<'_> {
     fn drop(&mut self) {
         stop_daemon(self.wg_dir);
+
+        let state_path = self.wg_dir.join("service").join("state.json");
+        if let Ok(content) = std::fs::read_to_string(&state_path) {
+            if let Ok(state) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(pid) = state["pid"].as_u64() {
+                    unsafe {
+                        libc::kill(pid as i32, libc::SIGKILL);
+                    }
+                }
+            }
+        }
     }
 }
 

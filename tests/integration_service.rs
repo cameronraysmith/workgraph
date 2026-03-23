@@ -214,6 +214,39 @@ fn stop_service(wg_dir: &Path) {
     let _ = wg_cmd(wg_dir, &["service", "stop", "--force", "--kill-agents"]);
 }
 
+/// Guard that ensures daemon cleanup on drop, even if a test panics.
+/// Without this, panicking assertions skip the manual `stop_service()` call
+/// at the end of tests, leaving orphaned daemon processes.
+struct ServiceGuard<'a> {
+    wg_dir: &'a Path,
+}
+
+impl<'a> ServiceGuard<'a> {
+    fn new(wg_dir: &'a Path) -> Self {
+        ServiceGuard { wg_dir }
+    }
+}
+
+impl Drop for ServiceGuard<'_> {
+    fn drop(&mut self) {
+        // Graceful stop via CLI (kills agents too)
+        stop_service(self.wg_dir);
+
+        // Belt-and-suspenders: read PID from state.json and kill directly
+        // in case `wg service stop` itself fails or the daemon is unresponsive.
+        let state_path = self.wg_dir.join("service").join("state.json");
+        if let Ok(content) = fs::read_to_string(&state_path) {
+            if let Ok(state) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(pid) = state["pid"].as_u64() {
+                    unsafe {
+                        libc::kill(pid as i32, libc::SIGKILL);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Helper: wait for a condition with timeout, polling at interval.
 fn wait_for<F>(timeout: Duration, poll_ms: u64, mut condition: F) -> bool
 where
@@ -256,6 +289,7 @@ fn coordinator_ticks(wg_dir: &Path) -> u64 {
 fn test_auto_pickup_via_graph_changed() {
     let tmp = tempfile::tempdir().unwrap();
     let wg_dir = setup_workgraph(tmp.path());
+    let _guard = ServiceGuard::new(&wg_dir);
 
     // Start the service with a long poll interval so we can distinguish
     // GraphChanged fast-path from the slow poll.
@@ -337,9 +371,6 @@ fn test_auto_pickup_via_graph_changed() {
         "Task should have completed. Status: {}",
         task_status(&wg_dir, "test-task-1")
     );
-
-    // Cleanup
-    stop_service(&wg_dir);
 }
 
 /// Test 2: Fallback poll pickup.
@@ -354,6 +385,7 @@ fn test_auto_pickup_via_graph_changed() {
 fn test_fallback_poll_pickup() {
     let tmp = tempfile::tempdir().unwrap();
     let wg_dir = setup_workgraph(tmp.path());
+    let _guard = ServiceGuard::new(&wg_dir);
 
     // Start service with a short poll interval for this test
     let socket = socket_path_for(tmp.path());
@@ -449,9 +481,6 @@ fn test_fallback_poll_pickup() {
         "Poll task should have completed. Status: {}",
         task_status(&wg_dir, "poll-task")
     );
-
-    // Cleanup
-    stop_service(&wg_dir);
 }
 
 /// Test 3: Dead-agent recovery.
@@ -471,6 +500,7 @@ fn test_fallback_poll_pickup() {
 fn test_dead_agent_recovery() {
     let tmp = tempfile::tempdir().unwrap();
     let wg_dir = setup_workgraph(tmp.path());
+    let _guard = ServiceGuard::new(&wg_dir);
 
     // Use a 1-minute heartbeat timeout. We'll rely on process-exit detection.
     // The daemon's poll_interval of 2s ensures frequent checks.
@@ -656,12 +686,4 @@ auto_evaluate = false
         "New agent should have a different PID"
     );
 
-    // Cleanup: kill the new agent too before stopping service
-    let new_pid = new_agent["pid"].as_u64().unwrap() as i32;
-    unsafe {
-        libc::kill(new_pid, libc::SIGKILL);
-    }
-    std::thread::sleep(Duration::from_millis(200));
-
-    stop_service(&wg_dir);
 }
