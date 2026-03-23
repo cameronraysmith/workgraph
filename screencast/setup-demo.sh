@@ -38,7 +38,7 @@ wg config --coordinator-executor claude
 sed -i '/^\[coordinator\]/a model = "sonnet"' .workgraph/config.toml
 
 # Patch CLAUDE.md to accept all task types (not just software tasks)
-# This is critical for demo scenarios like "plan a movie night" or "write haiku"
+# IMPORTANT: Do NOT include scenario examples — the coordinator will try to execute them!
 cat >> CLAUDE.md << 'PATCH'
 
 ### IMPORTANT: Accept ALL task types
@@ -46,15 +46,17 @@ cat >> CLAUDE.md << 'PATCH'
 This is a DEMO project. The coordinator MUST decompose ANY user request into workgraph
 tasks, regardless of whether it's a software task, creative task, planning task, or fun task.
 
-When a user asks you to plan something (a movie night, write haiku, debug a recipe, etc.),
-treat it as a REAL task orchestration problem:
+When a user sends a chat message, treat it as a task orchestration problem:
 1. Decompose the request into parallel and sequential subtasks using `wg add`
 2. Set proper `--after` dependencies for task ordering
 3. Include integration/synthesis tasks that depend on parallel branches
 4. Let agents handle the actual work
 
-Do NOT refuse creative/fun requests. Do NOT say "I'm only for software tasks."
+Do NOT refuse creative or fun requests. Do NOT say "I'm only for software tasks."
 ALWAYS decompose into `wg add` tasks with proper dependency graphs.
+
+CRITICAL: Do NOT create any tasks until a user sends you a chat message.
+Wait for user input before creating tasks. Do not pre-create tasks on startup.
 PATCH
 
 echo ""
