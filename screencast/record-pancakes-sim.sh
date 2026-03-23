@@ -18,6 +18,7 @@ FPS=20
 cleanup() {
     kill "$RECORDER_PID" 2>/dev/null; wait "$RECORDER_PID" 2>/dev/null || true
     tmux kill-session -t "$SESSION" 2>/dev/null || true
+    (cd "$DEMO_DIR" && wg service stop 2>/dev/null) || true
     rm -rf "$DEMO_DIR"
 }
 trap cleanup EXIT
@@ -50,8 +51,14 @@ wg add "Final taste test" --id final-taste-test --after fix-pancake-recipe,impro
 echo "Tasks created:"
 wg viz
 
-# === Step 2: Start tmux + TUI ===
+# === Step 2: Start service (max-agents 0 so it doesn't interfere with simulation) ===
 echo ""
+echo "Starting service (no agent spawning)..."
+wg config --max-agents 0
+wg service start --force 2>/dev/null || wg service start 2>/dev/null
+sleep 3
+
+# Restore max-agents for display purposes but service won't spawn any
 echo "Starting TUI in tmux session '$SESSION'..."
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 tmux new-session -d -s "$SESSION" -x 120 -y 35 "cd $DEMO_DIR && wg tui"

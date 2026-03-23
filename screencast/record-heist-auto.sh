@@ -30,6 +30,24 @@ mkdir -p "$CAST_DIR"
 # Kill any existing tmux session with this name
 tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
 
+# Ensure service is running
+echo "Starting service..."
+(cd "$DEMO_DIR" && wg service start --force 2>/dev/null || wg service start 2>/dev/null)
+sleep 5
+
+# Wait for coordinator to be ready (up to 60s)
+echo "Waiting for coordinator agent..."
+READY=0
+for i in $(seq 1 12); do
+    if (cd "$DEMO_DIR" && wg service status 2>/dev/null | grep -q "Uptime:"); then
+        READY=1; break
+    fi
+    sleep 5
+done
+[ $READY -eq 0 ] && echo "WARNING: Coordinator may not be ready yet"
+(cd "$DEMO_DIR" && wg service status 2>&1 | head -5)
+
+echo ""
 echo "=== Automated Heist Movie Night Recording ==="
 echo "Output: $CAST_FILE"
 echo ""
