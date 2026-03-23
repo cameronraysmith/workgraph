@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use std::path::Path;
 use workgraph::check::{OrphanRef, check_orphans};
-use workgraph::graph::{CycleAnalysis, Status};
+use workgraph::graph::{CycleAnalysis, Status, TokenUsage};
 use workgraph::parser::load_graph;
 use workgraph::query::ready_tasks;
 use workgraph::service::compactor::CompactorState;
@@ -97,6 +97,9 @@ struct CompactionInfo {
     /// Duration of the last compaction LLM call in milliseconds.
     #[serde(skip_serializing_if = "Option::is_none")]
     last_compaction_duration_ms: Option<u64>,
+    /// Token usage from the last compaction LLM call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_compaction_tokens: Option<TokenUsage>,
     /// Number of consecutive compaction errors (persisted across restarts).
     #[serde(skip_serializing_if = "is_zero_u64")]
     error_count: u64,
@@ -442,6 +445,7 @@ fn gather_compaction_info(dir: &Path) -> Option<CompactionInfo> {
         percent,
         last_compaction: compactor.last_compaction,
         last_compaction_duration_ms: compactor.last_compaction_duration_ms,
+        last_compaction_tokens: compactor.last_compaction_tokens,
         error_count: compactor.error_count,
         last_compaction_context_bytes: compactor.last_compaction_context_bytes,
     })
