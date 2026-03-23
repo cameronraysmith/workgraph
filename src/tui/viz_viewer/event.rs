@@ -1626,6 +1626,7 @@ fn right_panel_scroll_to_top(app: &mut VizApp) {
     match app.right_panel_tab {
         RightPanelTab::Detail => {
             app.hud_scroll = 0;
+            app.hud_follow = false;
         }
         RightPanelTab::Chat => {
             // Chat scroll is from bottom (0 = fully scrolled down), so "top" = max.

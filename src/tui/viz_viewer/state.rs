@@ -1787,6 +1787,8 @@ pub struct HudDetail {
     pub task_id: String,
     /// All content lines assembled for rendering (with section headers).
     pub rendered_lines: Vec<String>,
+    /// Path to the agent output log file, if any (used for mtime-based live refresh).
+    pub output_path: Option<std::path::PathBuf>,
 }
 
 /// Extract section name from a detail header line like "── Description ──" → "Description".
@@ -2206,6 +2208,11 @@ pub struct VizApp {
     last_daemon_log_mtime: Option<SystemTime>,
     /// Last mtime of the chat outbox for the active coordinator.
     last_chat_outbox_mtime: Option<SystemTime>,
+    /// Last mtime of the output.log for the currently-displayed task (Detail tab live refresh).
+    last_detail_output_mtime: Option<SystemTime>,
+    /// Whether the HUD detail panel should auto-scroll to follow new content.
+    /// Engages when the user scrolls to the bottom; disengages on scroll up.
+    pub hud_follow: bool,
     /// Set by the fast path when graph.jsonl changes but the full viz wasn't reloaded.
     /// Checked by the slow path to ensure the viz reload isn't skipped.
     graph_viz_stale: bool,
@@ -2390,6 +2397,8 @@ impl VizApp {
             last_messages_mtime: None,
             last_daemon_log_mtime: None,
             last_chat_outbox_mtime: None,
+            last_detail_output_mtime: None,
+            hud_follow: false,
             graph_viz_stale: false,
         };
         app.start_fs_watcher();
@@ -3683,6 +3692,7 @@ impl VizApp {
                 if let Ok(graph) = load_graph(&graph_path) {
                     let prev_hud_task = self.hud_detail.as_ref().map(|d| d.task_id.clone());
                     let prev_hud_scroll = self.hud_scroll;
+                    let prev_hud_follow = self.hud_follow;
                     self.smart_follow_active = self.scroll.is_at_bottom();
                     self.load_viz_from_graph(&graph);
                     self.load_stats_from_graph(&graph);
@@ -3697,7 +3707,11 @@ impl VizApp {
                         && prev_hud_task
                             == self.hud_detail.as_ref().map(|d| d.task_id.clone())
                     {
-                        self.hud_scroll = prev_hud_scroll;
+                        if prev_hud_follow {
+                            self.hud_scroll = usize::MAX; // renderer clamps to actual max
+                        } else {
+                            self.hud_scroll = prev_hud_scroll;
+                        }
                     }
                     if !self.search_input.is_empty() {
                         self.rerun_search();
@@ -3783,6 +3797,37 @@ impl VizApp {
                 content_updated = true;
             }
 
+            // Detail tab: live-refresh when the agent output.log changes independently
+            // of graph.jsonl (e.g. agent is actively writing output).
+            if self.right_panel_tab == RightPanelTab::Detail {
+                let new_output_mtime = self
+                    .hud_detail
+                    .as_ref()
+                    .and_then(|d| d.output_path.as_ref())
+                    .and_then(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+                if new_output_mtime.is_some()
+                    && new_output_mtime != self.last_detail_output_mtime
+                {
+                    self.last_detail_output_mtime = new_output_mtime;
+                    let prev_hud_follow = self.hud_follow;
+                    let prev_hud_task = self.hud_detail.as_ref().map(|d| d.task_id.clone());
+                    let prev_hud_scroll = self.hud_scroll;
+                    self.invalidate_hud();
+                    self.load_hud_detail();
+                    if prev_hud_task.is_some()
+                        && prev_hud_task
+                            == self.hud_detail.as_ref().map(|d| d.task_id.clone())
+                    {
+                        if prev_hud_follow {
+                            self.hud_scroll = usize::MAX;
+                        } else {
+                            self.hud_scroll = prev_hud_scroll;
+                        }
+                    }
+                    content_updated = true;
+                }
+            }
+
             if content_updated {
                 return true;
             }
@@ -3835,6 +3880,7 @@ impl VizApp {
                 // recompute_trace() -> invalidate_hud() clears hud_detail.
                 let prev_hud_task = self.hud_detail.as_ref().map(|d| d.task_id.clone());
                 let prev_hud_scroll = self.hud_scroll;
+                let prev_hud_follow = self.hud_follow;
 
                 if graph_changed || has_expiring_stickies {
                     self.last_graph_mtime = current_mtime;
@@ -3859,7 +3905,11 @@ impl VizApp {
                 if prev_hud_task.is_some()
                     && prev_hud_task == self.hud_detail.as_ref().map(|d| d.task_id.clone())
                 {
-                    self.hud_scroll = prev_hud_scroll;
+                    if prev_hud_follow {
+                        self.hud_scroll = usize::MAX; // renderer clamps to actual max
+                    } else {
+                        self.hud_scroll = prev_hud_scroll;
+                    }
                 }
                 // Reload log pane content if Log tab is active.
                 if self.right_panel_tab == RightPanelTab::Log {
@@ -4201,6 +4251,8 @@ impl VizApp {
         }
 
         self.hud_scroll = 0;
+        self.hud_follow = false;
+        self.last_detail_output_mtime = None;
 
         let graph_path = self.workgraph_dir.join("graph.jsonl");
         let graph = match load_graph(&graph_path) {
@@ -4276,6 +4328,17 @@ impl VizApp {
             })
             .filter(|p| p.exists())
             .or_else(|| find_latest_archive(&self.workgraph_dir, &task.id, "output.txt"));
+        // Save the live output.log path (not archives) for mtime-based live refresh.
+        let live_output_path = task
+            .assigned
+            .as_ref()
+            .map(|aid| {
+                self.workgraph_dir
+                    .join("agents")
+                    .join(aid)
+                    .join("output.log")
+            })
+            .filter(|p| p.exists());
         if let Some(output_path) = output_path {
             if self.detail_raw_json {
                 lines.push("── Output (raw) ── [R: human-readable]".to_string());
@@ -4654,6 +4717,7 @@ impl VizApp {
         self.hud_detail = Some(HudDetail {
             task_id,
             rendered_lines: lines,
+            output_path: live_output_path,
         });
     }
 
@@ -4666,6 +4730,8 @@ impl VizApp {
     /// like assign-* and evaluate-* from the Agency tab).
     pub fn load_hud_detail_for_task(&mut self, target_task_id: &str) {
         self.hud_scroll = 0;
+        self.hud_follow = false;
+        self.last_detail_output_mtime = None;
 
         let graph_path = self.workgraph_dir.join("graph.jsonl");
         let graph = match load_graph(&graph_path) {
@@ -4716,6 +4782,16 @@ impl VizApp {
             })
             .filter(|p| p.exists())
             .or_else(|| find_latest_archive(&self.workgraph_dir, &task.id, "output.txt"));
+        let live_output_path = task
+            .assigned
+            .as_ref()
+            .map(|aid| {
+                self.workgraph_dir
+                    .join("agents")
+                    .join(aid)
+                    .join("output.log")
+            })
+            .filter(|p| p.exists());
         if let Some(output_path) = output_path {
             lines.push("── Output ──".to_string());
             if let Ok(content) = std::fs::read_to_string(&output_path) {
@@ -4836,12 +4912,15 @@ impl VizApp {
         self.hud_detail = Some(HudDetail {
             task_id: target_task_id.to_string(),
             rendered_lines: lines,
+            output_path: live_output_path,
         });
     }
 
     /// Scroll the HUD panel up.
     pub fn hud_scroll_up(&mut self, amount: usize) {
         self.hud_scroll = self.hud_scroll.saturating_sub(amount);
+        // User scrolled up — disengage follow mode.
+        self.hud_follow = false;
     }
 
     /// Scroll the HUD panel down using the cached wrapped line count and viewport height.
@@ -4850,6 +4929,10 @@ impl VizApp {
             .hud_wrapped_line_count
             .saturating_sub(self.hud_detail_viewport_height);
         self.hud_scroll = (self.hud_scroll + amount).min(max_scroll);
+        // If we reached the bottom, re-engage follow mode.
+        if self.hud_scroll >= max_scroll {
+            self.hud_follow = true;
+        }
     }
 
     /// Toggle collapse state of the section header at the current scroll position.
@@ -5523,6 +5606,8 @@ impl VizApp {
             last_messages_mtime: None,
             last_daemon_log_mtime: None,
             last_chat_outbox_mtime: None,
+            last_detail_output_mtime: None,
+            hud_follow: false,
             graph_viz_stale: false,
         }
     }
