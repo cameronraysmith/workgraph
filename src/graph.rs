@@ -1320,12 +1320,15 @@ fn reactivate_cycle(
     cycle_config: &CycleConfig,
 ) -> Vec<String> {
     // Check if ALL members are terminal (Done or Abandoned).
-    // Abandoned is terminal — the task won't produce more work.
+    // Abandoned and archived-Done are terminal — they won't produce more work.
     let mut has_done_member = false;
     for member_id in members {
         match graph.get_task(member_id) {
             Some(t) if t.status == Status::Done => {
-                has_done_member = true;
+                // Archived Done members are permanently terminal (like Abandoned)
+                if !t.tags.contains(&"archived".to_string()) {
+                    has_done_member = true;
+                }
             }
             Some(t) if t.status == Status::Abandoned => {
                 // Abandoned is terminal — don't wait for it
@@ -1333,7 +1336,7 @@ fn reactivate_cycle(
             _ => return vec![], // Not terminal yet
         }
     }
-    // If ALL members are abandoned, don't iterate — there's no work to redo
+    // If ALL members are abandoned/archived, don't iterate — there's no work to redo
     if !has_done_member {
         return vec![];
     }
@@ -1398,8 +1401,11 @@ fn reactivate_cycle(
 
     for member_id in members {
         if let Some(task) = graph.get_task_mut(member_id) {
-            // Abandoned members stay as-is — they opted out of future iterations
+            // Abandoned or archived members stay as-is — they opted out of future iterations
             if task.status == Status::Abandoned {
+                continue;
+            }
+            if task.tags.contains(&"archived".to_string()) {
                 continue;
             }
             // Preserve completed_at as last_iteration_completed_at before clearing
@@ -2466,5 +2472,88 @@ mod tests {
         } else {
             panic!("Expected Task node");
         }
+    }
+
+    #[test]
+    fn test_reactivate_cycle_skips_archived_members() {
+        let mut graph = WorkGraph::new();
+
+        // Two cycle members: one archived, one normal Done
+        let mut archived = make_task("coord-a", "Archived coordinator");
+        archived.status = Status::Done;
+        archived.tags = vec!["archived".to_string()];
+        archived.cycle_config = Some(CycleConfig {
+            max_iterations: 5,
+            guard: None,
+            delay: None,
+            no_converge: false,
+            restart_on_failure: true,
+            max_failure_restarts: None,
+        });
+
+        let mut normal = make_task("coord-b", "Normal member");
+        normal.status = Status::Done;
+        normal.after = vec!["coord-a".to_string()];
+
+        graph.add_node(Node::Task(archived));
+        graph.add_node(Node::Task(normal));
+
+        let members = vec!["coord-a".to_string(), "coord-b".to_string()];
+        let config = CycleConfig {
+            max_iterations: 5,
+            guard: None,
+            delay: None,
+            no_converge: false,
+            restart_on_failure: true,
+            max_failure_restarts: None,
+        };
+
+        let reactivated = reactivate_cycle(&mut graph, &members, "coord-a", &config);
+
+        // Only the non-archived member should be reactivated
+        assert_eq!(reactivated.len(), 1);
+        assert_eq!(reactivated[0], "coord-b");
+
+        // Archived member should still be Done
+        let archived = graph.get_task("coord-a").unwrap();
+        assert_eq!(archived.status, Status::Done);
+
+        // Normal member should be Open
+        let normal = graph.get_task("coord-b").unwrap();
+        assert_eq!(normal.status, Status::Open);
+    }
+
+    #[test]
+    fn test_reactivate_cycle_all_archived_does_not_iterate() {
+        let mut graph = WorkGraph::new();
+
+        let mut archived = make_task("coord-only", "Solo archived coordinator");
+        archived.status = Status::Done;
+        archived.tags = vec!["archived".to_string()];
+        archived.cycle_config = Some(CycleConfig {
+            max_iterations: 5,
+            guard: None,
+            delay: None,
+            no_converge: false,
+            restart_on_failure: true,
+            max_failure_restarts: None,
+        });
+
+        graph.add_node(Node::Task(archived));
+
+        let members = vec!["coord-only".to_string()];
+        let config = CycleConfig {
+            max_iterations: 5,
+            guard: None,
+            delay: None,
+            no_converge: false,
+            restart_on_failure: true,
+            max_failure_restarts: None,
+        };
+
+        let reactivated = reactivate_cycle(&mut graph, &members, "coord-only", &config);
+
+        // No reactivation — the only member is archived
+        assert!(reactivated.is_empty());
     }
 }

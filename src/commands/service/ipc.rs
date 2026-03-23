@@ -1090,6 +1090,12 @@ fn handle_archive_coordinator(dir: &Path, coordinator_id: u32) -> IpcResponse {
     };
 
     task.status = workgraph::graph::Status::Done;
+    // Remove coordinator-loop tag so archived coordinator disappears from filtered lists
+    task.tags.retain(|t| t != "coordinator-loop");
+    // Add 'archived' tag so cycle reactivation also skips this coordinator
+    if !task.tags.contains(&"archived".to_string()) {
+        task.tags.push("archived".to_string());
+    }
     task.log.push(workgraph::graph::LogEntry {
         timestamp: chrono::Utc::now().to_rfc3339(),
         actor: Some("daemon".to_string()),
@@ -1163,8 +1169,11 @@ fn handle_list_coordinators(dir: &Path) -> IpcResponse {
     let mut coordinators = Vec::new();
     for task in graph.tasks() {
         if task.tags.iter().any(|t| t == "coordinator-loop") {
-            // Skip abandoned coordinators (Done is allowed — coordinators cycle through Done between iterations)
+            // Skip abandoned or archived coordinators
             if matches!(task.status, workgraph::graph::Status::Abandoned) {
+                continue;
+            }
+            if task.tags.iter().any(|t| t == "archived") {
                 continue;
             }
             // Extract coordinator ID from task ID (.coordinator-N)
@@ -1816,5 +1825,67 @@ poll_interval = 120
             !ids.contains(&1),
             "Abandoned coordinator should not be listed"
         );
+    }
+
+    #[test]
+    fn test_handle_archive_coordinator_adds_archived_tag_and_removes_coordinator_loop() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = temp_dir.path();
+
+        let task = workgraph::graph::Task {
+            id: ".coordinator-2".to_string(),
+            title: "Coordinator 2".to_string(),
+            status: workgraph::graph::Status::InProgress,
+            tags: vec!["coordinator-loop".to_string()],
+            ..Default::default()
+        };
+
+        let mut graph = workgraph::graph::WorkGraph::new();
+        graph.add_node(workgraph::graph::Node::Task(task));
+        workgraph::parser::save_graph(&graph, &dir.join("graph.jsonl")).unwrap();
+
+        let resp = handle_archive_coordinator(dir, 2);
+        assert!(resp.ok);
+
+        // Reload and check task state
+        let graph = workgraph::parser::load_graph(&dir.join("graph.jsonl")).unwrap();
+        let task = graph.get_task(".coordinator-2").unwrap();
+        assert_eq!(task.status, workgraph::graph::Status::Done);
+        assert!(task.tags.contains(&"archived".to_string()));
+        assert!(!task.tags.contains(&"coordinator-loop".to_string()));
+    }
+
+    #[test]
+    fn test_handle_list_coordinators_excludes_archived() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = temp_dir.path();
+
+        let active = workgraph::graph::Task {
+            id: ".coordinator-0".to_string(),
+            title: "Active".to_string(),
+            status: workgraph::graph::Status::InProgress,
+            tags: vec!["coordinator-loop".to_string()],
+            ..Default::default()
+        };
+        let archived = workgraph::graph::Task {
+            id: ".coordinator-1".to_string(),
+            title: "Archived".to_string(),
+            status: workgraph::graph::Status::Done,
+            tags: vec!["coordinator-loop".to_string(), "archived".to_string()],
+            ..Default::default()
+        };
+
+        let mut graph = workgraph::graph::WorkGraph::new();
+        graph.add_node(workgraph::graph::Node::Task(active));
+        graph.add_node(workgraph::graph::Node::Task(archived));
+        workgraph::parser::save_graph(&graph, &dir.join("graph.jsonl")).unwrap();
+
+        let resp = handle_list_coordinators(dir);
+        assert!(resp.ok);
+        let data = resp.data.unwrap();
+        let coordinators = data["coordinators"].as_array().unwrap();
+
+        assert_eq!(coordinators.len(), 1);
+        assert_eq!(coordinators[0]["coordinator_id"].as_u64().unwrap(), 0);
     }
 }

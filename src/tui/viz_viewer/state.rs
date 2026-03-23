@@ -7440,6 +7440,7 @@ impl VizApp {
             .tasks()
             .filter(|t| t.tags.iter().any(|tag| tag == "coordinator-loop"))
             .filter(|t| !matches!(t.status, Status::Abandoned))
+            .filter(|t| !t.tags.iter().any(|tag| tag == "archived"))
             .filter_map(|t| {
                 let cid =
                     t.id.strip_prefix(".coordinator-")
