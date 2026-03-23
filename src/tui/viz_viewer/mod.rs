@@ -3,6 +3,7 @@ pub mod file_browser;
 pub mod file_browser_render;
 pub mod render;
 pub mod state;
+pub mod trace;
 
 #[cfg(test)]
 mod editor_tests;
@@ -41,11 +42,14 @@ fn detect_asciinema() -> bool {
 /// `recording`: when true (or auto-detected via `ASCIINEMA_REC`), disables
 /// mouse capture and keyboard enhancement queries that produce escape
 /// sequences incompatible with asciinema recording/playback.
+///
+/// `trace_path`: when `Some`, record all input events to the given JSONL file.
 pub fn run(
     workgraph_dir: PathBuf,
     viz_options: VizOptions,
     mouse_override: Option<bool>,
     recording: bool,
+    trace_path: Option<PathBuf>,
 ) -> Result<()> {
     let recording = recording || detect_asciinema();
 
@@ -88,8 +92,17 @@ pub fn run(
     } else {
         mouse_override
     };
+    let tracer = match trace_path {
+        Some(ref p) => Some(
+            trace::EventTracer::new(p)
+                .with_context(|| format!("failed to open trace file: {}", p.display()))?,
+        ),
+        None => None,
+    };
+
     let mut app = VizApp::new(workgraph_dir, viz_options, effective_mouse);
     app.has_keyboard_enhancement = has_keyboard_enhancement;
+    app.tracer = tracer;
     let result = event::run_event_loop(&mut terminal, &mut app);
 
     let _ = restore_terminal();

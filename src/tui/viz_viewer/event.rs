@@ -116,6 +116,10 @@ fn run_event_loop_inner(terminal: &mut DefaultTerminal, app: &mut VizApp) -> Res
                 if app.has_timed_ui_elements() || app.is_refresh_due() {
                     needs_redraw = true;
                 }
+                // Flush trace buffer during idle moments.
+                if let Some(tracer) = app.tracer.as_mut() {
+                    tracer.flush();
+                }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 anyhow::bail!("terminal event reader thread exited unexpectedly");
@@ -130,6 +134,14 @@ fn run_event_loop_inner(terminal: &mut DefaultTerminal, app: &mut VizApp) -> Res
 
 /// Route a single crossterm event to the appropriate handler.
 fn dispatch_event(app: &mut VizApp, ev: Event) {
+    // Record the event to the trace file (if tracing is enabled).
+    if app.tracer.is_some() {
+        let ctx = super::trace::capture_state_context(app);
+        if let Some(tracer) = app.tracer.as_mut() {
+            tracer.record(&ev, ctx);
+        }
+    }
+
     match ev {
         Event::Key(key) if key.kind == KeyEventKind::Press => {
             handle_key(app, key.code, key.modifiers);
