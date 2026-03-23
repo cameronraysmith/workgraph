@@ -2065,7 +2065,9 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     // When awaiting a coordinator response, hold unconsumed trailing user messages
     // to render BELOW the streaming output. These are "pending" — submitted but not
     // yet read by the coordinator, so visual order should match logical order.
-    let pending_start = if app.chat.awaiting_response {
+    // Once streaming text arrives, snap the user message into chronological position
+    // immediately (don't wait for the full response to complete).
+    let pending_start = if app.chat.awaiting_response && app.chat.streaming_text.is_empty() {
         let mut first_pending = app.chat.messages.len();
         for i in (0..app.chat.messages.len()).rev() {
             if app.chat.messages[i].role == super::state::ChatRole::User
