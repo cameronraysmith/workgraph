@@ -1612,6 +1612,20 @@ fn draw_detail_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         }
     };
 
+    // Extract output_mtime now (Copy-by-clone before detail borrow ends) so we can
+    // use it for the footer after all the mutable app borrows below.
+    let output_mtime = detail.output_mtime;
+
+    // Reserve 1 line at the bottom for the "last written X ago" footer when we have
+    // an output timestamp.
+    let (content_area, footer_area_opt) = if output_mtime.is_some() && area.height > 2 {
+        let [ca, fa] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
+        (ca, Some(fa))
+    } else {
+        (area, None)
+    };
+    let area = content_area;
+
     // Build visible lines: filter out content of collapsed sections, add ▸/▾ indicators.
     let mut visible_lines: Vec<String> = Vec::new();
     let mut current_section: Option<String> = None;
@@ -1804,6 +1818,27 @@ fn draw_detail_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
             total_lines.saturating_sub(viewport_h),
             app.hud_scroll,
         );
+    }
+
+    // ── "Last written X ago" footer ──
+    if let Some(footer_area) = footer_area_opt {
+        if let Some(mtime) = output_mtime {
+            let age_secs = mtime.elapsed().unwrap_or_default().as_secs();
+            let age_str = format_duration_compact(age_secs);
+            let footer_text = format!("─── last written {} ago ───", age_str);
+            let color = if age_secs < 30 {
+                Color::DarkGray
+            } else if age_secs < 300 {
+                Color::Yellow
+            } else {
+                Color::Red
+            };
+            let footer = Paragraph::new(Line::from(Span::styled(
+                footer_text,
+                Style::default().fg(color),
+            )));
+            frame.render_widget(footer, footer_area);
+        }
     }
 }
 

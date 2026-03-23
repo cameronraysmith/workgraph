@@ -1789,6 +1789,8 @@ pub struct HudDetail {
     pub rendered_lines: Vec<String>,
     /// Path to the agent output log file, if any (used for mtime-based live refresh).
     pub output_path: Option<std::path::PathBuf>,
+    /// Modification time of the output log at last load (used for "last written X ago" display).
+    pub output_mtime: Option<SystemTime>,
 }
 
 /// Extract section name from a detail header line like "── Description ──" → "Description".
@@ -4714,10 +4716,16 @@ impl VizApp {
 
         // Log entries are now shown in the dedicated log pane (L to toggle).
 
+        let output_mtime = live_output_path
+            .as_ref()
+            .and_then(|p| std::fs::metadata(p).ok())
+            .and_then(|m| m.modified().ok());
+
         self.hud_detail = Some(HudDetail {
             task_id,
             rendered_lines: lines,
             output_path: live_output_path,
+            output_mtime,
         });
     }
 
@@ -4909,10 +4917,16 @@ impl VizApp {
             lines.push(String::new());
         }
 
+        let output_mtime = live_output_path
+            .as_ref()
+            .and_then(|p| std::fs::metadata(p).ok())
+            .and_then(|m| m.modified().ok());
+
         self.hud_detail = Some(HudDetail {
             task_id: target_task_id.to_string(),
             rendered_lines: lines,
             output_path: live_output_path,
+            output_mtime,
         });
     }
 
