@@ -1367,11 +1367,63 @@ fn ensure_coordinator_task(dir: &Path) {
 
 /// Run compaction as a visible graph task (`.compact-N`).
 ///
-/// Compaction is purely cycle-driven: it fires only when `.compact-0` is
-/// graph-ready (status=Open and all after-deps are terminal). This replaces
-/// the old timer/ops-threshold gating via `should_compact()`.
+/// Compaction is cycle-driven but includes a threshold-based re-open mechanism:
+/// when `.compact-0` is stuck in Done (because the coordinator never marks
+/// itself done and the cycle can't iterate), it is force-reset to Open once
+/// accumulated tokens exceed the compaction threshold.
 fn run_graph_compaction(dir: &Path, compaction_error_count: &mut u64, logger: &DaemonLogger) {
     let gp = graph_path(dir);
+
+    // If .compact-0 is Done and accumulated tokens exceed the threshold,
+    // force-reset it to Open. Normal cycle iteration requires ALL members to
+    // be Done, but the coordinator is a persistent task that never completes,
+    // so the cycle can never iterate on its own.
+    {
+        let mut graph = match load_graph(&gp) {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        let is_done = graph
+            .get_task(".compact-0")
+            .map_or(false, |t| t.status == workgraph::graph::Status::Done);
+        if is_done {
+            let config = workgraph::config::Config::load_or_default(dir);
+            let threshold = config.effective_compaction_threshold();
+            if threshold > 0 {
+                let state = CoordinatorState::load_or_default(dir);
+                if state.accumulated_tokens >= threshold {
+                    if let Some(task) = graph.get_task_mut(".compact-0") {
+                        task.status = workgraph::graph::Status::Open;
+                        task.started_at = None;
+                        task.completed_at = None;
+                        task.log.push(workgraph::graph::LogEntry {
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                            actor: Some("daemon".to_string()),
+                            message: format!(
+                                "Re-opened: tokens {} >= threshold {} (coordinator cycle bypass)",
+                                state.accumulated_tokens, threshold
+                            ),
+                        });
+                        if task.log.len() > 50 {
+                            let drain_count = task.log.len() - 50;
+                            task.log.drain(..drain_count);
+                        }
+                        if let Err(e) = workgraph::parser::save_graph(&graph, &gp) {
+                            logger.error(&format!(
+                                "Failed to save graph after resetting .compact-0: {}",
+                                e
+                            ));
+                            return;
+                        }
+                        logger.info(&format!(
+                            "Re-opened .compact-0: tokens {} >= threshold {}",
+                            state.accumulated_tokens, threshold
+                        ));
+                    }
+                }
+            }
+        }
+    }
 
     // Check if .compact-0 is cycle-ready (uses cycle-aware readiness, not terminal check)
     {
@@ -3605,6 +3657,135 @@ mod tests {
             compact.status,
             Status::Open,
             ".compact-0 should remain Open when blocked"
+        );
+    }
+
+    #[test]
+    fn test_compaction_reopens_done_compact_when_over_threshold() {
+        use workgraph::graph::{CycleConfig, Node, Status, Task};
+
+        let temp_dir = TempDir::new().unwrap();
+        let dir = temp_dir.path();
+        let gp = dir.join("graph.jsonl");
+
+        // Realistic setup: .coordinator-0 is InProgress (persistent) with cycle_config,
+        // .compact-0 is Done (completed a previous iteration) in the same cycle.
+        let mut graph = workgraph::graph::WorkGraph::new();
+        graph.add_node(Node::Task(Task {
+            id: ".coordinator-0".to_string(),
+            title: "Coordinator 0".to_string(),
+            status: Status::InProgress,
+            after: vec![".compact-0".to_string()],
+            cycle_config: Some(CycleConfig {
+                max_iterations: 0,
+                guard: None,
+                delay: None,
+                no_converge: true,
+                restart_on_failure: true,
+                max_failure_restarts: None,
+            }),
+            ..Default::default()
+        }));
+        graph.add_node(Node::Task(Task {
+            id: ".compact-0".to_string(),
+            title: "Compact 0".to_string(),
+            status: Status::Done,
+            after: vec![".coordinator-0".to_string()],
+            tags: vec!["compact-loop".to_string()],
+            loop_iteration: 5, // has run before
+            ..Default::default()
+        }));
+        workgraph::parser::save_graph(&graph, &gp).unwrap();
+
+        let logger = DaemonLogger::open(dir).unwrap();
+        let mut error_count = 0u64;
+
+        // Pre-seed accumulated tokens above threshold
+        let mut cs = CoordinatorState::load_or_default(dir);
+        cs.accumulated_tokens = 200_000;
+        cs.save(dir);
+
+        // Before fix: .compact-0 is Done, cycle can't iterate because
+        // .coordinator-0 is InProgress — compaction would never fire.
+        // After fix: .compact-0 should be reset to Open, then fire.
+        run_graph_compaction(dir, &mut error_count, &logger);
+
+        let graph = load_graph(&gp).unwrap();
+        let compact = graph.get_task(".compact-0").unwrap();
+
+        // Compaction should have been attempted (will fail due to no LLM,
+        // but log entries prove .compact-0 was re-opened and compaction fired)
+        assert!(
+            !compact.log.is_empty(),
+            "compaction should fire after re-opening .compact-0 when tokens exceed threshold"
+        );
+        // The re-open log entry should be present
+        assert!(
+            compact
+                .log
+                .iter()
+                .any(|e| e.message.contains("Re-opened")),
+            "should have a Re-opened log entry"
+        );
+    }
+
+    #[test]
+    fn test_compaction_does_not_reopen_below_threshold() {
+        use workgraph::graph::{CycleConfig, Node, Status, Task};
+
+        let temp_dir = TempDir::new().unwrap();
+        let dir = temp_dir.path();
+        let gp = dir.join("graph.jsonl");
+
+        // Same setup but tokens are BELOW threshold
+        let mut graph = workgraph::graph::WorkGraph::new();
+        graph.add_node(Node::Task(Task {
+            id: ".coordinator-0".to_string(),
+            title: "Coordinator 0".to_string(),
+            status: Status::InProgress,
+            after: vec![".compact-0".to_string()],
+            cycle_config: Some(CycleConfig {
+                max_iterations: 0,
+                guard: None,
+                delay: None,
+                no_converge: true,
+                restart_on_failure: true,
+                max_failure_restarts: None,
+            }),
+            ..Default::default()
+        }));
+        graph.add_node(Node::Task(Task {
+            id: ".compact-0".to_string(),
+            title: "Compact 0".to_string(),
+            status: Status::Done,
+            after: vec![".coordinator-0".to_string()],
+            tags: vec!["compact-loop".to_string()],
+            loop_iteration: 5,
+            ..Default::default()
+        }));
+        workgraph::parser::save_graph(&graph, &gp).unwrap();
+
+        let logger = DaemonLogger::open(dir).unwrap();
+        let mut error_count = 0u64;
+
+        // Tokens below default threshold — should NOT re-open
+        let mut cs = CoordinatorState::load_or_default(dir);
+        cs.accumulated_tokens = 1000;
+        cs.save(dir);
+
+        run_graph_compaction(dir, &mut error_count, &logger);
+
+        let graph = load_graph(&gp).unwrap();
+        let compact = graph.get_task(".compact-0").unwrap();
+
+        assert_eq!(
+            compact.status,
+            Status::Done,
+            ".compact-0 should remain Done when tokens are below threshold"
+        );
+        assert!(
+            compact.log.is_empty(),
+            "no log entries should be added when not re-opening"
         );
     }
 
