@@ -5770,6 +5770,23 @@ fn draw_service_control_panel(frame: &mut Frame, app: &VizApp) {
         *focus == ControlPanelFocus::Restart,
         Color::Cyan,
     ));
+    // Agent slots: show current value with +/- hint
+    let slots_focused = *focus == ControlPanelFocus::AgentSlots;
+    let slots_label = format!("Agent Slots: {}", health.agents_max);
+    let slots_style = if slots_focused {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Cyan)
+    };
+    lines.push(Line::from(vec![
+        Span::styled(if slots_focused { " > " } else { "   " }, slots_style),
+        Span::styled(&slots_label, slots_style),
+        Span::styled("  ", Style::default()),
+        Span::styled("[+/-] adjust", Style::default().fg(Color::DarkGray)),
+    ]));
     let pf = *focus == ControlPanelFocus::PanicKill;
     let ps = if pf {
         Style::default()

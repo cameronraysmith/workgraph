@@ -438,6 +438,21 @@ fn handle_service_control_panel_key(app: &mut VizApp, code: KeyCode) {
         }
         return;
     }
+    // When AgentSlots is focused, +/- and left/right adjust the slot count
+    if app.service_health.panel_focus == ControlPanelFocus::AgentSlots {
+        match code {
+            KeyCode::Char('+') | KeyCode::Char('=') | KeyCode::Right | KeyCode::Char('l') => {
+                app.adjust_agent_slots(1);
+                return;
+            }
+            KeyCode::Char('-') | KeyCode::Left | KeyCode::Char('h') => {
+                app.adjust_agent_slots(-1);
+                return;
+            }
+            // Fall through for navigation keys (up/down/esc/etc.)
+            _ => {}
+        }
+    }
     match code {
         KeyCode::Esc | KeyCode::Char('q') => {
             app.close_service_control_panel();

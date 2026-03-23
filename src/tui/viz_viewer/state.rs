@@ -1045,6 +1045,7 @@ pub enum ControlPanelFocus {
     StartStop,
     PauseResume,
     Restart,
+    AgentSlots,
     PanicKill,
     StuckAgent(usize),
     KillAllDead,
@@ -1056,7 +1057,8 @@ impl ControlPanelFocus {
         match self {
             Self::StartStop => Self::PauseResume,
             Self::PauseResume => Self::Restart,
-            Self::Restart => Self::PanicKill,
+            Self::Restart => Self::AgentSlots,
+            Self::AgentSlots => Self::PanicKill,
             Self::PanicKill => {
                 if stuck_count > 0 {
                     Self::StuckAgent(0)
@@ -1080,7 +1082,8 @@ impl ControlPanelFocus {
             Self::StartStop => Self::RetryFailedEvals,
             Self::PauseResume => Self::StartStop,
             Self::Restart => Self::PauseResume,
-            Self::PanicKill => Self::Restart,
+            Self::AgentSlots => Self::Restart,
+            Self::PanicKill => Self::AgentSlots,
             Self::StuckAgent(i) => {
                 if *i > 0 {
                     Self::StuckAgent(i - 1)
@@ -6882,6 +6885,9 @@ impl VizApp {
                 );
                 self.set_service_feedback("Restarting...".into());
             }
+            ControlPanelFocus::AgentSlots => {
+                // No action on Enter for agent slots — use +/- to adjust
+            }
             ControlPanelFocus::PanicKill => {}
             ControlPanelFocus::StuckAgent(idx) => {
                 if let Some(st) = health.stuck_tasks.get(idx) {
@@ -6908,6 +6914,26 @@ impl VizApp {
                 self.set_service_feedback("Retrying failed evals...".into());
             }
         }
+    }
+
+    /// Adjust the max_agents slot count by `delta` (positive = increase, negative = decrease).
+    /// Persists the change via `wg config --max-agents N` and updates local state immediately.
+    pub fn adjust_agent_slots(&mut self, delta: i32) {
+        let current = self.service_health.agents_max;
+        let new_val = (current as i32 + delta).max(1) as usize;
+        if new_val == current {
+            return;
+        }
+        self.service_health.agents_max = new_val;
+        self.exec_command(
+            vec![
+                "config".into(),
+                "--max-agents".into(),
+                new_val.to_string(),
+            ],
+            CommandEffect::RefreshAndNotify(format!("Set max_agents = {}", new_val)),
+        );
+        self.set_service_feedback(format!("Agent slots: {}", new_val));
     }
 
     pub fn execute_panic_kill(&mut self) {
@@ -11275,6 +11301,18 @@ mod service_health_tests {
         let f = ControlPanelFocus::StartStop;
         assert_eq!(f.next(0), ControlPanelFocus::PauseResume);
         assert_eq!(f.next(0).next(0), ControlPanelFocus::Restart);
+    }
+
+    #[test]
+    fn control_panel_focus_agent_slots() {
+        // Restart -> AgentSlots -> PanicKill
+        let f = ControlPanelFocus::Restart;
+        assert_eq!(f.next(0), ControlPanelFocus::AgentSlots);
+        assert_eq!(f.next(0).next(0), ControlPanelFocus::PanicKill);
+        // PanicKill -> prev -> AgentSlots -> prev -> Restart
+        let f = ControlPanelFocus::PanicKill;
+        assert_eq!(f.prev(0), ControlPanelFocus::AgentSlots);
+        assert_eq!(f.prev(0).prev(0), ControlPanelFocus::Restart);
     }
 
     #[test]
