@@ -240,11 +240,14 @@ pub struct TuiConfig {
     #[serde(default = "default_counters")]
     pub counters: String,
     /// Show all system tasks (dot-prefixed) by default in TUI
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub show_system_tasks: bool,
     /// Show only running (in-progress/open) system tasks by default
     #[serde(default)]
     pub show_running_system_tasks: bool,
+    /// Show key press feedback overlay (useful for screencasts/demos)
+    #[serde(default)]
+    pub show_keys: bool,
 }
 
 fn default_tui_layout() -> String {
@@ -293,8 +296,9 @@ impl Default for TuiConfig {
             chat_history: true,
             chat_history_max: default_chat_history_max(),
             counters: default_counters(),
-            show_system_tasks: true,
+            show_system_tasks: false,
             show_running_system_tasks: false,
+            show_keys: false,
         }
     }
 }
