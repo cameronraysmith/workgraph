@@ -2,6 +2,7 @@
 """Compress interaction-raw.cast into a 45-60s time-lapse with scene markers.
 
 Scene-aware compression tuned for the interaction screencast:
+- Scene 0 (CLI): moderate — show commands, crush wait between them
 - Scene 1 (Launch): moderate — typing visible
 - Scene 2 (Chat): typing real-speed, coordinator think-time crushed
 - Scene 3 (Agents): heavy on wait, keep status transitions visible
@@ -27,8 +28,10 @@ SCENE_PAUSE = 0.5
 #   short_wait_cap: cap for gaps 1-3s
 #   long_wait_cap: cap for gaps >3s
 SCENE_PARAMS = {
-    # Scene 1 (~5s target): typing + TUI launch
-    "launch":      (1.0, 2.0, 0.30, 0.25),
+    # Scene 0 (~5s target): CLI commands — typing visible, output waits crushed
+    "cli":         (1.0, 2.0, 0.20, 0.12),
+    # Scene 1 (~4s target): typing + TUI launch
+    "launch":      (1.0, 2.0, 0.25, 0.20),
     # Scene 2 (~8s target): typing real-speed, coordinator wait crushed
     "chat":        (1.0, 1.5, 0.20, 0.15),
     # Scene 3 (~10s target): agent spawn waits crushed, transitions visible
@@ -59,7 +62,8 @@ def detect_scenes(frames):
 
     Returns list of (scene_name, start_frame_idx).
     """
-    scenes = [("launch", 0)]
+    scenes = [("cli", 0)]
+    launch_started = False
     tui_entered = False
     chat_started = False
     agents_started = False
@@ -69,6 +73,12 @@ def detect_scenes(frames):
 
     for i, frame in enumerate(frames):
         clean = re.sub(r'\x1b\[[^a-zA-Z]*[a-zA-Z]', '', frame[2])
+
+        # Detect "wg tui" command typed — transition from CLI to launch scene
+        if not launch_started and "wg tui" in clean:
+            launch_started = True
+            scenes.append(("launch", i))
+            continue
 
         # TUI loaded — transition to chat scene
         if not tui_entered and ("Chat" in clean or "LIVE" in clean):
@@ -96,7 +106,7 @@ def detect_scenes(frames):
                 # Look for Detail tab content indicators
                 if ("Detail" in clean and "Status" in clean) or \
                    ("Log" in clean and re.search(r'\d{4}-\d{2}-\d{2}', clean)) or \
-                   "Fire" in clean:
+                   "Fire" in clean or "Agency" in clean:
                     detail_started = True
                     scenes.append(("detail", i))
 
@@ -123,8 +133,9 @@ def detect_scenes(frames):
                 scenes.append(("survey", i))
 
     # If we didn't detect all scenes, add reasonable defaults
+    if not launch_started:
+        scenes.append(("launch", len(frames) // 8))
     if not agents_started:
-        # Place agents scene at 1/4 through
         scenes.append(("agents", len(frames) // 4))
     if not detail_started:
         scenes.append(("detail", len(frames) // 3))

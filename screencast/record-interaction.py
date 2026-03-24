@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Record the interaction screencast: coordinator conversation → agents → live output.
+"""Record the interaction screencast: CLI orient → TUI → coordinator → agents → live output.
 
-The new "hero" screencast that leads with the coordinator interaction.
+The new "hero" screencast that leads with CLI context before the TUI.
 Based on the design in docs/design/screencast-interaction-flow.md.
 
 Scenes:
+0. CLI Orient: wg status, wg list, wg ready, wg viz — establish CLI workflow
 1. Launch: wg tui (service pre-started)
 2. Talk to Coordinator: type prompt, coordinator responds + creates tasks
 3. Tasks Appear + Agents Spawn: graph fills in, parallel execution
-4. Live Detail View: Detail → Log → Firehose tabs showing agent output
+4. Live Detail View: Detail → Agency → Firehose (log) tabs showing agent output
 5. Conversation Round 2: follow-up message, coordinator adapts graph
 6. Final Survey + Exit: review completed tasks, quit
 
@@ -271,13 +272,53 @@ def start_service():
 
 # ── Scenes ──────────────────────────────────────────────────
 
-def scene_1_launch(h):
-    """Scene 1: Launch TUI (service already running)."""
-    log("=== Scene 1: Launch + Orient ===")
+def scene_0_cli(h):
+    """Scene 0: CLI Orient — show key commands before entering TUI."""
+    log("=== Scene 0: CLI Orient ===")
 
     h.wait_for("$", timeout=5)
     h.send_keys("C-l")
     h.sleep(0.5)
+
+    # wg status — show project state
+    h.type_naturally("wg status", wpm=45)
+    h.send_keys("Enter")
+    log("Sent: wg status")
+    h.sleep(2.5)
+    h.flush_frame()
+
+    # wg list — show task list (empty at start)
+    h.type_naturally("wg list", wpm=45)
+    h.send_keys("Enter")
+    log("Sent: wg list")
+    h.sleep(2)
+    h.flush_frame()
+
+    # wg ready — what's available to work on
+    h.type_naturally("wg ready", wpm=45)
+    h.send_keys("Enter")
+    log("Sent: wg ready")
+    h.sleep(2)
+    h.flush_frame()
+
+    # wg viz — ASCII dependency graph
+    h.type_naturally("wg viz", wpm=45)
+    h.send_keys("Enter")
+    log("Sent: wg viz")
+    h.sleep(2.5)
+    h.flush_frame()
+
+    scenes_captured["scene0_cli"] = True
+    log("Scene 0 complete")
+
+
+def scene_1_launch(h):
+    """Scene 1: Launch TUI (service already running)."""
+    log("=== Scene 1: Launch + Orient ===")
+
+    # Clear screen for clean transition to TUI
+    h.send_keys("C-l")
+    h.sleep(0.3)
 
     # Type wg tui naturally
     h.type_naturally("wg tui", wpm=40)
@@ -291,8 +332,16 @@ def scene_1_launch(h):
     else:
         log("WARNING: TUI render not detected")
 
-    # Let viewer orient (graph left, chat right)
-    h.sleep(3)
+    # Give graph more visible space — press I (capital) to shrink inspector
+    h.sleep(1)
+    for _ in range(3):
+        h.send_keys("I")
+        h.sleep(0.4)
+    h.flush_frame()
+    log("Shrunk inspector panel (capital I x3)")
+
+    # Let viewer orient (graph left, smaller inspector right)
+    h.sleep(2.5)
     h.flush_frame()
 
     scenes_captured["scene1_launch"] = found
@@ -377,7 +426,7 @@ def scene_2_chat(h, use_real_coordinator=True):
 
 
 def scene_3_agents_spawn(h):
-    """Scene 3: Tasks Appear + Agents Spawn."""
+    """Scene 3: Tasks Appear + Agents Spawn — arrow navigation highlights."""
     log("=== Scene 3: Tasks Appear + Agents Spawn ===")
 
     # Exit chat input to graph focus
@@ -392,22 +441,25 @@ def scene_3_agents_spawn(h):
     else:
         log("WARNING: No in-progress after 120s")
 
-    h.sleep(3)
+    h.sleep(2)
 
-    # Navigate down through tasks to show the graph
-    for i in range(3):
+    # Navigate down through tasks — each arrow press updates the inspector
+    # This is the core interaction: graph navigation → inspector responds
+    log("Arrow key navigation through graph nodes...")
+    for i in range(5):
         h.send_keys("Down")
-        h.sleep(1.2)
+        h.sleep(1.5)
         h.flush_frame()
 
-    # Pause to let viewer see parallel agents
-    h.sleep(3)
+    # Pause so viewer sees the selected node + inspector detail
+    h.sleep(2)
     h.flush_frame()
 
-    # Navigate back up
+    # Navigate back up to show bidirectional navigation
     for i in range(3):
         h.send_keys("Up")
-        h.sleep(0.8)
+        h.sleep(1.2)
+        h.flush_frame()
 
     h.sleep(2)
     h.flush_frame()
@@ -417,7 +469,7 @@ def scene_3_agents_spawn(h):
 
 
 def scene_4_detail_view(h):
-    """Scene 4: Live Detail View — the money shot."""
+    """Scene 4: Live Detail View — Detail, Agency, Firehose showcase."""
     log("=== Scene 4: Live Detail View ===")
 
     # Find an in-progress task to inspect
@@ -426,50 +478,58 @@ def scene_4_detail_view(h):
     if r and r.stdout:
         for line in r.stdout.split("\n"):
             if "in-progress" in line.lower():
-                # Extract task id
                 parts = line.strip().split()
                 if parts:
                     in_progress_tasks.append(parts[0])
     log(f"In-progress tasks: {in_progress_tasks}")
 
-    # Navigate to an in-progress task (navigate down to find one)
+    # Navigate to an in-progress task
     for i in range(6):
         snap = h.snapshot()
-        # Check if we're highlighting an in-progress task
         if "in-progress" in snap.lower() or "progress" in snap.lower():
             break
         h.send_keys("Down")
         h.sleep(0.8)
 
-    # Sub-scene 4a: Detail tab
-    log("Sub-scene 4a: Detail tab")
+    # Sub-scene 4a: Detail tab — the most interesting view
+    log("Sub-scene 4a: Detail tab (key 1)")
     h.send_keys("1")
-    h.sleep(3)
+    h.sleep(4)
     h.flush_frame()
 
-    # Sub-scene 4b: Log tab
-    log("Sub-scene 4b: Log tab")
-    h.send_keys("2")
+    # Navigate to a different node to show detail updating
+    h.send_keys("Down")
+    h.sleep(1.5)
+    h.flush_frame()
+    h.send_keys("Down")
+    h.sleep(1.5)
+    h.flush_frame()
+
+    # Sub-scene 4b: Agency tab — show agent assignments
+    log("Sub-scene 4b: Agency tab (key 4)")
+    h.send_keys("4")
     h.sleep(3)
     h.flush_frame()
 
     # Sub-scene 4c: Firehose tab — THE money shot
-    log("Sub-scene 4c: Firehose tab")
-
-    # Check how many agents are alive
+    log("Sub-scene 4c: Firehose tab (key 8)")
     alive = count_alive_agents()
     log(f"Alive agents: {alive}")
 
+    h.send_keys("8")
+    h.sleep(4)
+    h.flush_frame()
+
     if alive >= 1:
-        h.send_keys("8")
-        h.sleep(5)
-        h.flush_frame()
         log("Firehose tab shown with live agents")
     else:
-        # Agents already done — show Log tab instead (still has content)
-        log("No alive agents — staying on Log tab")
-        h.sleep(3)
-        h.flush_frame()
+        log("No alive agents — firehose may be empty")
+
+    # Sub-scene 4d: Log tab — show task logs in firehose context
+    log("Sub-scene 4d: Log tab (key 2)")
+    h.send_keys("2")
+    h.sleep(3)
+    h.flush_frame()
 
     scenes_captured["scene4_detail"] = True
     log("Scene 4 complete")
@@ -628,6 +688,9 @@ def record():
             shell_command=shell_cmd,
             idle_time_limit=5.0,
         ) as h:
+            # Scene 0: CLI Orient
+            scene_0_cli(h)
+
             # Scene 1: Launch
             tui_ok = scene_1_launch(h)
             if not tui_ok:
