@@ -782,22 +782,13 @@ pub(crate) fn generate_ascii(
         build_tree_char_edge_map(&lines, &node_line_map);
 
     // Phase 2: Draw right-side arcs for all non-tree edges
-    let has_crossings = draw_back_edge_arcs(
+    let _has_crossings = draw_back_edge_arcs(
         &mut lines,
         &back_edge_arcs,
         use_color,
         arc_color,
         &mut char_edge_map,
     );
-
-    // Append legend when crossings are present
-    if has_crossings {
-        lines.push(String::new());
-        lines.push(format!(
-            "{}Legend: ┼ = crossing (vertical arc passes through horizontal){}",
-            dim, reset
-        ));
-    }
 
     // Build owned node_line_map and task_order (sorted by line number)
     let owned_node_line_map: HashMap<String, usize> = node_line_map
@@ -2858,12 +2849,6 @@ mod tests {
             "Should have crossing character ┼ where arcs cross\nOutput:\n{}",
             result.text
         );
-        // Should contain legend explaining the crossing symbol
-        assert!(
-            result.text.contains("Legend:"),
-            "Should have legend when crossings exist\nOutput:\n{}",
-            result.text
-        );
     }
 
     #[test]
@@ -3585,21 +3570,6 @@ mod tests {
             viz.task_order[viz.task_order.len() - 1],
             *viz.task_order.last().unwrap()
         ); // End → last
-    }
-
-    // --- Spec Rule 18: No legend in simple graphs ---
-
-    #[test]
-    fn spec_rule_18_no_legend_simple_graph() {
-        let graph = build_linear_chain();
-        let viz = render_graph(&graph);
-        let plain = strip_ansi_for_map(&viz.text);
-        for line in plain.lines() {
-            assert!(
-                !line.trim_start().starts_with("Legend:"),
-                "Simple chain should not have a Legend line"
-            );
-        }
     }
 
     // --- char_edge_map: linear chain completeness & no spurious edges ---
