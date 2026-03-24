@@ -46,6 +46,9 @@ pub fn show(dir: &Path, scope: Option<ConfigScope>, json: bool) -> Result<()> {
         println!("  interval = {}", config.coordinator.interval);
         println!("  poll_interval = {}", config.coordinator.poll_interval);
         println!("  executor = \"{}\"", config.coordinator.executor);
+        if let Some(ref m) = config.coordinator.model {
+            println!("  model = \"{}\"", m);
+        }
         println!();
         println!("[agency]");
         println!("  auto_evaluate = {}", config.agency.auto_evaluate);
@@ -304,6 +307,7 @@ pub fn update(
     coordinator_interval: Option<u64>,
     poll_interval: Option<u64>,
     coordinator_executor: Option<&str>,
+    coordinator_model: Option<&str>,
     auto_evaluate: Option<bool>,
     auto_assign: Option<bool>,
     assigner_model: Option<&str>,
@@ -389,6 +393,12 @@ pub fn update(
     if let Some(exec) = coordinator_executor {
         config.coordinator.executor = exec.to_string();
         println!("Set coordinator.executor = \"{}\"", exec);
+        changed = true;
+    }
+
+    if let Some(m) = coordinator_model {
+        config.coordinator.model = Some(m.to_string());
+        println!("Set coordinator.model = \"{}\"", m);
         changed = true;
     }
 
@@ -1712,6 +1722,7 @@ mod tests {
             None,
             None,
             None,
+            None, // coordinator_model
             None,
             None,
             None,
@@ -1768,6 +1779,7 @@ mod tests {
             Some(60),
             None,
             Some("shell"),
+            None, // coordinator_model
             None,
             None,
             None,
@@ -1824,6 +1836,7 @@ mod tests {
             None,
             Some(120),
             None,
+            None, // coordinator_model
             None,
             None,
             None,
@@ -1878,6 +1891,7 @@ mod tests {
             None,
             None,
             None,
+            None, // coordinator_model
             Some(true),
             Some(true),
             Some("sonnet"),

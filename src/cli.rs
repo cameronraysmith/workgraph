@@ -1108,6 +1108,10 @@ pub enum Commands {
         #[arg(long)]
         coordinator_executor: Option<String>,
 
+        /// Set coordinator model (e.g., opus, sonnet, haiku)
+        #[arg(long)]
+        coordinator_model: Option<String>,
+
         /// Matrix configuration subcommand
         #[arg(long)]
         matrix: bool,
