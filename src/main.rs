@@ -556,7 +556,7 @@ fn main() -> Result<()> {
                     max_columns: None, // TUI handles its own sizing
                 };
                 let mouse_override = if no_mouse { Some(false) } else { None };
-                tui::viz_viewer::run(workgraph_dir, options, mouse_override, false, None)
+                tui::viz_viewer::run(workgraph_dir, options, mouse_override, false, None, false)
             } else {
                 let fmt = if dot {
                     commands::viz::OutputFormat::Dot
@@ -1940,8 +1940,9 @@ fn main() -> Result<()> {
                 no_coordinator_agent,
             ),
         },
-        Commands::Tui { no_mouse, recording, trace } => {
-            let resolved_edge_color = Config::load_or_default(&workgraph_dir).viz.edge_color;
+        Commands::Tui { no_mouse, recording, trace, show_keys } => {
+            let config = Config::load_or_default(&workgraph_dir);
+            let resolved_edge_color = config.viz.edge_color;
             let options = commands::viz::VizOptions {
                 all: true,
                 status: None,
@@ -1958,7 +1959,27 @@ fn main() -> Result<()> {
                 max_columns: None, // TUI handles its own sizing
             };
             let mouse_override = if no_mouse { Some(false) } else { None };
-            tui::viz_viewer::run(workgraph_dir, options, mouse_override, recording, trace)
+            let show_keys = show_keys || config.tui.show_keys;
+            tui::viz_viewer::run(workgraph_dir, options, mouse_override, recording, trace, show_keys)
+        }
+        Commands::TuiDump {} => {
+            let snap = tui::viz_viewer::screen_dump::client_dump(&workgraph_dir)?;
+            if cli.json {
+                let j = serde_json::json!({
+                    "width": snap.width,
+                    "height": snap.height,
+                    "active_tab": snap.active_tab,
+                    "focused_panel": snap.focused_panel,
+                    "selected_task": snap.selected_task,
+                    "input_mode": snap.input_mode,
+                    "coordinator_id": snap.coordinator_id,
+                    "text": snap.text,
+                });
+                println!("{}", serde_json::to_string_pretty(&j)?);
+            } else {
+                println!("{}", snap.text);
+            }
+            Ok(())
         }
         Commands::Screencast { command } => match command {
             ScreencastCommands::Render {

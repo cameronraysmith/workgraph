@@ -2,6 +2,7 @@ pub mod event;
 pub mod file_browser;
 pub mod file_browser_render;
 pub mod render;
+pub mod screen_dump;
 pub mod state;
 pub mod trace;
 
@@ -10,6 +11,8 @@ mod editor_tests;
 
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use anyhow::{Context, Result};
 use crossterm::{
@@ -50,6 +53,7 @@ pub fn run(
     mouse_override: Option<bool>,
     recording: bool,
     trace_path: Option<PathBuf>,
+    show_keys: bool,
 ) -> Result<()> {
     let recording = recording || detect_asciinema();
 
@@ -100,10 +104,27 @@ pub fn run(
         None => None,
     };
 
-    let mut app = VizApp::new(workgraph_dir, viz_options, effective_mouse);
+    let mut app = VizApp::new(workgraph_dir.clone(), viz_options, effective_mouse);
     app.has_keyboard_enhancement = has_keyboard_enhancement;
     app.tracer = tracer;
-    let result = event::run_event_loop(&mut terminal, &mut app);
+    app.key_feedback_enabled = show_keys;
+
+    // Start the screen dump IPC server so external agents can read the
+    // current TUI contents via `wg tui dump`.
+    let shared_screen = screen_dump::new_shared_screen();
+    let dump_shutdown = Arc::new(AtomicBool::new(false));
+    #[cfg(unix)]
+    let dump_server_started =
+        screen_dump::start_server(&workgraph_dir, shared_screen.clone(), dump_shutdown.clone())
+            .is_ok();
+    #[cfg(not(unix))]
+    let dump_server_started = false;
+    let _ = dump_server_started;
+
+    let result = event::run_event_loop(&mut terminal, &mut app, &shared_screen);
+
+    // Signal the dump server to shut down and clean up the socket.
+    dump_shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
 
     let _ = restore_terminal();
 

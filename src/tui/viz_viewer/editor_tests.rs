@@ -1015,4 +1015,124 @@ mod tui_editor_tests {
             text
         );
     }
+
+    // ── Key feedback tests ──────────────────────────────────────────
+
+    #[test]
+    fn key_feedback_records_when_enabled() {
+        let mut app = make_editor_test_app();
+        app.key_feedback_enabled = true;
+        app.record_key_feedback("Tab".to_string());
+        app.record_key_feedback("↑".to_string());
+        assert_eq!(app.key_feedback.len(), 2);
+        assert_eq!(app.key_feedback[0].0, "Tab");
+        assert_eq!(app.key_feedback[1].0, "↑");
+    }
+
+    #[test]
+    fn key_feedback_ignored_when_disabled() {
+        let mut app = make_editor_test_app();
+        app.key_feedback_enabled = false;
+        app.record_key_feedback("Tab".to_string());
+        assert!(app.key_feedback.is_empty());
+    }
+
+    #[test]
+    fn key_feedback_respects_max_entries() {
+        let mut app = make_editor_test_app();
+        app.key_feedback_enabled = true;
+        for i in 0..10 {
+            app.record_key_feedback(format!("k{i}"));
+        }
+        // MAX is 6 entries
+        assert!(app.key_feedback.len() <= 6);
+        // Newest entry is the last one recorded
+        assert_eq!(app.key_feedback.back().unwrap().0, "k9");
+    }
+
+    #[test]
+    fn key_feedback_cleanup_removes_expired() {
+        let mut app = make_editor_test_app();
+        app.key_feedback_enabled = true;
+        // Manually push an entry with an old timestamp.
+        app.key_feedback.push_back((
+            "old".to_string(),
+            std::time::Instant::now() - std::time::Duration::from_secs(5),
+        ));
+        app.key_feedback
+            .push_back(("new".to_string(), std::time::Instant::now()));
+        app.cleanup_key_feedback();
+        assert_eq!(app.key_feedback.len(), 1);
+        assert_eq!(app.key_feedback[0].0, "new");
+    }
+
+    #[test]
+    fn key_feedback_dispatch_event_records_keys() {
+        use crossterm::event::{Event, KeyEvent, KeyEventKind, KeyEventState};
+        let mut app = make_editor_test_app();
+        app.key_feedback_enabled = true;
+        // Dispatch a Tab key event
+        let ev = Event::Key(KeyEvent {
+            code: KeyCode::Tab,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        });
+        crate::tui::viz_viewer::event::dispatch_event(&mut app, ev);
+        assert!(!app.key_feedback.is_empty());
+        assert_eq!(app.key_feedback.back().unwrap().0, "Tab");
+    }
+
+    #[test]
+    fn key_feedback_label_arrow_keys() {
+        use crossterm::event::{Event, KeyEvent, KeyEventKind, KeyEventState};
+        let mut app = make_editor_test_app();
+        app.key_feedback_enabled = true;
+
+        for (code, expected) in [
+            (KeyCode::Up, "↑"),
+            (KeyCode::Down, "↓"),
+            (KeyCode::Left, "←"),
+            (KeyCode::Right, "→"),
+        ] {
+            let ev = Event::Key(KeyEvent {
+                code,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            });
+            crate::tui::viz_viewer::event::dispatch_event(&mut app, ev);
+            assert_eq!(app.key_feedback.back().unwrap().0, expected);
+        }
+    }
+
+    #[test]
+    fn key_feedback_label_ctrl_modifier() {
+        use crossterm::event::{Event, KeyEvent, KeyEventKind, KeyEventState};
+        let mut app = make_editor_test_app();
+        app.key_feedback_enabled = true;
+
+        let ev = Event::Key(KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        });
+        crate::tui::viz_viewer::event::dispatch_event(&mut app, ev);
+        assert_eq!(app.key_feedback.back().unwrap().0, "Ctrl+c");
+    }
+
+    #[test]
+    fn key_feedback_renders_without_panic() {
+        let mut app = make_editor_test_app();
+        app.key_feedback_enabled = true;
+        app.record_key_feedback("Tab".to_string());
+        app.record_key_feedback("↑".to_string());
+        app.record_key_feedback("Enter".to_string());
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render::draw(frame, &mut app)).unwrap();
+        // If we got here without panicking, rendering works.
+    }
 }

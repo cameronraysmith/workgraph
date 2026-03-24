@@ -1458,7 +1458,16 @@ pub enum Commands {
         /// Record all input events to a JSONL file for replay-based screencasts.
         #[arg(long, value_name = "FILE")]
         trace: Option<std::path::PathBuf>,
+
+        /// Show key press feedback overlay (useful for screencasts/demos).
+        /// Also enabled by tui.show_keys config.
+        #[arg(long)]
+        show_keys: bool,
     },
+
+    /// Dump the current TUI screen contents (requires a running `wg tui`)
+    #[command(name = "tui-dump")]
+    TuiDump {},
 
     /// Render TUI event traces into asciinema screencasts
     Screencast {
@@ -3189,6 +3198,7 @@ pub fn command_name(cmd: &Commands) -> &'static str {
         Commands::Service { .. } => "service",
         Commands::Screencast { .. } => "screencast",
         Commands::Tui { .. } => "tui",
+        Commands::TuiDump { .. } => "tui-dump",
         Commands::Setup => "setup",
         Commands::Quickstart => "quickstart",
         Commands::Status => "status",
@@ -3277,6 +3287,7 @@ pub fn supports_json(cmd: &Commands) -> bool {
             | Commands::Models { .. }
             | Commands::Model { .. }
             | Commands::Key { .. }
+            | Commands::TuiDump { .. }
     ) || {
         #[cfg(any(feature = "matrix", feature = "matrix-lite"))]
         {
