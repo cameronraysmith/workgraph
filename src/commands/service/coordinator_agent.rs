@@ -1898,10 +1898,11 @@ fn spawn_claude_process(
         cmd.args(["--model", m]);
     }
 
-    // Pass provider when configured (e.g., "openrouter" for non-Anthropic models)
-    if let Some(p) = provider {
-        cmd.args(["--provider", p]);
-    }
+    // Note: the Claude CLI does not support --provider. Provider routing is
+    // handled via environment variables (e.g., ANTHROPIC_API_KEY for Anthropic,
+    // AWS credentials for Bedrock). The `provider` field is used only for
+    // logging/diagnostics, not passed to the CLI.
+    let _ = provider; // used only in the log message below
 
     cmd.current_dir(dir.parent().unwrap_or(dir));
     cmd.stdin(Stdio::piped());
