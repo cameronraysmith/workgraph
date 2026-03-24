@@ -40,8 +40,8 @@ SCENE_PARAMS = {
     "detail":      (1.0, 2.0, 0.30, 0.25),
     # Scene 5 (~7s target): typing real-speed, coordinator wait crushed
     "round2":      (1.0, 1.5, 0.20, 0.15),
-    # Scene 6 (~6s target): navigation + exit
-    "survey":      (1.5, 2.5, 0.20, 0.15),
+    # Scene 6 (~6s target): navigation + exit — heavy compression
+    "survey":      (1.5, 3.0, 0.10, 0.06),
     # Exit
     "exit":        (1.0, 2.0, 0.30, 0.20),
 }
@@ -71,6 +71,9 @@ def detect_scenes(frames):
     round2_started = False
     survey_started = False
 
+    # Track previous task count for detecting jumps
+    prev_task_count = 0
+
     for i, frame in enumerate(frames):
         clean = re.sub(r'\x1b\[[^a-zA-Z]*[a-zA-Z]', '', frame[2])
 
@@ -96,17 +99,18 @@ def detect_scenes(frames):
         if m:
             task_count = int(m.group(1))
 
-            # Agent spawn phase: tasks > 1 and some activity
+            # Agent spawn phase: tasks jump to 5+
             if not agents_started and task_count >= 5:
                 agents_started = True
+                agents_start_frame = i
                 scenes.append(("agents", i))
 
-            # Detail view phase: detect tab switch to Detail/Log/Firehose
-            if not detail_started and agents_started:
-                # Look for Detail tab content indicators
-                if ("Detail" in clean and "Status" in clean) or \
-                   ("Log" in clean and re.search(r'\d{4}-\d{2}-\d{2}', clean)) or \
-                   "Fire" in clean or "Agency" in clean:
+            # Detail view phase: detect ACTIVE tab (not just header).
+            # Wait at least 10 frames after agents for the user to navigate there.
+            if not detail_started and agents_started and i >= agents_start_frame + 10:
+                # Look for tab being actively shown (Detail content, Agency, Firehose)
+                if ("Status" in clean and "Description" in clean) or \
+                   "Agency" in clean or "Fire" in clean:
                     detail_started = True
                     scenes.append(("detail", i))
 
@@ -124,11 +128,11 @@ def detect_scenes(frames):
                             break
                     scenes.append(("round2", typing_start))
 
-        # Survey/exit: after round2, navigating back up
+            prev_task_count = task_count
+
+        # Survey/exit: after round2, detect navigation (fast consecutive frames)
         if round2_started and not survey_started:
-            # Detect navigation back up through the graph
             if i > 0 and (frames[i][0] - frames[i-1][0]) < 0.5:
-                # Multiple fast frames = navigation
                 survey_started = True
                 scenes.append(("survey", i))
 
