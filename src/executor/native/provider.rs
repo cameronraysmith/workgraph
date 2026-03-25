@@ -159,6 +159,15 @@ pub fn create_provider_ext(
             client = client.with_provider_hint(&provider_name);
             if let Some(base) = api_base {
                 client = client.with_base_url(&base);
+            } else {
+                // Fall back to the provider's known default URL so that non-OpenRouter
+                // providers (e.g. "openai", "local") don't silently hit the OpenRouter
+                // endpoint via OpenAiClient's DEFAULT_BASE_URL.
+                let default_url =
+                    crate::config::EndpointConfig::default_url_for_provider(&provider_name);
+                if !default_url.is_empty() {
+                    client = client.with_base_url(default_url);
+                }
             }
             if let Some(mt) = max_tokens {
                 client = client.with_max_tokens(mt);
