@@ -13895,3 +13895,187 @@ mod activity_feed_tests {
         assert!(event.summary.contains("src/main.rs"));
     }
 }
+
+#[cfg(test)]
+mod dashboard_tests {
+    use super::*;
+    use crate::service::registry::AgentStatus;
+
+    // ── Agent activity classification ──────────────────────────────────────
+
+    #[test]
+    fn classify_done_agent_is_exited() {
+        assert_eq!(
+            DashboardAgentActivity::classify(AgentStatus::Done, Some(5)),
+            DashboardAgentActivity::Exited,
+        );
+    }
+
+    #[test]
+    fn classify_failed_agent_is_exited() {
+        assert_eq!(
+            DashboardAgentActivity::classify(AgentStatus::Failed, Some(5)),
+            DashboardAgentActivity::Exited,
+        );
+    }
+
+    #[test]
+    fn classify_dead_agent_is_exited() {
+        assert_eq!(
+            DashboardAgentActivity::classify(AgentStatus::Dead, Some(5)),
+            DashboardAgentActivity::Exited,
+        );
+    }
+
+    #[test]
+    fn classify_running_recent_output_is_active() {
+        assert_eq!(
+            DashboardAgentActivity::classify(AgentStatus::Running, Some(10)),
+            DashboardAgentActivity::Active,
+        );
+    }
+
+    #[test]
+    fn classify_running_stale_output_is_slow() {
+        assert_eq!(
+            DashboardAgentActivity::classify(AgentStatus::Running, Some(60)),
+            DashboardAgentActivity::Slow,
+        );
+    }
+
+    #[test]
+    fn classify_running_very_stale_output_is_stuck() {
+        assert_eq!(
+            DashboardAgentActivity::classify(AgentStatus::Running, Some(600)),
+            DashboardAgentActivity::Stuck,
+        );
+    }
+
+    #[test]
+    fn classify_running_no_output_is_active() {
+        // New agent that hasn't written output yet — treat as active.
+        assert_eq!(
+            DashboardAgentActivity::classify(AgentStatus::Running, None),
+            DashboardAgentActivity::Active,
+        );
+    }
+
+    #[test]
+    fn classify_boundary_30s_is_slow() {
+        assert_eq!(
+            DashboardAgentActivity::classify(AgentStatus::Running, Some(30)),
+            DashboardAgentActivity::Slow,
+        );
+    }
+
+    #[test]
+    fn classify_boundary_300s_is_stuck() {
+        assert_eq!(
+            DashboardAgentActivity::classify(AgentStatus::Running, Some(300)),
+            DashboardAgentActivity::Stuck,
+        );
+    }
+
+    #[test]
+    fn classify_boundary_29s_is_active() {
+        assert_eq!(
+            DashboardAgentActivity::classify(AgentStatus::Running, Some(29)),
+            DashboardAgentActivity::Active,
+        );
+    }
+
+    // ── Sparkline ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn sparkline_record_increments_last_bucket() {
+        let mut state = DashboardState::default();
+        assert_eq!(state.sparkline_data.last(), Some(&0));
+        state.record_sparkline_event();
+        assert_eq!(state.sparkline_data.last(), Some(&1));
+        state.record_sparkline_event();
+        assert_eq!(state.sparkline_data.last(), Some(&2));
+    }
+
+    #[test]
+    fn sparkline_compute_from_timestamps_recent() {
+        let mut state = DashboardState::default();
+        let now = std::time::SystemTime::now();
+        // 3 events within the last bucket (last 10s)
+        let timestamps = vec![
+            now - std::time::Duration::from_secs(1),
+            now - std::time::Duration::from_secs(3),
+            now - std::time::Duration::from_secs(5),
+        ];
+        state.compute_sparkline_from_timestamps(&timestamps);
+        assert_eq!(state.sparkline_data.last(), Some(&3));
+        // All other buckets should be 0
+        assert!(state.sparkline_data[..29].iter().all(|&v| v == 0));
+    }
+
+    #[test]
+    fn sparkline_compute_empty_timestamps() {
+        let mut state = DashboardState::default();
+        state.sparkline_data[0] = 99; // dirty
+        state.compute_sparkline_from_timestamps(&[]);
+        assert!(state.sparkline_data.iter().all(|&v| v == 0));
+    }
+
+    // ── Dashboard state defaults ───────────────────────────────────────────
+
+    #[test]
+    fn dashboard_state_default_has_30_buckets() {
+        let state = DashboardState::default();
+        assert_eq!(state.sparkline_data.len(), 30);
+        assert_eq!(state.sparkline_bucket_secs, 10);
+    }
+
+    #[test]
+    fn dashboard_state_default_empty_rows() {
+        let state = DashboardState::default();
+        assert!(state.agent_rows.is_empty());
+        assert!(state.coordinator_cards.is_empty());
+        assert_eq!(state.selected_row, 0);
+    }
+
+    // ── Tab navigation includes Dashboard ──────────────────────────────────
+
+    #[test]
+    fn dashboard_is_in_all_tabs() {
+        assert!(RightPanelTab::ALL.contains(&RightPanelTab::Dashboard));
+    }
+
+    #[test]
+    fn dashboard_tab_index_is_10() {
+        assert_eq!(RightPanelTab::Dashboard.index(), 10);
+    }
+
+    #[test]
+    fn output_next_is_dashboard() {
+        assert_eq!(RightPanelTab::Output.next(), RightPanelTab::Dashboard);
+    }
+
+    #[test]
+    fn dashboard_next_wraps_to_chat() {
+        assert_eq!(RightPanelTab::Dashboard.next(), RightPanelTab::Chat);
+    }
+
+    #[test]
+    fn chat_prev_is_dashboard() {
+        assert_eq!(RightPanelTab::Chat.prev(), RightPanelTab::Dashboard);
+    }
+
+    #[test]
+    fn dashboard_prev_is_output() {
+        assert_eq!(RightPanelTab::Dashboard.prev(), RightPanelTab::Output);
+    }
+
+    // ── Activity labels ────────────────────────────────────────────────────
+
+    #[test]
+    fn activity_labels() {
+        assert_eq!(DashboardAgentActivity::Active.label(), "active");
+        assert_eq!(DashboardAgentActivity::Slow.label(), "slow");
+        assert_eq!(DashboardAgentActivity::Stuck.label(), "stuck");
+        assert_eq!(DashboardAgentActivity::Exited.label(), "exited");
+    }
+}

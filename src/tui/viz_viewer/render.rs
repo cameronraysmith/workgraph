@@ -11754,7 +11754,7 @@ mod tests {
 
         // Set some state in graph view.
         app.scroll.offset_y = 5;
-        let original_selected = app.selected_index;
+        let original_selected = app.selected_task_idx;
 
         // Cycle through all panels and back.
         app.toggle_single_panel_view(); // → Detail
@@ -11764,7 +11764,7 @@ mod tests {
         assert_eq!(app.single_panel_view, SinglePanelView::Graph);
         assert_eq!(app.scroll.offset_y, 5, "scroll offset should persist");
         assert_eq!(
-            app.selected_index, original_selected,
+            app.selected_task_idx, original_selected,
             "selected task index should persist"
         );
     }
