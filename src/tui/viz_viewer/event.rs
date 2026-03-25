@@ -1537,6 +1537,19 @@ fn handle_right_panel_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
             }
         }
 
+        // Dashboard: 'k' kills the selected agent instead of scrolling
+        KeyCode::Char('k') if app.right_panel_tab == RightPanelTab::Dashboard => {
+            if let Some(row) = app.dashboard.agent_rows.get(app.dashboard.selected_row) {
+                let agent_id = row.agent_id.clone();
+                let wg_dir = app.workgraph_dir.clone();
+                let _ = std::process::Command::new("wg")
+                    .arg("kill")
+                    .arg(&agent_id)
+                    .current_dir(&wg_dir)
+                    .output();
+                app.load_agent_monitor();
+            }
+        }
         // Up/Down/k/j scroll the active panel content
         KeyCode::Up | KeyCode::Char('k') => {
             right_panel_scroll_up(app, 1);
@@ -1574,6 +1587,13 @@ fn handle_right_panel_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
                 app.input_mode = InputMode::MessageInput;
             } else if app.right_panel_tab == RightPanelTab::Config {
                 config_enter_edit(app);
+            } else if app.right_panel_tab == RightPanelTab::Dashboard {
+                // Drill-down: switch to Output tab focused on the selected agent
+                if let Some(row) = app.dashboard.agent_rows.get(app.dashboard.selected_row) {
+                    let agent_id = row.agent_id.clone();
+                    app.output_pane.active_agent_id = Some(agent_id);
+                    app.right_panel_tab = RightPanelTab::Output;
+                }
             }
         }
 
@@ -1645,29 +1665,7 @@ fn handle_right_panel_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
             }
         }
 
-        // Dashboard tab: Enter = drill-down to agent output, k = kill, t = task detail
-        KeyCode::Enter if app.right_panel_tab == RightPanelTab::Dashboard => {
-            // Drill-down: switch to Output tab focused on the selected agent
-            if let Some(row) = app.dashboard.agent_rows.get(app.dashboard.selected_row) {
-                let agent_id = row.agent_id.clone();
-                app.output_pane.active_agent_id = Some(agent_id);
-                app.right_panel_tab = RightPanelTab::Output;
-            }
-        }
-        KeyCode::Char('k') if app.right_panel_tab == RightPanelTab::Dashboard => {
-            // Kill selected agent (send SIGTERM via IPC)
-            if let Some(row) = app.dashboard.agent_rows.get(app.dashboard.selected_row) {
-                let agent_id = row.agent_id.clone();
-                let wg_dir = app.workgraph_dir.clone();
-                // Best-effort kill via the kill command
-                let _ = std::process::Command::new("wg")
-                    .arg("kill")
-                    .arg(&agent_id)
-                    .current_dir(&wg_dir)
-                    .output();
-                app.load_agent_monitor();
-            }
-        }
+        // Dashboard tab: t = task detail, b = back
         KeyCode::Char('t') if app.right_panel_tab == RightPanelTab::Dashboard => {
             // Jump to task detail for the selected agent's task
             if let Some(row) = app.dashboard.agent_rows.get(app.dashboard.selected_row) {

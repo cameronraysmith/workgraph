@@ -1015,6 +1015,8 @@ pub struct ChatMessage {
     /// Inbox message ID (for user messages loaded from chat history).
     /// Used to edit/delete the message in the inbox JSONL file.
     pub inbox_id: Option<u64>,
+    /// The user who sent this message (from `current_user()`).
+    pub user: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1036,6 +1038,8 @@ struct PersistedChatMessage {
     timestamp: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     edited: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    user: Option<String>,
 }
 
 /// Path to the persisted chat history file.
@@ -1064,6 +1068,7 @@ fn save_chat_history(workgraph_dir: &std::path::Path, messages: &[ChatMessage]) 
             attachments: m.attachments.clone(),
             timestamp: chrono::Utc::now().to_rfc3339(),
             edited: m.edited,
+            user: m.user.clone(),
         })
         .collect();
     let path = chat_history_path(workgraph_dir);
@@ -1100,6 +1105,7 @@ fn load_persisted_chat_history(workgraph_dir: &std::path::Path) -> Vec<ChatMessa
             attachments: p.attachments,
             edited: p.edited,
             inbox_id: None,
+            user: p.user,
         })
         .collect()
 }
@@ -6919,6 +6925,7 @@ impl VizApp {
                             attachments: vec![],
                             edited: false,
                             inbox_id: None,
+                            user: None,
                         });
                         save_chat_history(&self.workgraph_dir, &self.chat.messages);
                         // Clear awaiting on error — no response will come.
@@ -8239,6 +8246,7 @@ impl VizApp {
                     attachments: att_names,
                     edited: false,
                     inbox_id,
+                    user: msg.user.clone(),
                 });
             }
 
@@ -8296,6 +8304,7 @@ impl VizApp {
                 attachments: att_names,
                 edited: false,
                 inbox_id: None,
+                user: msg.user.clone(),
             });
         }
 
@@ -8354,6 +8363,7 @@ impl VizApp {
             attachments: att_names,
             edited: false,
             inbox_id: None,
+            user: Some(workgraph::current_user()),
         });
 
         // Persist updated chat history.

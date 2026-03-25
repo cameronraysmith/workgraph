@@ -1758,7 +1758,7 @@ fn draw_right_panel(frame: &mut Frame, app: &mut VizApp, area: Rect) {
             draw_output_tab(frame, app, content_area);
         }
         RightPanelTab::Dashboard => {
-            // Dashboard tab rendering handled by another agent.
+            draw_dashboard_tab(frame, app, content_area);
         }
     }
 }
@@ -2307,12 +2307,15 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         let is_being_edited = editing_index == Some(msg_idx);
 
         let (prefix, role_style) = match msg.role {
-            super::state::ChatRole::User => (
-                "> ".to_string(),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            super::state::ChatRole::User => {
+                let name = msg.user.as_deref().unwrap_or("user");
+                (
+                    format!("{}: ", name),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )
+            }
             super::state::ChatRole::Coordinator => (
                 "↯ ".to_string(),
                 Style::default()
@@ -11558,8 +11561,8 @@ mod tests {
 
     #[test]
     fn test_responsive_compact_toggle_single_panel() {
-        // Verify that toggle_single_panel_view switches between Graph and Detail.
-        use crate::tui::viz_viewer::state::{FocusedPanel, SinglePanelView};
+        // Verify that toggle_single_panel_view cycles through Graph → Detail → Log → Graph.
+        use crate::tui::viz_viewer::state::{FocusedPanel, RightPanelTab, SinglePanelView};
 
         let (viz, _) = build_hud_test_graph();
         let mut app = build_app_from_viz_output(&viz, "a");
@@ -11571,8 +11574,15 @@ mod tests {
         app.toggle_single_panel_view();
         assert_eq!(app.single_panel_view, SinglePanelView::Detail);
         assert_eq!(app.focused_panel, FocusedPanel::RightPanel);
+        assert_eq!(app.right_panel_tab, RightPanelTab::Detail);
 
-        // Toggle: Detail -> Graph
+        // Toggle: Detail -> Log
+        app.toggle_single_panel_view();
+        assert_eq!(app.single_panel_view, SinglePanelView::Log);
+        assert_eq!(app.focused_panel, FocusedPanel::RightPanel);
+        assert_eq!(app.right_panel_tab, RightPanelTab::Log);
+
+        // Toggle: Log -> Graph
         app.toggle_single_panel_view();
         assert_eq!(app.single_panel_view, SinglePanelView::Graph);
         assert_eq!(app.focused_panel, FocusedPanel::Graph);
@@ -11646,8 +11656,7 @@ mod tests {
 
     #[test]
     fn test_responsive_compact_tab_toggles_panel_focus() {
-        // In compact mode, toggle_panel_focus should switch single_panel_view
-        // instead of just changing focus.
+        // In compact mode, toggle_panel_focus should cycle through all three panels.
         use crate::tui::viz_viewer::state::{FocusedPanel, SinglePanelView};
 
         let (viz, _) = build_hud_test_graph();
@@ -11656,14 +11665,150 @@ mod tests {
         app.single_panel_view = SinglePanelView::Graph;
         app.focused_panel = FocusedPanel::Graph;
 
-        // Tab in compact mode should switch to Detail view.
+        // Tab: Graph -> Detail
         app.toggle_panel_focus();
         assert_eq!(app.single_panel_view, SinglePanelView::Detail);
         assert_eq!(app.focused_panel, FocusedPanel::RightPanel);
 
-        // Tab again should switch back to Graph view.
+        // Tab: Detail -> Log
+        app.toggle_panel_focus();
+        assert_eq!(app.single_panel_view, SinglePanelView::Log);
+        assert_eq!(app.focused_panel, FocusedPanel::RightPanel);
+
+        // Tab: Log -> Graph
         app.toggle_panel_focus();
         assert_eq!(app.single_panel_view, SinglePanelView::Graph);
         assert_eq!(app.focused_panel, FocusedPanel::Graph);
+    }
+
+    // ── Single-panel navigation mode tests ──
+
+    #[test]
+    fn test_single_panel_forward_cycle() {
+        // ]/Tab cycles: Graph → Detail → Log → Graph
+        use crate::tui::viz_viewer::state::{FocusedPanel, RightPanelTab, SinglePanelView};
+
+        let (viz, _) = build_hud_test_graph();
+        let mut app = build_app_from_viz_output(&viz, "a");
+        app.responsive_breakpoint = crate::tui::viz_viewer::state::ResponsiveBreakpoint::Compact;
+        app.single_panel_view = SinglePanelView::Graph;
+        app.focused_panel = FocusedPanel::Graph;
+
+        // Forward: Graph → Detail
+        app.toggle_single_panel_view();
+        assert_eq!(app.single_panel_view, SinglePanelView::Detail);
+        assert_eq!(app.focused_panel, FocusedPanel::RightPanel);
+        assert_eq!(app.right_panel_tab, RightPanelTab::Detail);
+
+        // Forward: Detail → Log
+        app.toggle_single_panel_view();
+        assert_eq!(app.single_panel_view, SinglePanelView::Log);
+        assert_eq!(app.focused_panel, FocusedPanel::RightPanel);
+        assert_eq!(app.right_panel_tab, RightPanelTab::Log);
+
+        // Forward: Log → Graph (wraps)
+        app.toggle_single_panel_view();
+        assert_eq!(app.single_panel_view, SinglePanelView::Graph);
+        assert_eq!(app.focused_panel, FocusedPanel::Graph);
+    }
+
+    #[test]
+    fn test_single_panel_backward_cycle() {
+        // [ cycles backward: Graph → Log → Detail → Graph
+        use crate::tui::viz_viewer::state::{FocusedPanel, RightPanelTab, SinglePanelView};
+
+        let (viz, _) = build_hud_test_graph();
+        let mut app = build_app_from_viz_output(&viz, "a");
+        app.responsive_breakpoint = crate::tui::viz_viewer::state::ResponsiveBreakpoint::Compact;
+        app.single_panel_view = SinglePanelView::Graph;
+        app.focused_panel = FocusedPanel::Graph;
+
+        // Backward: Graph → Log
+        app.prev_single_panel_view();
+        assert_eq!(app.single_panel_view, SinglePanelView::Log);
+        assert_eq!(app.focused_panel, FocusedPanel::RightPanel);
+        assert_eq!(app.right_panel_tab, RightPanelTab::Log);
+
+        // Backward: Log → Detail
+        app.prev_single_panel_view();
+        assert_eq!(app.single_panel_view, SinglePanelView::Detail);
+        assert_eq!(app.focused_panel, FocusedPanel::RightPanel);
+        assert_eq!(app.right_panel_tab, RightPanelTab::Detail);
+
+        // Backward: Detail → Graph (wraps)
+        app.prev_single_panel_view();
+        assert_eq!(app.single_panel_view, SinglePanelView::Graph);
+        assert_eq!(app.focused_panel, FocusedPanel::Graph);
+    }
+
+    #[test]
+    fn test_single_panel_state_persists_across_switches() {
+        // Panel state (scroll offset, selected task) persists across switches.
+        use crate::tui::viz_viewer::state::{FocusedPanel, SinglePanelView};
+
+        let (viz, _) = build_hud_test_graph();
+        let mut app = build_app_from_viz_output(&viz, "a");
+        app.responsive_breakpoint = crate::tui::viz_viewer::state::ResponsiveBreakpoint::Compact;
+        app.single_panel_view = SinglePanelView::Graph;
+        app.focused_panel = FocusedPanel::Graph;
+
+        // Set some state in graph view.
+        app.scroll.offset_y = 5;
+        let original_selected = app.selected_index;
+
+        // Cycle through all panels and back.
+        app.toggle_single_panel_view(); // → Detail
+        app.toggle_single_panel_view(); // → Log
+        app.toggle_single_panel_view(); // → Graph
+
+        assert_eq!(app.single_panel_view, SinglePanelView::Graph);
+        assert_eq!(app.scroll.offset_y, 5, "scroll offset should persist");
+        assert_eq!(
+            app.selected_index, original_selected,
+            "selected task index should persist"
+        );
+    }
+
+    #[test]
+    fn test_single_panel_log_view_renders() {
+        // In compact mode with SinglePanelView::Log, the right panel renders
+        // with the Log tab active, and graph area is zeroed.
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use crate::tui::viz_viewer::state::{ResponsiveBreakpoint, RightPanelTab, SinglePanelView};
+
+        let (viz, _) = build_hud_test_graph();
+        let mut app = build_app_from_viz_output(&viz, "a");
+        app.single_panel_view = SinglePanelView::Log;
+        app.right_panel_tab = RightPanelTab::Log;
+
+        let backend = TestBackend::new(40, 25);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        assert_eq!(app.responsive_breakpoint, ResponsiveBreakpoint::Compact);
+        assert_eq!(app.last_graph_area, Rect::default());
+        assert!(app.last_right_panel_area.width > 0);
+        assert!(app.last_right_panel_area.height > 0);
+    }
+
+    #[test]
+    fn test_single_panel_labels() {
+        use crate::tui::viz_viewer::state::SinglePanelView;
+
+        assert_eq!(SinglePanelView::Graph.label(), "Graph");
+        assert_eq!(SinglePanelView::Detail.label(), "Detail");
+        assert_eq!(SinglePanelView::Log.label(), "Log");
+    }
+
+    #[test]
+    fn test_single_panel_next_prev_inverse() {
+        use crate::tui::viz_viewer::state::SinglePanelView;
+
+        for view in [SinglePanelView::Graph, SinglePanelView::Detail, SinglePanelView::Log] {
+            assert_eq!(view.next().prev(), view, "next then prev should return to original");
+            assert_eq!(view.prev().next(), view, "prev then next should return to original");
+        }
     }
 }

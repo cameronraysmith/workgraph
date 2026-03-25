@@ -11,7 +11,7 @@ use serde_json::json;
 use super::{Tool, ToolOutput, ToolRegistry, truncate_output};
 use crate::executor::native::client::ToolDefinition;
 use crate::graph::{LogEntry, Node, Status, Task};
-use crate::parser::{load_graph, save_graph};
+use crate::parser::{load_graph, modify_graph};
 use crate::query::build_reverse_index;
 
 /// Register all workgraph tools.
@@ -340,14 +340,17 @@ impl Tool for WgAddTool {
             ..Default::default()
         };
 
-        graph.add_node(Node::Task(task));
-
-        // Save the graph
-        if let Err(e) = save_graph(&graph, &path) {
-            return ToolOutput::error(format!("Failed to save graph: {}", e));
+        let task_id_clone = task_id.clone();
+        let task_clone = task.clone();
+        match modify_graph(&path, |graph| {
+            graph.add_node(Node::Task(task_clone.clone()));
+            true
+        }) {
+            Ok(_) => {}
+            Err(e) => return ToolOutput::error(format!("Failed to save graph: {}", e)),
         }
 
-        ToolOutput::success(format!("Created task: {}", task_id))
+        ToolOutput::success(format!("Created task: {}", task_id_clone))
     }
 }
 
@@ -395,25 +398,34 @@ impl Tool for WgDoneTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let (mut graph, path) = match load_workgraph(&self.dir) {
-            Ok(g) => g,
-            Err(e) => return ToolOutput::error(e),
-        };
-
-        let task = match graph.get_task_mut(task_id) {
-            Some(t) => t,
-            None => return ToolOutput::error(format!("Task not found: {}", task_id)),
-        };
-
-        task.status = Status::Done;
-        task.completed_at = Some(Utc::now().to_rfc3339());
-
-        if converged && !task.tags.contains(&"converged".to_string()) {
-            task.tags.push("converged".to_string());
+        let path = graph_path(&self.dir);
+        if !path.exists() {
+            return ToolOutput::error("Workgraph not initialized".to_string());
         }
 
-        if let Err(e) = save_graph(&graph, &path) {
-            return ToolOutput::error(format!("Failed to save graph: {}", e));
+        let mut result_msg: Option<String> = None;
+        match modify_graph(&path, |graph| {
+            let task = match graph.get_task_mut(task_id) {
+                Some(t) => t,
+                None => {
+                    result_msg = Some(format!("Task not found: {}", task_id));
+                    return false;
+                }
+            };
+
+            task.status = Status::Done;
+            task.completed_at = Some(Utc::now().to_rfc3339());
+
+            if converged && !task.tags.contains(&"converged".to_string()) {
+                task.tags.push("converged".to_string());
+            }
+            true
+        }) {
+            Ok(_) => {}
+            Err(e) => return ToolOutput::error(format!("Failed to save graph: {}", e)),
+        }
+        if let Some(msg) = result_msg {
+            return ToolOutput::error(msg);
         }
 
         ToolOutput::success(format!("Task '{}' marked as done", task_id))
@@ -464,29 +476,39 @@ impl Tool for WgFailTool {
             .and_then(|v| v.as_str())
             .unwrap_or("No reason provided");
 
-        let (mut graph, path) = match load_workgraph(&self.dir) {
-            Ok(g) => g,
-            Err(e) => return ToolOutput::error(e),
-        };
+        let path = graph_path(&self.dir);
+        if !path.exists() {
+            return ToolOutput::error("Workgraph not initialized".to_string());
+        }
 
-        let task = match graph.get_task_mut(task_id) {
-            Some(t) => t,
-            None => return ToolOutput::error(format!("Task not found: {}", task_id)),
-        };
+        let reason_owned = reason.to_string();
+        let mut result_msg: Option<String> = None;
+        match modify_graph(&path, |graph| {
+            let task = match graph.get_task_mut(task_id) {
+                Some(t) => t,
+                None => {
+                    result_msg = Some(format!("Task not found: {}", task_id));
+                    return false;
+                }
+            };
 
-        task.status = Status::Failed;
-        task.completed_at = Some(Utc::now().to_rfc3339());
+            task.status = Status::Failed;
+            task.completed_at = Some(Utc::now().to_rfc3339());
 
-        // Log the failure reason
-        task.log.push(LogEntry {
-            timestamp: Utc::now().to_rfc3339(),
-            actor: Some("native-agent".to_string()),
-            user: Some(crate::current_user()),
-            message: format!("Failed: {}", reason),
-        });
-
-        if let Err(e) = save_graph(&graph, &path) {
-            return ToolOutput::error(format!("Failed to save graph: {}", e));
+            // Log the failure reason
+            task.log.push(LogEntry {
+                timestamp: Utc::now().to_rfc3339(),
+                actor: Some("native-agent".to_string()),
+                user: Some(crate::current_user()),
+                message: format!("Failed: {}", reason_owned),
+            });
+            true
+        }) {
+            Ok(_) => {}
+            Err(e) => return ToolOutput::error(format!("Failed to save graph: {}", e)),
+        }
+        if let Some(msg) = result_msg {
+            return ToolOutput::error(msg);
         }
 
         ToolOutput::success(format!("Task '{}' marked as failed: {}", task_id, reason))
@@ -536,25 +558,35 @@ impl Tool for WgLogTool {
             None => return ToolOutput::error("Missing required parameter: message".to_string()),
         };
 
-        let (mut graph, path) = match load_workgraph(&self.dir) {
-            Ok(g) => g,
-            Err(e) => return ToolOutput::error(e),
-        };
+        let path = graph_path(&self.dir);
+        if !path.exists() {
+            return ToolOutput::error("Workgraph not initialized".to_string());
+        }
 
-        let task = match graph.get_task_mut(task_id) {
-            Some(t) => t,
-            None => return ToolOutput::error(format!("Task not found: {}", task_id)),
-        };
+        let message_owned = message.to_string();
+        let mut result_msg: Option<String> = None;
+        match modify_graph(&path, |graph| {
+            let task = match graph.get_task_mut(task_id) {
+                Some(t) => t,
+                None => {
+                    result_msg = Some(format!("Task not found: {}", task_id));
+                    return false;
+                }
+            };
 
-        task.log.push(LogEntry {
-            timestamp: Utc::now().to_rfc3339(),
-            actor: Some("native-agent".to_string()),
-            user: Some(crate::current_user()),
-            message: message.to_string(),
-        });
-
-        if let Err(e) = save_graph(&graph, &path) {
-            return ToolOutput::error(format!("Failed to save graph: {}", e));
+            task.log.push(LogEntry {
+                timestamp: Utc::now().to_rfc3339(),
+                actor: Some("native-agent".to_string()),
+                user: Some(crate::current_user()),
+                message: message_owned.clone(),
+            });
+            true
+        }) {
+            Ok(_) => {}
+            Err(e) => return ToolOutput::error(format!("Failed to save graph: {}", e)),
+        }
+        if let Some(msg) = result_msg {
+            return ToolOutput::error(msg);
         }
 
         ToolOutput::success(format!("Added log entry to '{}'", task_id))
@@ -604,22 +636,32 @@ impl Tool for WgArtifactTool {
             None => return ToolOutput::error("Missing required parameter: path".to_string()),
         };
 
-        let (mut graph, graph_path) = match load_workgraph(&self.dir) {
-            Ok(g) => g,
-            Err(e) => return ToolOutput::error(e),
-        };
-
-        let task = match graph.get_task_mut(task_id) {
-            Some(t) => t,
-            None => return ToolOutput::error(format!("Task not found: {}", task_id)),
-        };
-
-        if !task.artifacts.contains(&path.to_string()) {
-            task.artifacts.push(path.to_string());
+        let gpath = graph_path(&self.dir);
+        if !gpath.exists() {
+            return ToolOutput::error("Workgraph not initialized".to_string());
         }
 
-        if let Err(e) = save_graph(&graph, &graph_path) {
-            return ToolOutput::error(format!("Failed to save graph: {}", e));
+        let path_owned = path.to_string();
+        let mut result_msg: Option<String> = None;
+        match modify_graph(&gpath, |graph| {
+            let task = match graph.get_task_mut(task_id) {
+                Some(t) => t,
+                None => {
+                    result_msg = Some(format!("Task not found: {}", task_id));
+                    return false;
+                }
+            };
+
+            if !task.artifacts.contains(&path_owned) {
+                task.artifacts.push(path_owned.clone());
+            }
+            true
+        }) {
+            Ok(_) => {}
+            Err(e) => return ToolOutput::error(format!("Failed to save graph: {}", e)),
+        }
+        if let Some(msg) = result_msg {
+            return ToolOutput::error(msg);
         }
 
         ToolOutput::success(format!(

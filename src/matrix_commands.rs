@@ -20,7 +20,7 @@ use std::path::Path;
 use chrono::Utc;
 
 use crate::graph::{LogEntry, Status};
-use crate::parser::{load_graph, save_graph};
+use crate::parser::{load_graph, modify_graph};
 
 /// A parsed command from a Matrix message
 #[derive(Debug, Clone, PartialEq)]
@@ -314,51 +314,61 @@ pub fn execute_claim(workgraph_dir: &Path, task_id: &str, actor: Option<&str>) -
         return "Error: Workgraph not initialized".to_string();
     }
 
-    let mut graph = match load_graph(&graph_path) {
-        Ok(g) => g,
-        Err(e) => return format!("Error loading graph: {}", e),
-    };
+    let mut result_msg: Option<String> = None;
+    let actor_owned = actor.map(|a| a.to_string());
+    match modify_graph(&graph_path, |graph| {
+        let task = match graph.get_task_mut(task_id) {
+            Some(t) => t,
+            None => {
+                result_msg = Some(format!("Error: Task '{}' not found", task_id));
+                return false;
+            }
+        };
 
-    let task = match graph.get_task_mut(task_id) {
-        Some(t) => t,
-        None => return format!("Error: Task '{}' not found", task_id),
-    };
+        match task.status {
+            Status::Open | Status::Blocked => {}
+            Status::InProgress => {
+                let holder = task
+                    .assigned
+                    .as_ref()
+                    .map(|a| format!(" by {}", a))
+                    .unwrap_or_default();
+                result_msg = Some(format!("Task '{}' is already claimed{}", task_id, holder));
+                return false;
+            }
+            Status::Done => {
+                result_msg = Some(format!("Task '{}' is already done", task_id));
+                return false;
+            }
+            Status::Failed => {
+                result_msg = Some(format!(
+                    "Cannot claim task '{}': task is Failed. Use 'wg retry' first.",
+                    task_id
+                ));
+                return false;
+            }
+            Status::Abandoned => {
+                result_msg = Some(format!("Cannot claim task '{}': task is Abandoned", task_id));
+                return false;
+            }
+            Status::Waiting | Status::PendingValidation => {
+                result_msg = Some(format!("Cannot claim task '{}': task is Waiting", task_id));
+                return false;
+            }
+        }
 
-    match task.status {
-        Status::Open | Status::Blocked => {}
-        Status::InProgress => {
-            let holder = task
-                .assigned
-                .as_ref()
-                .map(|a| format!(" by {}", a))
-                .unwrap_or_default();
-            return format!("Task '{}' is already claimed{}", task_id, holder);
+        task.status = Status::InProgress;
+        task.started_at = Some(Utc::now().to_rfc3339());
+        if let Some(ref actor_id) = actor_owned {
+            task.assigned = Some(actor_id.clone());
         }
-        Status::Done => {
-            return format!("Task '{}' is already done", task_id);
-        }
-        Status::Failed => {
-            return format!(
-                "Cannot claim task '{}': task is Failed. Use 'wg retry' first.",
-                task_id
-            );
-        }
-        Status::Abandoned => {
-            return format!("Cannot claim task '{}': task is Abandoned", task_id);
-        }
-        Status::Waiting | Status::PendingValidation => {
-            return format!("Cannot claim task '{}': task is Waiting", task_id);
-        }
+        true
+    }) {
+        Ok(_) => {}
+        Err(e) => return format!("Error saving graph: {}", e),
     }
-
-    task.status = Status::InProgress;
-    task.started_at = Some(Utc::now().to_rfc3339());
-    if let Some(actor_id) = actor {
-        task.assigned = Some(actor_id.to_string());
-    }
-
-    if let Err(e) = save_graph(&graph, &graph_path) {
-        return format!("Error saving graph: {}", e);
+    if let Some(msg) = result_msg {
+        return msg;
     }
 
     match actor {
@@ -375,25 +385,30 @@ pub fn execute_done(workgraph_dir: &Path, task_id: &str) -> String {
         return "Error: Workgraph not initialized".to_string();
     }
 
-    let mut graph = match load_graph(&graph_path) {
-        Ok(g) => g,
-        Err(e) => return format!("Error loading graph: {}", e),
-    };
+    let mut result_msg: Option<String> = None;
+    match modify_graph(&graph_path, |graph| {
+        let task = match graph.get_task_mut(task_id) {
+            Some(t) => t,
+            None => {
+                result_msg = Some(format!("Error: Task '{}' not found", task_id));
+                return false;
+            }
+        };
 
-    let task = match graph.get_task_mut(task_id) {
-        Some(t) => t,
-        None => return format!("Error: Task '{}' not found", task_id),
-    };
+        if task.status == Status::Done {
+            result_msg = Some(format!("Task '{}' is already done", task_id));
+            return false;
+        }
 
-    if task.status == Status::Done {
-        return format!("Task '{}' is already done", task_id);
+        task.status = Status::Done;
+        task.completed_at = Some(Utc::now().to_rfc3339());
+        true
+    }) {
+        Ok(_) => {}
+        Err(e) => return format!("Error saving graph: {}", e),
     }
-
-    task.status = Status::Done;
-    task.completed_at = Some(Utc::now().to_rfc3339());
-
-    if let Err(e) = save_graph(&graph, &graph_path) {
-        return format!("Error saving graph: {}", e);
+    if let Some(msg) = result_msg {
+        return msg;
     }
 
     format!("Marked '{}' as done", task_id)
@@ -407,35 +422,42 @@ pub fn execute_fail(workgraph_dir: &Path, task_id: &str, reason: Option<&str>) -
         return "Error: Workgraph not initialized".to_string();
     }
 
-    let mut graph = match load_graph(&graph_path) {
-        Ok(g) => g,
-        Err(e) => return format!("Error loading graph: {}", e),
-    };
+    let mut result_msg: Option<String> = None;
+    let mut retry_count: u32 = 0;
+    let reason_owned = reason.map(String::from);
+    match modify_graph(&graph_path, |graph| {
+        let task = match graph.get_task_mut(task_id) {
+            Some(t) => t,
+            None => {
+                result_msg = Some(format!("Error: Task '{}' not found", task_id));
+                return false;
+            }
+        };
 
-    let task = match graph.get_task_mut(task_id) {
-        Some(t) => t,
-        None => return format!("Error: Task '{}' not found", task_id),
-    };
+        if task.status == Status::Done {
+            result_msg = Some(format!(
+                "Task '{}' is already done and cannot be marked as failed",
+                task_id
+            ));
+            return false;
+        }
 
-    if task.status == Status::Done {
-        return format!(
-            "Task '{}' is already done and cannot be marked as failed",
-            task_id
-        );
+        if task.status == Status::Failed {
+            result_msg = Some(format!("Task '{}' is already failed", task_id));
+            return false;
+        }
+
+        task.status = Status::Failed;
+        task.retry_count += 1;
+        task.failure_reason = reason_owned.clone();
+        retry_count = task.retry_count;
+        true
+    }) {
+        Ok(_) => {}
+        Err(e) => return format!("Error saving graph: {}", e),
     }
-
-    if task.status == Status::Failed {
-        return format!("Task '{}' is already failed", task_id);
-    }
-
-    task.status = Status::Failed;
-    task.retry_count += 1;
-    task.failure_reason = reason.map(String::from);
-
-    let retry_count = task.retry_count;
-
-    if let Err(e) = save_graph(&graph, &graph_path) {
-        return format!("Error saving graph: {}", e);
+    if let Some(msg) = result_msg {
+        return msg;
     }
 
     let reason_msg = reason.map(|r| format!(" ({})", r)).unwrap_or_default();
@@ -453,27 +475,33 @@ pub fn execute_input(workgraph_dir: &Path, task_id: &str, text: &str, actor: &st
         return "Error: Workgraph not initialized".to_string();
     }
 
-    let mut graph = match load_graph(&graph_path) {
-        Ok(g) => g,
-        Err(e) => return format!("Error loading graph: {}", e),
-    };
+    let actor_owned = actor.to_string();
+    let text_owned = text.to_string();
+    let mut result_msg: Option<String> = None;
+    match modify_graph(&graph_path, |graph| {
+        let task = match graph.get_task_mut(task_id) {
+            Some(t) => t,
+            None => {
+                result_msg = Some(format!("Error: Task '{}' not found", task_id));
+                return false;
+            }
+        };
 
-    let task = match graph.get_task_mut(task_id) {
-        Some(t) => t,
-        None => return format!("Error: Task '{}' not found", task_id),
-    };
+        let entry = LogEntry {
+            timestamp: Utc::now().to_rfc3339(),
+            actor: Some(actor_owned.clone()),
+            user: Some(crate::current_user()),
+            message: text_owned.clone(),
+        };
 
-    let entry = LogEntry {
-        timestamp: Utc::now().to_rfc3339(),
-        actor: Some(actor.to_string()),
-        user: Some(crate::current_user()),
-        message: text.to_string(),
-    };
-
-    task.log.push(entry);
-
-    if let Err(e) = save_graph(&graph, &graph_path) {
-        return format!("Error saving graph: {}", e);
+        task.log.push(entry);
+        true
+    }) {
+        Ok(_) => {}
+        Err(e) => return format!("Error saving graph: {}", e),
+    }
+    if let Some(msg) = result_msg {
+        return msg;
     }
 
     format!("Added log entry to '{}' from {}", task_id, actor)
@@ -487,21 +515,25 @@ pub fn execute_unclaim(workgraph_dir: &Path, task_id: &str) -> String {
         return "Error: Workgraph not initialized".to_string();
     }
 
-    let mut graph = match load_graph(&graph_path) {
-        Ok(g) => g,
-        Err(e) => return format!("Error loading graph: {}", e),
-    };
+    let mut result_msg: Option<String> = None;
+    match modify_graph(&graph_path, |graph| {
+        let task = match graph.get_task_mut(task_id) {
+            Some(t) => t,
+            None => {
+                result_msg = Some(format!("Error: Task '{}' not found", task_id));
+                return false;
+            }
+        };
 
-    let task = match graph.get_task_mut(task_id) {
-        Some(t) => t,
-        None => return format!("Error: Task '{}' not found", task_id),
-    };
-
-    task.status = Status::Open;
-    task.assigned = None;
-
-    if let Err(e) = save_graph(&graph, &graph_path) {
-        return format!("Error saving graph: {}", e);
+        task.status = Status::Open;
+        task.assigned = None;
+        true
+    }) {
+        Ok(_) => {}
+        Err(e) => return format!("Error saving graph: {}", e),
+    }
+    if let Some(msg) = result_msg {
+        return msg;
     }
 
     format!("Unclaimed '{}'", task_id)
