@@ -8,7 +8,6 @@
 //! 5. Error cases (bad key file, invalid provider, bad key)
 
 use std::fs;
-use std::path::Path;
 
 use tempfile::TempDir;
 
