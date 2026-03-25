@@ -388,6 +388,45 @@ pub struct TaskSnapshot {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// Toast notification system
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// Severity level for toast notifications, controlling color and auto-dismiss behavior.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToastSeverity {
+    /// Green, auto-dismiss after 5 seconds.
+    Info,
+    /// Yellow, auto-dismiss after 10 seconds.
+    Warning,
+    /// Red, persists until dismissed with Esc.
+    Error,
+}
+
+impl ToastSeverity {
+    /// Duration before auto-dismiss. `None` means manual dismiss only.
+    pub fn auto_dismiss_duration(&self) -> Option<std::time::Duration> {
+        match self {
+            ToastSeverity::Info => Some(std::time::Duration::from_secs(5)),
+            ToastSeverity::Warning => Some(std::time::Duration::from_secs(10)),
+            ToastSeverity::Error => None,
+        }
+    }
+}
+
+/// A toast notification with severity, message, and optional deduplication key.
+#[derive(Clone, Debug)]
+pub struct Toast {
+    pub message: String,
+    pub severity: ToastSeverity,
+    pub created_at: Instant,
+    /// Optional deduplication key. If set, only one toast with this key is kept active.
+    pub dedup_key: Option<String>,
+}
+
+/// Maximum number of visible toasts at once.
+pub const MAX_VISIBLE_TOASTS: usize = 4;
+
+// ══════════════════════════════════════════════════════════════════════════════
 // Panel state types
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -1512,6 +1551,12 @@ pub fn format_duration_compact(secs: u64) -> String {
             format!("{}h", h)
         }
     }
+}
+
+/// Format a chrono::TimeDelta as a short human-readable duration (e.g. "3m", "1h12m").
+fn format_duration_short(dur: chrono::TimeDelta) -> String {
+    let secs = dur.num_seconds().unsigned_abs();
+    format_duration_compact(secs)
 }
 
 /// The lightning bolt character for the wave animation (downwards zigzag arrow — reliably 1-cell wide).
@@ -2758,13 +2803,10 @@ pub struct VizApp {
     pub cmd_rx: mpsc::Receiver<CommandResult>,
     /// Channel sender (cloned into background threads).
     pub cmd_tx: mpsc::Sender<CommandResult>,
-    /// Notification message to display (transient, cleared after a few seconds).
-    pub notification: Option<(String, Instant)>,
-
-    // ── Pipeline toasts ──
-    /// Transient toast notifications for agency pipeline events (assignment, placement, spawn).
-    /// Each entry is (message, timestamp). Toasts expire after 3 seconds. Max 4 visible.
-    pub pipeline_toasts: VecDeque<(String, Instant)>,
+    /// Severity-leveled toast notifications. Info (green, 5s auto-dismiss),
+    /// Warning (yellow, 10s auto-dismiss), Error (red, until Esc dismissed).
+    /// Rendered stacked in top-right corner. Max 4 visible.
+    pub toasts: Vec<Toast>,
 
     // ── Double-tap detection ──
     /// Timestamp of the last Tab key press, for double-tap recenter detection.
@@ -3031,8 +3073,7 @@ impl VizApp {
             file_browser: None,
             cmd_rx,
             cmd_tx,
-            notification: None,
-            pipeline_toasts: VecDeque::new(),
+            toasts: Vec::new(),
             last_tab_press: None,
             sort_mode: SortMode::Chronological,
             smart_follow_active: true,
@@ -3710,7 +3751,7 @@ impl VizApp {
         if self.right_panel_tab != RightPanelTab::Chat {
             // Still show the notification so the user knows a task was added,
             // but don't move the selection or scroll.
-            self.notification = Some((format!("New task: {}", task_id), Instant::now()));
+            self.push_toast(format!("New task: {}", task_id), ToastSeverity::Info);
             return false;
         }
 
@@ -3721,7 +3762,7 @@ impl VizApp {
             // the visual highlight for new tasks. Don't also set jump_target here
             // — its 2s lifetime outlasts the 1.5s splash, causing a yellow flash
             // after the smooth fade finishes.
-            self.notification = Some((format!("New task: {}", task_id), Instant::now()));
+            self.push_toast(format!("New task: {}", task_id), ToastSeverity::Info);
             true
         } else {
             false
@@ -3760,22 +3801,53 @@ impl VizApp {
             .any(|anim| anim.start.elapsed() < cutoff)
     }
 
-    /// Push a pipeline toast notification. Keeps at most 4 active toasts.
-    pub fn push_pipeline_toast(&mut self, msg: String) {
-        const MAX_PIPELINE_TOASTS: usize = 4;
-        self.pipeline_toasts.push_back((msg, Instant::now()));
-        while self.pipeline_toasts.len() > MAX_PIPELINE_TOASTS {
-            self.pipeline_toasts.pop_front();
+    /// Push a toast notification with the given severity.
+    /// Keeps at most MAX_VISIBLE_TOASTS active toasts (oldest dropped first).
+    pub fn push_toast(&mut self, msg: String, severity: ToastSeverity) {
+        self.toasts.push(Toast {
+            message: msg,
+            severity,
+            created_at: Instant::now(),
+            dedup_key: None,
+        });
+        while self.toasts.len() > MAX_VISIBLE_TOASTS {
+            self.toasts.remove(0);
         }
     }
 
-    /// Remove expired pipeline toasts (older than 3 seconds).
-    pub fn cleanup_pipeline_toasts(&mut self) -> bool {
-        let cutoff = std::time::Duration::from_secs(3);
-        let before = self.pipeline_toasts.len();
-        self.pipeline_toasts
-            .retain(|(_, when)| when.elapsed() < cutoff);
-        self.pipeline_toasts.len() != before
+    /// Push a deduplicated toast. If a toast with the same dedup_key already exists,
+    /// it is replaced instead of adding a new one.
+    pub fn push_toast_dedup(&mut self, msg: String, severity: ToastSeverity, key: String) {
+        self.toasts.retain(|t| t.dedup_key.as_deref() != Some(&key));
+        self.toasts.push(Toast {
+            message: msg,
+            severity,
+            created_at: Instant::now(),
+            dedup_key: Some(key),
+        });
+        while self.toasts.len() > MAX_VISIBLE_TOASTS {
+            self.toasts.remove(0);
+        }
+    }
+
+    /// Dismiss all error toasts (called on Esc). Returns true if any were dismissed.
+    pub fn dismiss_error_toasts(&mut self) -> bool {
+        let before = self.toasts.len();
+        self.toasts.retain(|t| t.severity != ToastSeverity::Error);
+        self.toasts.len() != before
+    }
+
+    /// Remove expired toasts based on severity auto-dismiss durations.
+    /// Returns true if any toasts were removed (needs redraw).
+    pub fn cleanup_toasts(&mut self) -> bool {
+        let before = self.toasts.len();
+        self.toasts.retain(|t| {
+            match t.severity.auto_dismiss_duration() {
+                Some(dur) => t.created_at.elapsed() < dur,
+                None => true,
+            }
+        });
+        self.toasts.len() != before
     }
 
     /// Remove expired splash animations.
@@ -4142,6 +4214,10 @@ impl VizApp {
 
         let mut new_snapshots: HashMap<String, TaskSnapshot> = HashMap::new();
         let now = Instant::now();
+        // Collect toast messages during the loop to avoid borrow conflicts
+        // (self.task_snapshots is borrowed immutably via `old` while we need
+        // self.push_toast() which borrows self mutably).
+        let mut deferred_toasts: Vec<(String, ToastSeverity)> = Vec::new();
 
         for task in graph.tasks() {
             counts.total += 1;
@@ -4194,22 +4270,20 @@ impl VizApp {
                         },
                     );
 
-                    // Generate pipeline toasts for agency events.
+                    // Pipeline toasts for agency events.
                     if snapshot.status == Status::Done {
                         if let Some(source_id) = task.id.strip_prefix(".assign-") {
-                            // Extract assignment summary from task description.
                             let msg = task
                                 .description
                                 .as_deref()
                                 .and_then(|d| d.lines().next())
                                 .map(|line| {
-                                    // Description format: "Lightweight assignment: AgentName (hash) → 'task'"
                                     line.strip_prefix("Lightweight assignment: ")
                                         .unwrap_or(line)
                                         .to_string()
                                 })
                                 .unwrap_or_else(|| format!("assigned → {}", source_id));
-                            self.push_pipeline_toast(format!("\u{26a1} Assigned: {}", msg));
+                            deferred_toasts.push((format!("\u{26a1} Assigned: {}", msg), ToastSeverity::Info));
                         }
                     }
                     // Agent spawn: non-system task went to InProgress.
@@ -4222,11 +4296,56 @@ impl VizApp {
                         } else {
                             agent_id
                         };
-                        self.push_pipeline_toast(format!(
+                        deferred_toasts.push((format!(
                             "\u{26a1} Spawned: {} on {}",
                             short, task.id
-                        ));
+                        ), ToastSeverity::Info));
                     }
+
+                    // Phase 1 toast triggers — non-system tasks only.
+                    if !workgraph::graph::is_system_task(&task.id) {
+                        match snapshot.status {
+                            Status::Done => {
+                                if old.status == Status::InProgress || old.status == Status::PendingValidation {
+                                    let duration_str = task.started_at.as_deref()
+                                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                        .and_then(|started| {
+                                            task.completed_at.as_deref()
+                                                .and_then(|c| chrono::DateTime::parse_from_rfc3339(c).ok())
+                                                .map(|completed| {
+                                                    let dur = completed.signed_duration_since(started);
+                                                    format_duration_short(dur)
+                                                })
+                                        })
+                                        .unwrap_or_default();
+                                    if duration_str.is_empty() {
+                                        deferred_toasts.push((
+                                            format!("\u{2705} Done: {}", task.id),
+                                            ToastSeverity::Info,
+                                        ));
+                                    } else {
+                                        deferred_toasts.push((
+                                            format!("\u{2705} Done: {} ({})", task.id, duration_str),
+                                            ToastSeverity::Info,
+                                        ));
+                                    }
+                                } else {
+                                    deferred_toasts.push((
+                                        format!("\u{2705} Done: {}", task.id),
+                                        ToastSeverity::Info,
+                                    ));
+                                }
+                            }
+                            Status::Failed => {
+                                deferred_toasts.push((
+                                    format!("\u{274c} Failed: {}", task.id),
+                                    ToastSeverity::Error,
+                                ));
+                            }
+                            _ => {}
+                        }
+                    }
+
                 }
                 // Agent assignment change.
                 else if old.assigned != snapshot.assigned && snapshot.assigned.is_some() {
@@ -4269,6 +4388,11 @@ impl VizApp {
             }
 
             new_snapshots.insert(task.id.clone(), snapshot);
+        }
+
+        // Emit deferred toasts (collected during snapshot comparison above).
+        for (msg, severity) in deferred_toasts {
+            self.push_toast(msg, severity);
         }
 
         // Count archived tasks
@@ -4785,12 +4909,8 @@ impl VizApp {
         if self.jump_target.is_some() {
             return true;
         }
-        // Notification (cleared after 3s in drain_commands)
-        if self.notification.is_some() {
-            return true;
-        }
-        // Pipeline toasts (cleared after 3s in drain_commands)
-        if !self.pipeline_toasts.is_empty() {
+        // Toasts (auto-dismissed by severity in drain_commands)
+        if !self.toasts.is_empty() {
             return true;
         }
         // Scrollbar fade timers (visible for 2s after scroll activity)
@@ -4972,7 +5092,7 @@ impl VizApp {
                 }
             }
         }
-        self.notification = Some((format!("Sort: {}", self.sort_mode.label()), Instant::now()));
+        self.push_toast(format!("Sort: {}", self.sort_mode.label()), ToastSeverity::Info);
     }
 
     /// Apply the current sort mode to reorder `task_order`.
@@ -6518,8 +6638,7 @@ impl VizApp {
             task_message_statuses: HashMap::new(),
             cmd_rx: mpsc::channel().1,
             cmd_tx: mpsc::channel().0,
-            notification: None,
-            pipeline_toasts: VecDeque::new(),
+            toasts: Vec::new(),
             last_tab_press: None,
             sort_mode: SortMode::ReverseChronological,
             smart_follow_active: true,
@@ -6872,34 +6991,32 @@ impl VizApp {
                     self.force_refresh();
                 }
                 CommandEffect::Notify(msg) => {
-                    let msg = if result.success {
-                        msg
+                    if result.success {
+                        self.push_toast(msg, ToastSeverity::Info);
                     } else {
                         let err = result
                             .output
                             .lines()
                             .find(|l| !l.is_empty())
                             .unwrap_or("unknown");
-                        format!("Error: {}", err)
-                    };
-                    self.notification = Some((msg, Instant::now()));
+                        self.push_toast(format!("Error: {}", err), ToastSeverity::Error);
+                    }
                 }
                 CommandEffect::RefreshAndNotify(msg) => {
                     self.force_refresh();
                     if self.archive_browser.active {
                         self.archive_browser.load(&self.workgraph_dir);
                     }
-                    let msg = if result.success {
-                        msg
+                    if result.success {
+                        self.push_toast(msg, ToastSeverity::Info);
                     } else {
                         let err = result
                             .output
                             .lines()
                             .find(|l| !l.is_empty())
                             .unwrap_or("unknown");
-                        format!("Error: {}", err)
-                    };
-                    self.notification = Some((msg, Instant::now()));
+                        self.push_toast(format!("Error: {}", err), ToastSeverity::Error);
+                    }
                 }
                 CommandEffect::ChatResponse(request_id) => {
                     // On failure, show error (coordinator didn't write to outbox).
@@ -6943,63 +7060,34 @@ impl VizApp {
                 }
                 CommandEffect::CreateCoordinator => {
                     if result.success {
-                        // Parse the new coordinator ID from the output
                         if let Ok(data) = serde_json::from_str::<serde_json::Value>(&result.output)
                         {
                             if let Some(cid) = data["coordinator_id"].as_u64() {
-                                // Refresh graph so the new coordinator task appears
                                 self.force_refresh();
                                 self.switch_coordinator(cid as u32);
-                                // Auto-switch to Chat tab so the user sees the new coordinator
                                 self.right_panel_tab = RightPanelTab::Chat;
-                                self.notification = Some((
-                                    format!("Coordinator {} created", cid),
-                                    std::time::Instant::now(),
-                                ));
+                                self.push_toast(format!("Coordinator {} created", cid), ToastSeverity::Info);
                             }
                         } else {
-                            // Non-JSON output — look for coordinator ID in the last line
-                            self.notification = Some((
-                                "New coordinator created".to_string(),
-                                std::time::Instant::now(),
-                            ));
+                            self.push_toast("New coordinator created".to_string(), ToastSeverity::Info);
                         }
                     } else {
-                        let err = result
-                            .output
-                            .lines()
-                            .find(|l| !l.is_empty())
-                            .unwrap_or("unknown");
-                        self.notification = Some((
-                            format!("Failed to create coordinator: {}", err),
-                            std::time::Instant::now(),
-                        ));
+                        let err = result.output.lines().find(|l| !l.is_empty()).unwrap_or("unknown");
+                        self.push_toast(format!("Failed to create coordinator: {}", err), ToastSeverity::Error);
                     }
                     self.force_refresh();
                 }
                 CommandEffect::DeleteCoordinator(cid) => {
                     if result.success {
-                        // Switch to coordinator 0 if we deleted the active one
                         if cid == self.active_coordinator_id {
                             self.switch_coordinator(0);
                         }
-                        // Remove stored chat state for this coordinator
                         self.coordinator_chats.remove(&cid);
                         self.force_refresh();
-                        self.notification = Some((
-                            format!("Closed coordinator {}", cid),
-                            std::time::Instant::now(),
-                        ));
+                        self.push_toast(format!("Closed coordinator {}", cid), ToastSeverity::Info);
                     } else {
-                        let err = result
-                            .output
-                            .lines()
-                            .find(|l| !l.is_empty())
-                            .unwrap_or("unknown");
-                        self.notification = Some((
-                            format!("Failed to delete coordinator: {}", err),
-                            std::time::Instant::now(),
-                        ));
+                        let err = result.output.lines().find(|l| !l.is_empty()).unwrap_or("unknown");
+                        self.push_toast(format!("Failed to delete coordinator: {}", err), ToastSeverity::Error);
                     }
                 }
                 CommandEffect::ArchiveCoordinator(cid) => {
@@ -7009,39 +7097,19 @@ impl VizApp {
                         }
                         self.coordinator_chats.remove(&cid);
                         self.force_refresh();
-                        self.notification = Some((
-                            format!("Archived coordinator {}", cid),
-                            std::time::Instant::now(),
-                        ));
+                        self.push_toast(format!("Archived coordinator {}", cid), ToastSeverity::Info);
                     } else {
-                        let err = result
-                            .output
-                            .lines()
-                            .find(|l| !l.is_empty())
-                            .unwrap_or("unknown");
-                        self.notification = Some((
-                            format!("Failed to archive coordinator: {}", err),
-                            std::time::Instant::now(),
-                        ));
+                        let err = result.output.lines().find(|l| !l.is_empty()).unwrap_or("unknown");
+                        self.push_toast(format!("Failed to archive coordinator: {}", err), ToastSeverity::Error);
                     }
                 }
                 CommandEffect::StopCoordinator(cid) => {
                     if result.success {
                         self.force_refresh();
-                        self.notification = Some((
-                            format!("Stopped coordinator {}", cid),
-                            std::time::Instant::now(),
-                        ));
+                        self.push_toast(format!("Stopped coordinator {}", cid), ToastSeverity::Info);
                     } else {
-                        let err = result
-                            .output
-                            .lines()
-                            .find(|l| !l.is_empty())
-                            .unwrap_or("unknown");
-                        self.notification = Some((
-                            format!("Failed to stop coordinator: {}", err),
-                            std::time::Instant::now(),
-                        ));
+                        let err = result.output.lines().find(|l| !l.is_empty()).unwrap_or("unknown");
+                        self.push_toast(format!("Failed to stop coordinator: {}", err), ToastSeverity::Error);
                     }
                 }
                 CommandEffect::EndpointTest(ep_name) => {
@@ -7063,15 +7131,8 @@ impl VizApp {
                 }
             }
         }
-        // Clear expired notifications (after 3 seconds).
-        if let Some((_, when)) = &self.notification
-            && when.elapsed() > std::time::Duration::from_secs(3)
-        {
-            self.notification = None;
-            drained = true; // need redraw to remove the notification
-        }
-        // Clear expired pipeline toasts.
-        if self.cleanup_pipeline_toasts() {
+        // Clear expired toasts (auto-dismiss by severity).
+        if self.cleanup_toasts() {
             drained = true;
         }
         drained
@@ -8406,12 +8467,10 @@ impl VizApp {
                     mime_type: att.mime_type,
                     size_bytes: att.size_bytes,
                 });
-                self.notification =
-                    Some((format!("Attached: {}", filename), std::time::Instant::now()));
+                self.push_toast(format!("Attached: {}", filename), ToastSeverity::Info);
             }
             Err(e) => {
-                self.notification =
-                    Some((format!("Attach failed: {}", e), std::time::Instant::now()));
+                self.push_toast(format!("Attach failed: {}", e), ToastSeverity::Error);
             }
         }
     }
@@ -8519,7 +8578,7 @@ impl VizApp {
         self.chat.editing_index = None;
         self.chat.history_cursor = None;
         editor_clear(&mut self.chat.editor);
-        self.notification = Some(("Message deleted".to_string(), std::time::Instant::now()));
+        self.push_toast("Message deleted".to_string(), ToastSeverity::Info);
     }
 
     /// Get the indices of editable (unconsumed) user messages, in order.
@@ -8737,16 +8796,12 @@ impl VizApp {
                     mime_type: att.mime_type,
                     size_bytes: att.size_bytes,
                 });
-                self.notification = Some((
-                    format!("Image pasted: {}", filename),
-                    std::time::Instant::now(),
-                ));
+                self.push_toast(format!("Image pasted: {}", filename), ToastSeverity::Info);
                 true
             }
             Ok(None) => false, // no image on clipboard — fall through to text paste
             Err(e) => {
-                self.notification =
-                    Some((format!("Clipboard error: {}", e), std::time::Instant::now()));
+                self.push_toast(format!("Clipboard error: {}", e), ToastSeverity::Error);
                 false // fall through to text paste on error
             }
         }
@@ -8802,7 +8857,7 @@ impl VizApp {
         self.input_mode = InputMode::Normal;
 
         if form.title.trim().is_empty() {
-            self.notification = Some(("Task title is required".to_string(), Instant::now()));
+            self.push_toast("Task title is required".to_string(), ToastSeverity::Warning);
             return;
         }
 
@@ -8845,7 +8900,7 @@ impl VizApp {
         let task_id = match self.selected_task_id() {
             Some(id) => id.to_string(),
             None => {
-                self.notification = Some(("No task selected".to_string(), Instant::now()));
+                self.push_toast("No task selected".to_string(), ToastSeverity::Warning);
                 return;
             }
         };
@@ -8854,7 +8909,7 @@ impl VizApp {
         let graph = match load_graph(&graph_path) {
             Ok(g) => g,
             Err(_) => {
-                self.notification = Some(("Failed to load graph".to_string(), Instant::now()));
+                self.push_toast("Failed to load graph".to_string(), ToastSeverity::Error);
                 return;
             }
         };
@@ -8863,13 +8918,12 @@ impl VizApp {
             Some(task) => match &task.assigned {
                 Some(id) => id.clone(),
                 None => {
-                    self.notification =
-                        Some((format!("No active agent on '{}'", task_id), Instant::now()));
+                    self.push_toast(format!("No active agent on '{}'", task_id), ToastSeverity::Warning);
                     return;
                 }
             },
             None => {
-                self.notification = Some((format!("Task '{}' not found", task_id), Instant::now()));
+                self.push_toast(format!("Task '{}' not found", task_id), ToastSeverity::Warning);
                 return;
             }
         };
@@ -9717,28 +9771,24 @@ impl VizApp {
         let global_path = match Config::global_config_path() {
             Ok(p) => p,
             Err(e) => {
-                self.notification = Some((format!("Error: {}", e), std::time::Instant::now()));
+                self.push_toast(format!("Error: {}", e), ToastSeverity::Error);
                 return;
             }
         };
         let global_dir = match Config::global_dir() {
             Ok(d) => d,
             Err(e) => {
-                self.notification = Some((format!("Error: {}", e), std::time::Instant::now()));
+                self.push_toast(format!("Error: {}", e), ToastSeverity::Error);
                 return;
             }
         };
         match install_global_to(&self.workgraph_dir, &global_path, &global_dir, true) {
             Ok(()) => {
                 self.config_panel.save_notification = Some(std::time::Instant::now());
-                self.notification = Some((
-                    "Installed project config as global default".to_string(),
-                    std::time::Instant::now(),
-                ));
+                self.push_toast("Installed project config as global default".to_string(), ToastSeverity::Info);
             }
             Err(e) => {
-                self.notification =
-                    Some((format!("Install failed: {}", e), std::time::Instant::now()));
+                self.push_toast(format!("Install failed: {}", e), ToastSeverity::Error);
             }
         }
     }
@@ -10242,7 +10292,7 @@ impl VizApp {
     pub fn add_endpoint(&mut self) {
         let fields = &self.config_panel.new_endpoint;
         if fields.name.trim().is_empty() {
-            self.notification = Some(("Endpoint name is required".to_string(), Instant::now()));
+            self.push_toast("Endpoint name is required".to_string(), ToastSeverity::Warning);
             return;
         }
         let mut config = Config::load_or_default(&self.workgraph_dir);
@@ -10290,7 +10340,7 @@ impl VizApp {
     pub fn add_model(&mut self) {
         let fields = &self.config_panel.new_model;
         if fields.id.trim().is_empty() {
-            self.notification = Some(("Model ID is required".to_string(), Instant::now()));
+            self.push_toast("Model ID is required".to_string(), ToastSeverity::Warning);
             return;
         }
         let mut registry =
