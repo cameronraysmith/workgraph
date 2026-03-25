@@ -731,9 +731,9 @@ fn agent_thread_main(
                         .saturating_add(input_toks)
                         .saturating_add(output_toks);
                     if total > 0 {
-                        let mut cs = super::CoordinatorState::load_or_default(dir);
+                        let mut cs = super::CoordinatorState::load_or_default_for(dir, coordinator_id);
                         cs.accumulated_tokens = cs.accumulated_tokens.saturating_add(total);
-                        cs.save(dir);
+                        cs.save_for(dir, coordinator_id);
                         logger.info(&format!(
                             "Coordinator agent: turn used {} tokens (input={}, output={}, cache_creation={}), accumulated={}",
                             total, input_toks, output_toks, cache_creation_toks, cs.accumulated_tokens
@@ -1842,9 +1842,9 @@ fn native_coordinator_loop(
             .saturating_add(total_input_tokens)
             .saturating_add(total_output_tokens);
         if total > 0 {
-            let mut cs = super::CoordinatorState::load_or_default(dir);
+            let mut cs = super::CoordinatorState::load_or_default_for(dir, coordinator_id);
             cs.accumulated_tokens = cs.accumulated_tokens.saturating_add(total);
-            cs.save(dir);
+            cs.save_for(dir, coordinator_id);
             logger.info(&format!(
                 "Native coordinator: turn used {} tokens (input={}, output={}, cache_creation={}), accumulated={}",
                 total, total_input_tokens, total_output_tokens, total_cache_creation, cs.accumulated_tokens
