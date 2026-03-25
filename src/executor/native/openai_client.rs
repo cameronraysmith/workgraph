@@ -56,6 +56,10 @@ struct OaiRequest {
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<OaiToolDef>,
+    /// Controls how the model selects tool calls. Must be `"auto"` when tools are
+    /// present — many OpenRouter-proxied models silently ignore tools without it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<String>,
     stream: bool,
     /// When streaming, request that the API include usage data in the final chunk.
     /// OpenAI requires `{"include_usage": true}` to report token counts in streaming mode.
@@ -472,12 +476,34 @@ impl OpenAiClient {
             .ok_or_else(|| anyhow!("Empty choices in API response"))?;
 
         let mut content_blocks = Vec::new();
+        let has_structured_tool_calls = choice
+            .message
+            .tool_calls
+            .as_ref()
+            .is_some_and(|tc| !tc.is_empty());
 
         // Add text content if present
         if let Some(text) = choice.message.content
             && !text.is_empty()
         {
-            content_blocks.push(ContentBlock::Text { text });
+            // If there are no structured tool calls, check for text-based tool calls
+            if !has_structured_tool_calls {
+                let (remaining, extracted) = extract_tool_calls_from_text(&text);
+                if !extracted.is_empty() {
+                    eprintln!(
+                        "[openai-client] Extracted {} tool call(s) from text output (model used text-based format)",
+                        extracted.len()
+                    );
+                    if !remaining.is_empty() {
+                        content_blocks.push(ContentBlock::Text { text: remaining });
+                    }
+                    content_blocks.extend(extracted);
+                } else {
+                    content_blocks.push(ContentBlock::Text { text });
+                }
+            } else {
+                content_blocks.push(ContentBlock::Text { text });
+            }
         }
 
         // Add tool calls if present
@@ -500,12 +526,24 @@ impl OpenAiClient {
             });
         }
 
-        let stop_reason = match choice.finish_reason.as_deref() {
-            Some("stop") => Some(StopReason::EndTurn),
-            Some("tool_calls") => Some(StopReason::ToolUse),
-            Some("length") => Some(StopReason::MaxTokens),
-            Some("content_filter") => Some(StopReason::StopSequence),
-            _ => None,
+        // Determine stop reason — override to ToolUse if we extracted tool calls
+        let has_tool_use = content_blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ToolUse { .. }));
+        let stop_reason = if has_tool_use
+            && !matches!(choice.finish_reason.as_deref(), Some("tool_calls"))
+        {
+            // Model produced tool calls (possibly text-extracted) but finish_reason
+            // wasn't "tool_calls" — override so the agent loop processes them.
+            Some(StopReason::ToolUse)
+        } else {
+            match choice.finish_reason.as_deref() {
+                Some("stop") => Some(StopReason::EndTurn),
+                Some("tool_calls") => Some(StopReason::ToolUse),
+                Some("length") => Some(StopReason::MaxTokens),
+                Some("content_filter") => Some(StopReason::StopSequence),
+                _ => None,
+            }
         };
 
         let usage = oai
@@ -534,11 +572,18 @@ impl OpenAiClient {
 
     /// Send a non-streaming request.
     async fn chat_completion(&self, request: &MessagesRequest) -> Result<MessagesResponse> {
+        let tools = Self::translate_tools(&request.tools);
+        let tool_choice = if tools.is_empty() {
+            None
+        } else {
+            Some("auto".to_string())
+        };
         let oai_request = OaiRequest {
             model: request.model.clone(),
             messages: Self::translate_messages(&request.system, &request.messages),
             max_tokens: Some(request.max_tokens),
-            tools: Self::translate_tools(&request.tools),
+            tools,
+            tool_choice,
             stream: false,
             stream_options: None,
             cache_control: self.cache_control_value(),
@@ -560,11 +605,18 @@ impl OpenAiClient {
         &self,
         request: &MessagesRequest,
     ) -> Result<MessagesResponse> {
+        let tools = Self::translate_tools(&request.tools);
+        let tool_choice = if tools.is_empty() {
+            None
+        } else {
+            Some("auto".to_string())
+        };
         let oai_request = OaiRequest {
             model: request.model.clone(),
             messages: Self::translate_messages(&request.system, &request.messages),
             max_tokens: Some(request.max_tokens),
-            tools: Self::translate_tools(&request.tools),
+            tools,
+            tool_choice,
             stream: true,
             stream_options: Some(OaiStreamOptions {
                 include_usage: true,
@@ -963,6 +1015,186 @@ fn truncate(s: &str, max: usize) -> &str {
     }
 }
 
+// ── Text-based tool call extraction ──────────────────────────────────
+//
+// Some models (especially via OpenRouter) output tool calls as text instead of
+// using the structured `tool_calls` response field.  Common formats:
+//
+//   <tool_call>{"name": "bash", "arguments": {"command": "ls"}}</tool_call>
+//   <function=bash>{"command": "ls"}</function>
+//   ```json\n{"name": "bash", "arguments": {"command": "ls"}}\n```
+//
+// This fallback parser detects these, extracts valid tool calls, and converts
+// them to `ContentBlock::ToolUse` so the agent loop can execute them.
+
+/// Try to extract tool calls from text content.
+///
+/// Returns `(remaining_text, extracted_tool_calls)`.  If no tool calls are found
+/// the original text is returned unchanged and the tool calls vec is empty.
+fn extract_tool_calls_from_text(text: &str) -> (String, Vec<ContentBlock>) {
+    let mut tool_calls = Vec::new();
+    let mut remaining = text.to_string();
+    let mut call_counter = 0u32;
+
+    // Pattern 1: XML-style <tool_call>...</tool_call> (Hermes / ChatML format)
+    loop {
+        let Some(start) = remaining.find("<tool_call>") else {
+            break;
+        };
+        let search_from = start + "<tool_call>".len();
+        let Some(end_offset) = remaining[search_from..].find("</tool_call>") else {
+            break;
+        };
+        let end = search_from + end_offset;
+        let inner = remaining[search_from..end].trim();
+
+        if let Some(tc) = parse_tool_call_json(inner, &mut call_counter) {
+            tool_calls.push(tc);
+        }
+        // Remove the whole tag from remaining text
+        remaining = format!(
+            "{}{}",
+            remaining[..start].trim_end(),
+            remaining[end + "</tool_call>".len()..].trim_start()
+        );
+    }
+
+    // Pattern 2: <function=name>...</function> (Llama / Fireworks format)
+    loop {
+        let Some(start) = remaining.find("<function=") else {
+            break;
+        };
+        let after_eq = start + "<function=".len();
+        let Some(gt) = remaining[after_eq..].find('>') else {
+            break;
+        };
+        let name = remaining[after_eq..after_eq + gt].to_string();
+        let body_start = after_eq + gt + 1;
+        let Some(end_offset) = remaining[body_start..].find("</function>") else {
+            break;
+        };
+        let body_end = body_start + end_offset;
+        let body = remaining[body_start..body_end].trim();
+
+        if let Ok(args) = serde_json::from_str::<serde_json::Value>(body) {
+            call_counter += 1;
+            tool_calls.push(ContentBlock::ToolUse {
+                id: format!("text_call_{}", call_counter),
+                name,
+                input: args,
+            });
+        }
+        remaining = format!(
+            "{}{}",
+            remaining[..start].trim_end(),
+            remaining[body_end + "</function>".len()..].trim_start()
+        );
+    }
+
+    // Pattern 3: provider-specific tags like <|tool_call|>...<|/tool_call|>
+    // or </minimax:tool_call> variants
+    loop {
+        // Match <*tool_call*>...</*tool_call*> with optional provider prefix
+        let tag_start = remaining
+            .find("<|tool_call|>")
+            .or_else(|| remaining.find("<tool_call "))
+            .or_else(|| {
+                // Match <provider:tool_call>
+                let re_start = remaining.find(":tool_call>");
+                re_start.and_then(|pos| {
+                    // Walk back to find the '<'
+                    remaining[..pos].rfind('<')
+                })
+            });
+        let Some(start) = tag_start else {
+            break;
+        };
+
+        // Find the matching closing tag
+        let close_patterns = [
+            "</tool_call>",
+            "<|/tool_call|>",
+            "<|tool_call_end|>",
+        ];
+        let close_match = close_patterns.iter().find_map(|pat| {
+            remaining[start..].find(pat).map(|offset| (start + offset, pat.len()))
+        });
+        // Also check for :tool_call> closing (e.g., </minimax:tool_call>)
+        let close_match = close_match.or_else(|| {
+            remaining[start + 1..].find(":tool_call>").map(|offset| {
+                // Walk back to find '</' or '<'
+                let tag_start = remaining[start + 1..start + 1 + offset]
+                    .rfind('<')
+                    .map(|p| start + 1 + p)
+                    .unwrap_or(start + 1 + offset.saturating_sub(1));
+                (tag_start, offset + ":tool_call>".len() - (tag_start - start - 1))
+            })
+        });
+
+        let Some((close_start, close_len)) = close_match else {
+            break;
+        };
+
+        // Extract content between open and close tags
+        let open_end = remaining[start..]
+            .find('>')
+            .map(|p| start + p + 1)
+            .unwrap_or(start);
+        let inner = remaining[open_end..close_start].trim();
+
+        if let Some(tc) = parse_tool_call_json(inner, &mut call_counter) {
+            tool_calls.push(tc);
+        }
+        remaining = format!(
+            "{}{}",
+            remaining[..start].trim_end(),
+            remaining[close_start + close_len..].trim_start()
+        );
+    }
+
+    // Trim the remaining text
+    let remaining = remaining.trim().to_string();
+
+    (remaining, tool_calls)
+}
+
+/// Parse a JSON string as a tool call. Accepts these formats:
+/// - `{"name": "tool", "arguments": {...}}`
+/// - `{"name": "tool", "parameters": {...}}`
+/// - `{"tool": "name", "arguments": {...}}`  (some models swap field names)
+fn parse_tool_call_json(json_str: &str, counter: &mut u32) -> Option<ContentBlock> {
+    let val: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    let obj = val.as_object()?;
+
+    let name = obj
+        .get("name")
+        .or_else(|| obj.get("tool"))
+        .or_else(|| obj.get("function"))
+        .and_then(|v| v.as_str())
+        .map(String::from)?;
+
+    let input = obj
+        .get("arguments")
+        .or_else(|| obj.get("parameters"))
+        .or_else(|| obj.get("input"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+    // If arguments is a string, try to parse it as JSON
+    let input = if let serde_json::Value::String(s) = &input {
+        serde_json::from_str(s).unwrap_or(input)
+    } else {
+        input
+    };
+
+    *counter += 1;
+    Some(ContentBlock::ToolUse {
+        id: format!("text_call_{}", counter),
+        name,
+        input,
+    })
+}
+
 // ── OpenRouter model discovery ──────────────────────────────────────────
 
 /// A model returned by the OpenRouter `/api/v1/models` endpoint.
@@ -1096,9 +1328,27 @@ fn assemble_oai_stream_response(
     usage: Option<OaiUsage>,
 ) -> Result<MessagesResponse> {
     let mut content_blocks = Vec::new();
+    let has_structured_tool_calls = !tool_calls.is_empty();
 
     if !text_content.is_empty() {
-        content_blocks.push(ContentBlock::Text { text: text_content });
+        // If no structured tool calls came through the stream, check for text-based ones
+        if !has_structured_tool_calls {
+            let (remaining, extracted) = extract_tool_calls_from_text(&text_content);
+            if !extracted.is_empty() {
+                eprintln!(
+                    "[openai-client] Extracted {} tool call(s) from streamed text output",
+                    extracted.len()
+                );
+                if !remaining.is_empty() {
+                    content_blocks.push(ContentBlock::Text { text: remaining });
+                }
+                content_blocks.extend(extracted);
+            } else {
+                content_blocks.push(ContentBlock::Text { text: text_content });
+            }
+        } else {
+            content_blocks.push(ContentBlock::Text { text: text_content });
+        }
     }
 
     for (_index, (id, name, arguments)) in tool_calls {
@@ -1113,12 +1363,20 @@ fn assemble_oai_stream_response(
         });
     }
 
-    let stop_reason = match finish_reason.as_deref() {
-        Some("stop") => Some(StopReason::EndTurn),
-        Some("tool_calls") => Some(StopReason::ToolUse),
-        Some("length") => Some(StopReason::MaxTokens),
-        Some("content_filter") => Some(StopReason::StopSequence),
-        _ => None,
+    // Determine stop reason — override to ToolUse if we extracted tool calls
+    let has_tool_use = content_blocks
+        .iter()
+        .any(|b| matches!(b, ContentBlock::ToolUse { .. }));
+    let stop_reason = if has_tool_use && !matches!(finish_reason.as_deref(), Some("tool_calls")) {
+        Some(StopReason::ToolUse)
+    } else {
+        match finish_reason.as_deref() {
+            Some("stop") => Some(StopReason::EndTurn),
+            Some("tool_calls") => Some(StopReason::ToolUse),
+            Some("length") => Some(StopReason::MaxTokens),
+            Some("content_filter") => Some(StopReason::StopSequence),
+            _ => None,
+        }
     };
 
     let usage = usage
@@ -1750,6 +2008,7 @@ mod tests {
             messages: vec![],
             max_tokens: Some(1024),
             tools: vec![],
+            tool_choice: None,
             stream: false,
             stream_options: None,
             cache_control: Some(serde_json::json!({"type": "ephemeral"})),
@@ -1766,6 +2025,7 @@ mod tests {
             messages: vec![],
             max_tokens: Some(1024),
             tools: vec![],
+            tool_choice: None,
             stream: false,
             stream_options: None,
             cache_control: None,
@@ -1862,6 +2122,7 @@ mod tests {
             messages: vec![],
             max_tokens: Some(1024),
             tools: vec![],
+            tool_choice: None,
             stream: true,
             stream_options: Some(OaiStreamOptions {
                 include_usage: true,
@@ -1881,6 +2142,7 @@ mod tests {
             messages: vec![],
             max_tokens: Some(1024),
             tools: vec![],
+            tool_choice: None,
             stream: false,
             stream_options: None,
             cache_control: None,
@@ -2138,5 +2400,244 @@ mod tests {
 
         assert_eq!(resp.usage.input_tokens, 0);
         assert_eq!(resp.usage.output_tokens, 0);
+    }
+
+    // ── tool_choice serialization tests ──────────────────────────────────
+
+    #[test]
+    fn test_tool_choice_serialized_when_present() {
+        let request = OaiRequest {
+            model: "test".to_string(),
+            messages: vec![],
+            max_tokens: Some(1024),
+            tools: vec![OaiToolDef {
+                tool_type: "function".to_string(),
+                function: OaiFunctionDef {
+                    name: "bash".to_string(),
+                    description: "Run a command".to_string(),
+                    parameters: json!({}),
+                },
+            }],
+            tool_choice: Some("auto".to_string()),
+            stream: false,
+            stream_options: None,
+            cache_control: None,
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains(r#""tool_choice":"auto""#));
+    }
+
+    #[test]
+    fn test_tool_choice_omitted_when_none() {
+        let request = OaiRequest {
+            model: "test".to_string(),
+            messages: vec![],
+            max_tokens: Some(1024),
+            tools: vec![],
+            tool_choice: None,
+            stream: false,
+            stream_options: None,
+            cache_control: None,
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(!json.contains("tool_choice"));
+    }
+
+    // ── Text-based tool call extraction tests ────────────────────────────
+
+    #[test]
+    fn test_extract_xml_tool_call() {
+        let text = r#"I'll run this command for you.
+<tool_call>
+{"name": "bash", "arguments": {"command": "ls -la"}}
+</tool_call>"#;
+        let (remaining, calls) = extract_tool_calls_from_text(text);
+        assert_eq!(calls.len(), 1);
+        assert!(
+            matches!(&calls[0], ContentBlock::ToolUse { name, input, .. }
+                if name == "bash" && input["command"] == "ls -la")
+        );
+        assert_eq!(remaining, "I'll run this command for you.");
+    }
+
+    #[test]
+    fn test_extract_multiple_xml_tool_calls() {
+        let text = r#"<tool_call>{"name": "bash", "arguments": {"command": "ls"}}</tool_call>
+<tool_call>{"name": "bash", "arguments": {"command": "pwd"}}</tool_call>"#;
+        let (remaining, calls) = extract_tool_calls_from_text(text);
+        assert_eq!(calls.len(), 2);
+        assert!(matches!(&calls[0], ContentBlock::ToolUse { name, .. } if name == "bash"));
+        assert!(matches!(&calls[1], ContentBlock::ToolUse { name, .. } if name == "bash"));
+        assert!(remaining.is_empty());
+    }
+
+    #[test]
+    fn test_extract_function_tag_tool_call() {
+        let text = r#"<function=bash>{"command": "echo hello"}</function>"#;
+        let (remaining, calls) = extract_tool_calls_from_text(text);
+        assert_eq!(calls.len(), 1);
+        assert!(
+            matches!(&calls[0], ContentBlock::ToolUse { name, input, .. }
+                if name == "bash" && input["command"] == "echo hello")
+        );
+        assert!(remaining.is_empty());
+    }
+
+    #[test]
+    fn test_extract_no_tool_calls_returns_original() {
+        let text = "This is just plain text with no tool calls.";
+        let (remaining, calls) = extract_tool_calls_from_text(text);
+        assert!(calls.is_empty());
+        assert_eq!(remaining, text);
+    }
+
+    #[test]
+    fn test_extract_tool_call_with_parameters_key() {
+        let text = r#"<tool_call>{"name": "read_file", "parameters": {"path": "/tmp/test.txt"}}</tool_call>"#;
+        let (remaining, calls) = extract_tool_calls_from_text(text);
+        assert_eq!(calls.len(), 1);
+        assert!(
+            matches!(&calls[0], ContentBlock::ToolUse { name, input, .. }
+                if name == "read_file" && input["path"] == "/tmp/test.txt")
+        );
+        assert!(remaining.is_empty());
+    }
+
+    #[test]
+    fn test_extract_tool_call_with_string_arguments() {
+        let text = r#"<tool_call>{"name": "bash", "arguments": "{\"command\": \"ls\"}"}</tool_call>"#;
+        let (remaining, calls) = extract_tool_calls_from_text(text);
+        assert_eq!(calls.len(), 1);
+        assert!(
+            matches!(&calls[0], ContentBlock::ToolUse { name, input, .. }
+                if name == "bash" && input["command"] == "ls")
+        );
+        assert!(remaining.is_empty());
+    }
+
+    #[test]
+    fn test_translate_response_extracts_text_tool_calls() {
+        // Simulate a model that outputs tool calls as text instead of structured tool_calls
+        let oai = OaiResponse {
+            id: "chatcmpl-text-tools".to_string(),
+            choices: vec![OaiChoice {
+                message: OaiResponseMessage {
+                    role: "assistant".to_string(),
+                    content: Some(
+                        "Let me check.\n<tool_call>\n{\"name\": \"bash\", \"arguments\": {\"command\": \"wg list\"}}\n</tool_call>"
+                            .to_string(),
+                    ),
+                    tool_calls: None,
+                },
+                finish_reason: Some("stop".to_string()),
+            }],
+            usage: Some(OaiUsage {
+                prompt_tokens: 50,
+                completion_tokens: 30,
+                prompt_tokens_details: None,
+            }),
+        };
+
+        let resp = OpenAiClient::translate_response(oai).unwrap();
+        // Should have extracted the tool call AND overridden stop_reason
+        assert!(resp.content.iter().any(|b| matches!(b, ContentBlock::ToolUse { name, .. } if name == "bash")));
+        assert_eq!(resp.stop_reason, Some(StopReason::ToolUse));
+    }
+
+    #[test]
+    fn test_translate_response_no_extraction_when_structured_tools_present() {
+        // When structured tool calls are present, text should NOT be parsed for additional tools
+        let oai = OaiResponse {
+            id: "chatcmpl-structured".to_string(),
+            choices: vec![OaiChoice {
+                message: OaiResponseMessage {
+                    role: "assistant".to_string(),
+                    content: Some("Running command.".to_string()),
+                    tool_calls: Some(vec![OaiToolCall {
+                        id: "call_real".to_string(),
+                        call_type: "function".to_string(),
+                        function: OaiToolCallFunction {
+                            name: "bash".to_string(),
+                            arguments: r#"{"command":"ls"}"#.to_string(),
+                        },
+                    }]),
+                },
+                finish_reason: Some("tool_calls".to_string()),
+            }],
+            usage: None,
+        };
+
+        let resp = OpenAiClient::translate_response(oai).unwrap();
+        // Should have 2 blocks: text + structured tool call
+        assert_eq!(resp.content.len(), 2);
+        assert!(matches!(&resp.content[0], ContentBlock::Text { text } if text == "Running command."));
+        assert!(matches!(&resp.content[1], ContentBlock::ToolUse { id, .. } if id == "call_real"));
+    }
+
+    #[test]
+    fn test_assemble_stream_extracts_text_tool_calls() {
+        // Streaming response where model outputs tool calls in text
+        let resp = assemble_oai_stream_response(
+            "gen-text-tools".to_string(),
+            "<tool_call>\n{\"name\": \"bash\", \"arguments\": {\"command\": \"wg status\"}}\n</tool_call>".to_string(),
+            std::collections::BTreeMap::new(), // no structured tool calls
+            Some("stop".to_string()),
+            None,
+        )
+        .unwrap();
+
+        assert!(resp.content.iter().any(|b| matches!(b, ContentBlock::ToolUse { name, .. } if name == "bash")));
+        assert_eq!(resp.stop_reason, Some(StopReason::ToolUse));
+    }
+
+    #[test]
+    fn test_stop_reason_overridden_for_text_extracted_tools() {
+        // When text-based tools are extracted but finish_reason was "stop",
+        // the stop_reason should be overridden to ToolUse
+        let oai = OaiResponse {
+            id: "chatcmpl-override".to_string(),
+            choices: vec![OaiChoice {
+                message: OaiResponseMessage {
+                    role: "assistant".to_string(),
+                    content: Some(
+                        "<tool_call>{\"name\": \"bash\", \"arguments\": {\"command\": \"echo hi\"}}</tool_call>"
+                            .to_string(),
+                    ),
+                    tool_calls: None,
+                },
+                finish_reason: Some("stop".to_string()),
+            }],
+            usage: None,
+        };
+
+        let resp = OpenAiClient::translate_response(oai).unwrap();
+        assert_eq!(
+            resp.stop_reason,
+            Some(StopReason::ToolUse),
+            "stop_reason should be overridden to ToolUse when text-based tool calls are extracted"
+        );
+    }
+
+    #[test]
+    fn test_extract_invalid_json_ignored() {
+        let text = "<tool_call>\nnot valid json at all\n</tool_call>";
+        let (remaining, calls) = extract_tool_calls_from_text(text);
+        assert!(calls.is_empty());
+        // Invalid JSON tag is still removed from text
+        assert!(remaining.is_empty() || !remaining.contains("tool_call"));
+    }
+
+    #[test]
+    fn test_extract_pipe_delimited_tool_call() {
+        let text = r#"<|tool_call|>
+{"name": "bash", "arguments": {"command": "pwd"}}
+<|/tool_call|>"#;
+        let (remaining, calls) = extract_tool_calls_from_text(text);
+        assert_eq!(calls.len(), 1);
+        assert!(
+            matches!(&calls[0], ContentBlock::ToolUse { name, input, .. }
+                if name == "bash" && input["command"] == "pwd")
+        );
+        assert!(remaining.is_empty());
     }
 }
