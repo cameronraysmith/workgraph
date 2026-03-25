@@ -1291,6 +1291,163 @@ pub fn fetch_openrouter_models_blocking(
     rt.block_on(fetch_openrouter_models(api_key, base_url))
 }
 
+// ── OpenRouter auto-routing & model validation ──────────────────────────
+
+/// The OpenRouter auto-routing model specifier.
+///
+/// When used as the model ID, OpenRouter's intelligent routing selects the best
+/// model for each request based on the prompt content. This is the recommended
+/// default when no specific model is configured for OpenRouter.
+pub const OPENROUTER_AUTO_MODEL: &str = "openrouter/auto";
+
+/// Result of validating a model ID against the cached OpenRouter model list.
+#[derive(Debug, Clone)]
+pub struct ModelValidationResult {
+    /// The model to actually use (may differ from the input if fallback was applied).
+    pub model: String,
+    /// Whether the originally requested model was valid.
+    pub was_valid: bool,
+    /// Suggested alternatives (populated only when the model was invalid).
+    pub suggestions: Vec<String>,
+    /// Warning message to display (if any).
+    pub warning: Option<String>,
+}
+
+/// Validate a model ID against the cached OpenRouter model list.
+///
+/// If the model is `openrouter/auto`, it is always considered valid.
+/// If a local cache exists and the model is not found, the function:
+/// 1. Finds the 3 closest model IDs by edit distance
+/// 2. Falls back to `openrouter/auto`
+/// 3. Returns the validation result with suggestions
+///
+/// If no cache is available, the model is assumed valid (we can't validate
+/// without data).
+pub fn validate_openrouter_model(
+    model: &str,
+    workgraph_dir: &std::path::Path,
+) -> ModelValidationResult {
+    // openrouter/auto is always valid
+    if model == OPENROUTER_AUTO_MODEL {
+        return ModelValidationResult {
+            model: model.to_string(),
+            was_valid: true,
+            suggestions: vec![],
+            warning: None,
+        };
+    }
+
+    // Try to load cache
+    let cache_path = workgraph_dir.join("model_cache.json");
+    let cache_content = match std::fs::read_to_string(&cache_path) {
+        Ok(c) => c,
+        Err(_) => {
+            // No cache available — can't validate, pass through
+            return ModelValidationResult {
+                model: model.to_string(),
+                was_valid: true,
+                suggestions: vec![],
+                warning: None,
+            };
+        }
+    };
+
+    #[derive(Deserialize)]
+    struct CacheFile {
+        models: Vec<CacheModel>,
+    }
+    #[derive(Deserialize)]
+    struct CacheModel {
+        id: String,
+    }
+
+    let cache: CacheFile = match serde_json::from_str(&cache_content) {
+        Ok(c) => c,
+        Err(_) => {
+            return ModelValidationResult {
+                model: model.to_string(),
+                was_valid: true,
+                suggestions: vec![],
+                warning: None,
+            };
+        }
+    };
+
+    let model_ids: Vec<&str> = cache.models.iter().map(|m| m.id.as_str()).collect();
+
+    // Check if model exists in cache
+    if model_ids.iter().any(|id| *id == model) {
+        return ModelValidationResult {
+            model: model.to_string(),
+            was_valid: true,
+            suggestions: vec![],
+            warning: None,
+        };
+    }
+
+    // Model not found — find closest matches
+    let suggestions = find_closest_models(model, &model_ids, 3);
+    let suggestions_str = if suggestions.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n  Did you mean one of:\n{}",
+            suggestions
+                .iter()
+                .map(|s| format!("    - {}", s))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
+
+    // Fall back to openrouter/auto
+    let warning = format!(
+        "Model '{}' not found in OpenRouter model list.{}\n  Falling back to '{}'.",
+        model, suggestions_str, OPENROUTER_AUTO_MODEL,
+    );
+
+    ModelValidationResult {
+        model: OPENROUTER_AUTO_MODEL.to_string(),
+        was_valid: false,
+        suggestions,
+        warning: Some(warning),
+    }
+}
+
+/// Find the N closest model IDs to the query by edit distance.
+fn find_closest_models(query: &str, candidates: &[&str], n: usize) -> Vec<String> {
+    let query_lower = query.to_lowercase();
+    let mut scored: Vec<(usize, &str)> = candidates
+        .iter()
+        .map(|c| (levenshtein_distance(&query_lower, &c.to_lowercase()), *c))
+        .collect();
+    scored.sort_by_key(|(dist, _)| *dist);
+    scored
+        .into_iter()
+        .take(n)
+        .filter(|(dist, _)| *dist <= query.len()) // don't suggest wildly different models
+        .map(|(_, id)| id.to_string())
+        .collect()
+}
+
+/// Levenshtein edit distance between two strings.
+fn levenshtein_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let (m, n) = (a.len(), b.len());
+    let mut prev = (0..=n).collect::<Vec<_>>();
+    let mut curr = vec![0; n + 1];
+    for i in 1..=m {
+        curr[0] = i;
+        for j in 1..=n {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[n]
+}
+
 /// Parse the next `data:` line from an SSE buffer, consuming it.
 ///
 /// OpenAI SSE format uses bare `data: <json>` lines separated by blank lines.
@@ -2639,5 +2796,133 @@ mod tests {
                 if name == "bash" && input["command"] == "pwd")
         );
         assert!(remaining.is_empty());
+    }
+
+    // ── Auto-routing & model validation tests ───────────────────────────
+
+    #[test]
+    fn test_openrouter_auto_model_constant() {
+        assert_eq!(OPENROUTER_AUTO_MODEL, "openrouter/auto");
+    }
+
+    #[test]
+    fn test_validate_openrouter_auto_always_valid() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let result = validate_openrouter_model("openrouter/auto", dir.path());
+        assert!(result.was_valid);
+        assert_eq!(result.model, "openrouter/auto");
+        assert!(result.suggestions.is_empty());
+        assert!(result.warning.is_none());
+    }
+
+    #[test]
+    fn test_validate_no_cache_passes_through() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let result = validate_openrouter_model("some-unknown/model", dir.path());
+        assert!(result.was_valid);
+        assert_eq!(result.model, "some-unknown/model");
+        assert!(result.warning.is_none());
+    }
+
+    #[test]
+    fn test_validate_model_found_in_cache() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cache = serde_json::json!({
+            "fetched_at": "2026-03-25T12:00:00Z",
+            "models": [
+                {"id": "anthropic/claude-sonnet-4-6", "name": "Sonnet", "description": ""},
+                {"id": "openai/gpt-4o", "name": "GPT-4o", "description": ""},
+            ]
+        });
+        std::fs::write(dir.path().join("model_cache.json"), cache.to_string()).unwrap();
+
+        let result = validate_openrouter_model("anthropic/claude-sonnet-4-6", dir.path());
+        assert!(result.was_valid);
+        assert_eq!(result.model, "anthropic/claude-sonnet-4-6");
+        assert!(result.warning.is_none());
+    }
+
+    #[test]
+    fn test_validate_invalid_model_suggests_and_falls_back() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cache = serde_json::json!({
+            "fetched_at": "2026-03-25T12:00:00Z",
+            "models": [
+                {"id": "anthropic/claude-sonnet-4-6", "name": "Sonnet"},
+                {"id": "anthropic/claude-opus-4-6", "name": "Opus"},
+                {"id": "openai/gpt-4o", "name": "GPT-4o"},
+                {"id": "deepseek/deepseek-r1", "name": "R1"},
+                {"id": "meta-llama/llama-4-maverick", "name": "Llama 4"},
+            ]
+        });
+        std::fs::write(dir.path().join("model_cache.json"), cache.to_string()).unwrap();
+
+        let result = validate_openrouter_model("anthropic/claude-sonet-4-6", dir.path());
+        assert!(!result.was_valid);
+        assert_eq!(result.model, OPENROUTER_AUTO_MODEL);
+        assert!(!result.suggestions.is_empty());
+        assert!(
+            result
+                .suggestions
+                .contains(&"anthropic/claude-sonnet-4-6".to_string()),
+            "suggestions should include close match, got: {:?}",
+            result.suggestions
+        );
+        let warning = result.warning.unwrap();
+        assert!(warning.contains("not found"));
+        assert!(warning.contains("Falling back"));
+        assert!(warning.contains(OPENROUTER_AUTO_MODEL));
+    }
+
+    #[test]
+    fn test_validate_suggestions_limited_to_3() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cache = serde_json::json!({
+            "fetched_at": "2026-03-25T12:00:00Z",
+            "models": [
+                {"id": "a/model-1"},
+                {"id": "a/model-2"},
+                {"id": "a/model-3"},
+                {"id": "a/model-4"},
+                {"id": "a/model-5"},
+            ]
+        });
+        std::fs::write(dir.path().join("model_cache.json"), cache.to_string()).unwrap();
+
+        let result = validate_openrouter_model("a/model-x", dir.path());
+        assert!(!result.was_valid);
+        assert!(result.suggestions.len() <= 3);
+    }
+
+    #[test]
+    fn test_levenshtein_distance_basic() {
+        assert_eq!(levenshtein_distance("", ""), 0);
+        assert_eq!(levenshtein_distance("abc", "abc"), 0);
+        assert_eq!(levenshtein_distance("abc", "abd"), 1);
+        assert_eq!(levenshtein_distance("kitten", "sitting"), 3);
+        assert_eq!(levenshtein_distance("food", "foo"), 1);
+    }
+
+    #[test]
+    fn test_find_closest_models() {
+        let candidates = vec![
+            "anthropic/claude-sonnet-4-6",
+            "anthropic/claude-opus-4-6",
+            "openai/gpt-4o",
+            "deepseek/deepseek-r1",
+        ];
+        let closest = find_closest_models("anthropic/claude-sonet-4-6", &candidates, 3);
+        assert!(!closest.is_empty());
+        assert_eq!(closest[0], "anthropic/claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn test_validate_corrupt_cache_passes_through() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("model_cache.json"), "not json").unwrap();
+
+        let result = validate_openrouter_model("some/model", dir.path());
+        assert!(result.was_valid);
+        assert_eq!(result.model, "some/model");
     }
 }

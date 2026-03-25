@@ -481,6 +481,7 @@ impl Tool for WgFailTool {
         task.log.push(LogEntry {
             timestamp: Utc::now().to_rfc3339(),
             actor: Some("native-agent".to_string()),
+            user: Some(crate::current_user()),
             message: format!("Failed: {}", reason),
         });
 
@@ -548,6 +549,7 @@ impl Tool for WgLogTool {
         task.log.push(LogEntry {
             timestamp: Utc::now().to_rfc3339(),
             actor: Some("native-agent".to_string()),
+            user: Some(crate::current_user()),
             message: message.to_string(),
         });
 

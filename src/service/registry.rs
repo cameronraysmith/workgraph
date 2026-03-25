@@ -6,8 +6,19 @@
 //! Features:
 //! - Store agent info: id, pid, task_id, executor type, started_at, last_heartbeat, status, output_file
 //! - Atomic file operations via write-to-temp-then-rename
-//! - Optional file locking for concurrent access
+//! - File locking via `load_locked()` for all write paths
 //! - Auto-increment agent IDs (agent-1, agent-2, etc.)
+//!
+//! # Lock hierarchy
+//!
+//! When multiple locks must be held, acquire them in this order to prevent deadlocks:
+//!
+//! 1. **Graph lock** (`graph.lock`) — acquired per-call by `load_graph()`/`save_graph()`
+//! 2. **Registry lock** (`.workgraph/service/.registry.lock`) — held via `LockedRegistry`
+//!
+//! The graph lock is acquired and released within each `load_graph()`/`save_graph()` call,
+//! so it is safe to hold the registry lock while calling graph operations. Never acquire
+//! the registry lock from within a graph lock callback.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -950,5 +961,91 @@ mod tests {
 
         // Should saturate at MAX, not wrap to 0
         assert_eq!(registry.next_agent_id, u32::MAX);
+    }
+
+    #[test]
+    fn test_locked_registry_blocks_concurrent_access() {
+        use std::sync::{Arc, Barrier};
+        use std::time::{Duration, Instant};
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Pre-create the service directory
+        std::fs::create_dir_all(temp_dir.path().join("service")).unwrap();
+
+        let path = Arc::new(temp_dir.path().to_path_buf());
+        let barrier = Arc::new(Barrier::new(2));
+
+        let path2 = Arc::clone(&path);
+        let barrier2 = Arc::clone(&barrier);
+
+        // Thread 1: acquire lock, hold it for 200ms
+        let t1 = std::thread::spawn(move || {
+            let locked = AgentRegistry::load_locked(&path2).unwrap();
+            barrier2.wait(); // signal that lock is held
+            std::thread::sleep(Duration::from_millis(200));
+            drop(locked); // release lock
+        });
+
+        // Thread 2: wait for thread 1 to hold lock, then try to acquire
+        let t2 = std::thread::spawn(move || {
+            barrier.wait(); // wait for thread 1 to hold lock
+            let start = Instant::now();
+            let _locked = AgentRegistry::load_locked(&path).unwrap();
+            let waited = start.elapsed();
+            // Should have blocked for at least ~150ms (thread 1 held lock for 200ms)
+            assert!(
+                waited >= Duration::from_millis(100),
+                "Second lock acquisition should have blocked, but only waited {:?}",
+                waited
+            );
+        });
+
+        t1.join().unwrap();
+        t2.join().unwrap();
+    }
+
+    #[test]
+    fn test_concurrent_agent_registration() {
+        use std::sync::{Arc, Barrier};
+
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(temp_dir.path().join("service")).unwrap();
+
+        let path = Arc::new(temp_dir.path().to_path_buf());
+        let barrier = Arc::new(Barrier::new(2));
+
+        let path1 = Arc::clone(&path);
+        let barrier1 = Arc::clone(&barrier);
+        let path2 = Arc::clone(&path);
+        let barrier2 = Arc::clone(&barrier);
+
+        // Two threads concurrently register agents
+        let t1 = std::thread::spawn(move || {
+            barrier1.wait();
+            let mut locked = AgentRegistry::load_locked(&path1).unwrap();
+            let id = locked.register_agent(1001, "task-a", "claude", "/tmp/a.log");
+            locked.save().unwrap();
+            id
+        });
+
+        let t2 = std::thread::spawn(move || {
+            barrier2.wait();
+            let mut locked = AgentRegistry::load_locked(&path2).unwrap();
+            let id = locked.register_agent(1002, "task-b", "claude", "/tmp/b.log");
+            locked.save().unwrap();
+            id
+        });
+
+        let id1 = t1.join().unwrap();
+        let id2 = t2.join().unwrap();
+
+        // Both agents should be registered with distinct IDs
+        assert_ne!(id1, id2, "Agent IDs must be unique");
+
+        let registry = AgentRegistry::load(temp_dir.path()).unwrap();
+        assert_eq!(registry.agents.len(), 2, "Both agents should be registered");
+        assert!(registry.agents.contains_key(&id1));
+        assert!(registry.agents.contains_key(&id2));
     }
 }

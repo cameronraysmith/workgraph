@@ -172,6 +172,17 @@ pub fn create_provider_ext(
             if let Some(mt) = max_tokens {
                 client = client.with_max_tokens(mt);
             }
+            // Validate model against cached OpenRouter model list (openrouter only)
+            if provider_name == "openrouter" {
+                let validation =
+                    super::openai_client::validate_openrouter_model(&client.model, workgraph_dir);
+                if let Some(ref warning) = validation.warning {
+                    eprintln!("[native-exec] WARNING: {}", warning);
+                }
+                if !validation.was_valid {
+                    client.model = validation.model;
+                }
+            }
             eprintln!(
                 "[native-exec] Using OpenAI-compatible provider ({})",
                 client.model

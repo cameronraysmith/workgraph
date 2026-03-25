@@ -169,11 +169,14 @@ pub(crate) fn spawn_agent_inner(
         vars.model = m.clone();
     }
 
-    // Load agent registry and prepare agent output directory
-    let mut agent_registry = AgentRegistry::load(dir)?;
+    // Load agent registry with lock for concurrent safety.
+    // The lock is held until save() to prevent two concurrent spawns from
+    // reading the same next_agent_id and overwriting each other's registration.
+    // Lock hierarchy: graph lock (per-call in load/save_graph) < registry lock (held here).
+    let mut locked_registry = AgentRegistry::load_locked(dir)?;
 
     // We need to know the agent ID before spawning to set up the output directory
-    let temp_agent_id = format!("agent-{}", agent_registry.next_agent_id);
+    let temp_agent_id = format!("agent-{}", locked_registry.next_agent_id);
     let output_dir = agent_output_dir(dir, &temp_agent_id);
     fs::create_dir_all(&output_dir).with_context(|| {
         format!(
@@ -373,6 +376,8 @@ pub(crate) fn spawn_agent_inner(
     cmd.env("WG_TASK_ID", task_id);
     cmd.env("WG_AGENT_ID", &temp_agent_id);
     cmd.env("WG_EXECUTOR_TYPE", &settings.executor_type);
+    // Propagate user identity to spawned agents
+    cmd.env("WG_USER", workgraph::current_user());
     if let Some(ref m) = effective_model {
         cmd.env("WG_MODEL", m);
     }
@@ -435,6 +440,7 @@ pub(crate) fn spawn_agent_inner(
     task.log.push(LogEntry {
         timestamp: Utc::now().to_rfc3339(),
         actor: Some(temp_agent_id.clone()),
+        user: Some(workgraph::current_user()),
         message: format!(
             "Spawned by {} --executor {}{}",
             spawned_by,
@@ -478,6 +484,7 @@ pub(crate) fn spawn_agent_inner(
             log: vec![LogEntry {
                 timestamp: Utc::now().to_rfc3339(),
                 actor: Some("coordinator".to_string()),
+                user: Some(workgraph::current_user()),
                 message: "Created at spawn time (no prior .assign-* task existed)".to_string(),
             }],
             ..Default::default()
@@ -500,6 +507,7 @@ pub(crate) fn spawn_agent_inner(
                         t.log.push(LogEntry {
                             timestamp: Utc::now().to_rfc3339(),
                             actor: Some(temp_agent_id.clone()),
+                            user: Some(workgraph::current_user()),
                             message: format!("Spawn failed, reverting claim: {}", e),
                         });
                         if let Err(save_err) = save_graph(&rollback_graph, &graph_path) {
@@ -533,14 +541,15 @@ pub(crate) fn spawn_agent_inner(
     let pid = child.id();
 
     // Register the agent (with model tracking)
-    let agent_id = agent_registry.register_agent_with_model(
+    let agent_id = locked_registry.register_agent_with_model(
         pid,
         task_id,
         executor_name,
         &output_file_str,
         effective_model.as_deref(),
     );
-    if let Err(save_err) = agent_registry.save(dir) {
+    // save() consumes the LockedRegistry, releasing the lock after write.
+    if let Err(save_err) = locked_registry.save() {
         // Registry save failed — kill the orphaned process to prevent invisible agents
         eprintln!(
             "Warning: failed to save agent registry for {} (PID {}), killing process: {}",

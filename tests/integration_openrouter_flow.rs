@@ -1028,3 +1028,124 @@ is_default = true
         assert_eq!(config.llm_endpoints.endpoints[0].provider, "openrouter");
     }
 }
+
+// ===========================================================================
+// 6. Auto-routing & model validation
+// ===========================================================================
+
+mod auto_routing_tests {
+    use super::*;
+    use workgraph::executor::native::openai_client::{
+        validate_openrouter_model, OPENROUTER_AUTO_MODEL,
+    };
+
+    #[test]
+    fn integration_openrouter_auto_model_is_always_valid() {
+        let tmp = setup_workgraph_dir();
+        let result = validate_openrouter_model(OPENROUTER_AUTO_MODEL, tmp.path());
+        assert!(result.was_valid);
+        assert_eq!(result.model, OPENROUTER_AUTO_MODEL);
+        assert!(result.warning.is_none());
+    }
+
+    #[test]
+    fn integration_openrouter_valid_model_passes_with_cache() {
+        let tmp = setup_workgraph_dir();
+        let cache = serde_json::json!({
+            "fetched_at": "2026-03-25T12:00:00Z",
+            "models": [
+                {"id": "anthropic/claude-sonnet-4-6", "name": "Sonnet", "description": ""},
+                {"id": "openai/gpt-4o", "name": "GPT-4o", "description": ""},
+            ]
+        });
+        fs::write(tmp.path().join("model_cache.json"), cache.to_string()).unwrap();
+
+        let result = validate_openrouter_model("anthropic/claude-sonnet-4-6", tmp.path());
+        assert!(result.was_valid);
+        assert_eq!(result.model, "anthropic/claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn integration_openrouter_invalid_model_falls_back_to_auto() {
+        let tmp = setup_workgraph_dir();
+        let cache = serde_json::json!({
+            "fetched_at": "2026-03-25T12:00:00Z",
+            "models": [
+                {"id": "anthropic/claude-sonnet-4-6"},
+                {"id": "anthropic/claude-opus-4-6"},
+                {"id": "openai/gpt-4o"},
+            ]
+        });
+        fs::write(tmp.path().join("model_cache.json"), cache.to_string()).unwrap();
+
+        let result = validate_openrouter_model("nonexistent/model-xyz", tmp.path());
+        assert!(!result.was_valid);
+        assert_eq!(
+            result.model, OPENROUTER_AUTO_MODEL,
+            "Should fall back to openrouter/auto"
+        );
+        assert!(result.warning.is_some());
+    }
+
+    #[test]
+    fn integration_openrouter_invalid_model_suggests_alternatives() {
+        let tmp = setup_workgraph_dir();
+        let cache = serde_json::json!({
+            "fetched_at": "2026-03-25T12:00:00Z",
+            "models": [
+                {"id": "anthropic/claude-sonnet-4-6"},
+                {"id": "anthropic/claude-opus-4-6"},
+                {"id": "openai/gpt-4o"},
+                {"id": "deepseek/deepseek-r1"},
+            ]
+        });
+        fs::write(tmp.path().join("model_cache.json"), cache.to_string()).unwrap();
+
+        // Typo: "sonet" instead of "sonnet"
+        let result = validate_openrouter_model("anthropic/claude-sonet-4-6", tmp.path());
+        assert!(!result.was_valid);
+        assert!(
+            result
+                .suggestions
+                .contains(&"anthropic/claude-sonnet-4-6".to_string()),
+            "Should suggest the closest match, got: {:?}",
+            result.suggestions
+        );
+        let warning = result.warning.as_ref().unwrap();
+        assert!(warning.contains("Did you mean"));
+        assert!(warning.contains("anthropic/claude-sonnet-4-6"));
+    }
+
+    #[test]
+    fn integration_openrouter_no_cache_passes_through() {
+        let tmp = setup_workgraph_dir();
+        // No model_cache.json exists
+        let result = validate_openrouter_model("any/model-name", tmp.path());
+        assert!(result.was_valid, "Without cache, model should pass through");
+        assert_eq!(result.model, "any/model-name");
+    }
+
+    #[test]
+    fn integration_openrouter_fallback_chain_complete() {
+        // Test the full chain: invalid model → suggestions → auto fallback
+        let tmp = setup_workgraph_dir();
+        let cache = serde_json::json!({
+            "fetched_at": "2026-03-25T12:00:00Z",
+            "models": [
+                {"id": "anthropic/claude-sonnet-4-6"},
+                {"id": "openai/gpt-4o"},
+            ]
+        });
+        fs::write(tmp.path().join("model_cache.json"), cache.to_string()).unwrap();
+
+        // Step 1: Invalid model triggers fallback
+        let result = validate_openrouter_model("totally-wrong-model", tmp.path());
+        assert!(!result.was_valid);
+        assert_eq!(result.model, OPENROUTER_AUTO_MODEL);
+
+        // Step 2: The fallback model (openrouter/auto) is itself always valid
+        let result2 = validate_openrouter_model(&result.model, tmp.path());
+        assert!(result2.was_valid);
+        assert_eq!(result2.model, OPENROUTER_AUTO_MODEL);
+    }
+}

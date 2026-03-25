@@ -635,7 +635,7 @@ fn handle_freeze(
         }));
     }
 
-    let mut registry = match AgentRegistry::load(dir) {
+    let mut locked_registry = match AgentRegistry::load_locked(dir) {
         Ok(r) => r,
         Err(e) => return IpcResponse::error(&format!("Failed to load registry: {}", e)),
     };
@@ -643,7 +643,7 @@ fn handle_freeze(
     let mut frozen_pids = Vec::new();
     let mut failed_pids = Vec::new();
 
-    for agent in registry.agents.values_mut() {
+    for agent in locked_registry.registry.agents.values_mut() {
         if !agent.is_alive() {
             continue;
         }
@@ -662,7 +662,7 @@ fn handle_freeze(
         }
     }
 
-    if let Err(e) = registry.save(dir) {
+    if let Err(e) = locked_registry.save() {
         logger.error(&format!("Failed to save registry after freeze: {}", e));
     }
 
@@ -714,7 +714,7 @@ fn handle_thaw(
         }));
     }
 
-    let mut registry = match AgentRegistry::load(dir) {
+    let mut locked_registry = match AgentRegistry::load_locked(dir) {
         Ok(r) => r,
         Err(e) => return IpcResponse::error(&format!("Failed to load registry: {}", e)),
     };
@@ -723,7 +723,7 @@ fn handle_thaw(
     let mut dead_pids = Vec::new();
     let mut failed_pids = Vec::new();
 
-    for agent in registry.agents.values_mut() {
+    for agent in locked_registry.registry.agents.values_mut() {
         if agent.status != AgentStatus::Frozen {
             continue;
         }
@@ -754,7 +754,7 @@ fn handle_thaw(
         }
     }
 
-    if let Err(e) = registry.save(dir) {
+    if let Err(e) = locked_registry.save() {
         logger.error(&format!("Failed to save registry after thaw: {}", e));
     }
 
@@ -1151,6 +1151,7 @@ fn handle_create_coordinator(dir: &Path, name: Option<&str>) -> IpcResponse {
         log: vec![workgraph::graph::LogEntry {
             timestamp: chrono::Utc::now().to_rfc3339(),
             actor: Some("daemon".to_string()),
+            user: Some(workgraph::current_user()),
             message: format!("Coordinator {} task created via IPC", next_id),
         }],
         ..Default::default()
@@ -1176,6 +1177,7 @@ fn handle_create_coordinator(dir: &Path, name: Option<&str>) -> IpcResponse {
             log: vec![workgraph::graph::LogEntry {
                 timestamp: chrono::Utc::now().to_rfc3339(),
                 actor: Some("daemon".to_string()),
+                user: Some(workgraph::current_user()),
                 message: format!("Compact {} task created via IPC", next_id),
             }],
             ..Default::default()
@@ -1208,6 +1210,7 @@ fn handle_create_coordinator(dir: &Path, name: Option<&str>) -> IpcResponse {
             log: vec![workgraph::graph::LogEntry {
                 timestamp: chrono::Utc::now().to_rfc3339(),
                 actor: Some("daemon".to_string()),
+                user: Some(workgraph::current_user()),
                 message: format!("Archive {} task created via IPC", next_id),
             }],
             ..Default::default()
@@ -1251,6 +1254,7 @@ fn handle_delete_coordinator(dir: &Path, coordinator_id: u32) -> IpcResponse {
     task.log.push(workgraph::graph::LogEntry {
         timestamp: chrono::Utc::now().to_rfc3339(),
         actor: Some("daemon".to_string()),
+        user: Some(workgraph::current_user()),
         message: format!("Coordinator {} deleted via IPC", coordinator_id),
     });
 
@@ -1289,6 +1293,7 @@ fn handle_archive_coordinator(dir: &Path, coordinator_id: u32) -> IpcResponse {
     task.log.push(workgraph::graph::LogEntry {
         timestamp: chrono::Utc::now().to_rfc3339(),
         actor: Some("daemon".to_string()),
+        user: Some(workgraph::current_user()),
         message: format!("Coordinator {} archived via IPC", coordinator_id),
     });
 
@@ -1335,6 +1340,7 @@ fn handle_stop_coordinator(dir: &Path, coordinator_id: u32) -> IpcResponse {
     task.log.push(workgraph::graph::LogEntry {
         timestamp: chrono::Utc::now().to_rfc3339(),
         actor: Some("daemon".to_string()),
+        user: Some(workgraph::current_user()),
         message: format!("Coordinator {} stopped via IPC", coordinator_id),
     });
 
