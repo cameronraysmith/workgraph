@@ -99,10 +99,11 @@ pub fn create_provider_ext(
         model
     };
 
-    // Look up endpoint config: by name first, then by provider
+    // Look up endpoint config: by name first, then by provider, then default endpoint
     let endpoint = endpoint_name
         .and_then(|name| config.llm_endpoints.find_by_name(name))
-        .or_else(|| config.llm_endpoints.find_for_provider(&provider_name));
+        .or_else(|| config.llm_endpoints.find_for_provider(&provider_name))
+        .or_else(|| config.llm_endpoints.find_default());
     let endpoint_key =
         endpoint.and_then(|ep| ep.resolve_api_key(Some(workgraph_dir)).ok().flatten());
     let endpoint_url = endpoint.and_then(|ep| ep.url.clone());
@@ -134,7 +135,7 @@ pub fn create_provider_ext(
     match provider_name.as_str() {
         "openai" | "openrouter" | "local" => {
             // Resolve API key. Priority: override > env var > endpoint config > native_executor (legacy)
-            let env_key = ["OPENROUTER_API_KEY", "OPENAI_API_KEY"]
+            let env_key = ["WG_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"]
                 .iter()
                 .find_map(|v| std::env::var(v).ok().filter(|k| !k.is_empty()));
             let resolved_key = api_key_override

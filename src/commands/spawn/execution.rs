@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use workgraph::agency;
-use workgraph::config::Config;
+use workgraph::config::{Config, EndpointConfig};
 use workgraph::graph::{LogEntry, Node, Status, Task, is_system_task};
 use workgraph::parser::{load_graph, save_graph};
 use workgraph::service::executor::{ExecutorRegistry, PromptTemplate, TemplateVars, build_prompt};
@@ -270,9 +270,11 @@ pub(crate) fn spawn_agent_inner(
         .or_else(|| resolved_task_agent.endpoint.clone());
 
     // Resolve endpoint config, URL, and API key from the named endpoint.
+    // Falls back to the default endpoint if no specific endpoint was resolved via the cascade.
     let endpoint_config = effective_endpoint
         .as_ref()
-        .and_then(|name| config.llm_endpoints.find_by_name(name));
+        .and_then(|name| config.llm_endpoints.find_by_name(name))
+        .or_else(|| config.llm_endpoints.find_default());
     let effective_endpoint_url: Option<String> = endpoint_config.and_then(|ep| ep.url.clone());
     let effective_api_key: Option<String> =
         endpoint_config.and_then(|ep| ep.resolve_api_key(Some(dir)).ok().flatten());
@@ -386,6 +388,13 @@ pub(crate) fn spawn_agent_inner(
     }
     if let Some(ref key) = effective_api_key {
         cmd.env("WG_API_KEY", key);
+        // Also set the provider-specific env var (e.g. OPENROUTER_API_KEY) so the
+        // native executor and any child processes can find the key via standard env vars.
+        if let Some(ep) = endpoint_config {
+            for var_name in EndpointConfig::env_var_names_for_provider(&ep.provider) {
+                cmd.env(var_name, key);
+            }
+        }
     }
 
     // Set working directory: worktree overrides settings.working_dir

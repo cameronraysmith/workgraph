@@ -492,6 +492,15 @@ impl EndpointsConfig {
     pub fn find_by_name(&self, name: &str) -> Option<&EndpointConfig> {
         self.endpoints.iter().find(|ep| ep.name == name)
     }
+
+    /// Find the default endpoint (the one with `is_default = true`), or the first endpoint
+    /// if none is marked as default.
+    pub fn find_default(&self) -> Option<&EndpointConfig> {
+        self.endpoints
+            .iter()
+            .find(|ep| ep.is_default)
+            .or_else(|| self.endpoints.first())
+    }
 }
 
 /// Checkpoint configuration for agent context preservation
