@@ -396,11 +396,10 @@ def phase_4_progression(h):
 
 
 def phase_5_results(h):
-    """Phase 5: Results Reveal — navigate to compile-collection first (full collection),
-    then peek at spring-haiku for individual task output.
+    """Phase 5: Results Reveal — show haiku output on screen.
 
-    Per storyboard: compile-collection's log shows all four poems together.
-    5s linger on the collection, then quick peek at spring-haiku.
+    Navigate to spring-haiku, switch to Log tab, let viewer read the poem.
+    Then navigate to compile-collection for the full collection.
     """
     log("=== Phase 5: Results Reveal ===")
 
@@ -410,58 +409,82 @@ def phase_5_results(h):
     h.send_keys("Escape")
     h.sleep(0.3)
 
-    # Navigate to compile-collection. From current position, navigate
-    # through the graph to find it. First go to top.
+    # Navigate to top of graph (may be system tasks at top)
     for _ in range(15):
         h.send_keys("Up")
         h.sleep(0.1)
     h.sleep(0.5)
 
-    # Navigate down to find compile-collection
-    # Graph order varies, so navigate and check
-    for _ in range(6):
-        h.send_keys("Down")
-        h.sleep(0.3)
-        snap = h.snapshot()
-        if "compile-collection" in snap:
-            log("Found compile-collection")
-            break
+    # Switch to Detail tab — shows "◉ Task Title" for the selected task
+    h.send_keys("1")
+    h.sleep(0.5)
     h.flush_frame()
 
-    # Switch to Log tab to show the full haiku collection
+    # Navigate down until the Detail panel header shows "Spring haiku"
+    # (not a system task like "Coordinator 0" or "Compact 0").
+    # The panel header format is: "◉ Task Title [+]"
+    found_spring = False
+    for i in range(10):
+        snap = h.snapshot()
+        # Check detail panel header for "Spring haiku" (the task's TITLE, not ID)
+        if "Spring haiku" in snap or "spring-haiku" in snap.split("│")[-1] if "│" in snap else False:
+            # More robust: check the right side of a border separator
+            for line in snap.split("\n"):
+                # The detail panel is after the │ border character
+                if "│" in line:
+                    right = line.split("│", 1)[-1]
+                    if "Spring" in right and "haiku" in right.lower():
+                        found_spring = True
+                        break
+            if found_spring:
+                log(f"Selected spring-haiku (after {i} Down presses)")
+                break
+        h.send_keys("Down")
+        h.sleep(0.3)
+
+    if not found_spring:
+        # Fallback: navigate a fixed number of positions past system tasks.
+        # System tasks are at positions 0-1 (.coordinator-0, .compact-0).
+        # spring-haiku should be at position 2. Go back to top and try.
+        log("WARNING: Could not confirm spring-haiku in detail panel, using fallback")
+        for _ in range(15):
+            h.send_keys("Up")
+            h.sleep(0.1)
+        h.sleep(0.3)
+        # Down×2 to skip 2 system tasks
+        h.send_keys("Down")
+        h.sleep(0.3)
+        h.send_keys("Down")
+        h.sleep(0.3)
+        h.flush_frame()
+
+    # Switch to Log tab (2) to show haiku content
     h.send_keys("2")
     h.sleep(1)
     h.flush_frame()
 
     snap = h.snapshot()
-    has_collection = any(kw in snap for kw in ["Four Seasons", "Collection", "Cherry", "Snow"])
-    log(f"compile-collection Log tab — collection visible: {has_collection}")
+    has_haiku = any(kw in snap for kw in ["Cherry", "blossoms", "Soft rain", "leaves"])
+    log(f"spring-haiku Log tab — haiku visible: {has_haiku}")
 
-    # LINGER — 5+ seconds for viewer to read the full collection
+    # LINGER — 5+ seconds for viewer to read the haiku
     h.sleep(5)
     h.flush_frame()
-    log("Full haiku collection displayed")
+    log("Haiku displayed for 5s")
 
-    # Navigate to spring-haiku for individual task output peek
-    for _ in range(10):
-        h.send_keys("Up")
-        h.sleep(0.1)
-    h.sleep(0.3)
-
-    # Find spring-haiku
-    for _ in range(6):
-        snap = h.snapshot()
-        if "spring-haiku" in snap:
-            log("Found spring-haiku")
-            break
-        h.send_keys("Down")
-        h.sleep(0.3)
-    h.flush_frame()
-
-    # Brief peek at individual task's log
+    # Navigate down one to compile-collection for full collection view
+    h.send_keys("Down")
     h.sleep(1)
     h.flush_frame()
-    log("Spring haiku individual view displayed")
+
+    snap = h.snapshot()
+    has_collection = any(kw in snap for kw in ["Four Seasons", "Collection", "Spring:"])
+    log(f"compile-collection visible: {has_collection}")
+
+    # Brief linger on collection
+    h.sleep(2)
+    h.flush_frame()
+    log("Collection view displayed")
 
 
 def phase_6_exit(h):
