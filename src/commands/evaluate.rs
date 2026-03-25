@@ -504,12 +504,15 @@ pub fn run(
     if let Some(ref usage) = eval_token_usage {
         let eval_task_id = format!(".evaluate-{}", task_id);
         let graph_path = super::graph_path(dir);
-        if let Ok(mut graph) = load_graph(&graph_path)
-            && let Some(eval_task) = graph.get_task_mut(&eval_task_id)
-        {
-            eval_task.token_usage = Some(usage.clone());
-            let _ = workgraph::parser::save_graph(&graph, &graph_path);
-        }
+        let usage_clone = usage.clone();
+        let _ = workgraph::parser::modify_graph(&graph_path, |graph| {
+            if let Some(eval_task) = graph.get_task_mut(&eval_task_id) {
+                eval_task.token_usage = Some(usage_clone.clone());
+                true
+            } else {
+                false
+            }
+        });
         // Emit machine-readable token summary for inline eval capture.
         // The spawn_eval_inline script greps for this line and calls `wg tokens`.
         if let Ok(json) = serde_json::to_string(usage) {
@@ -937,12 +940,15 @@ pub fn run_flip(
     if let Some(ref usage) = combined_usage {
         let eval_task_id = format!(".flip-{}", task_id);
         let graph_path = super::graph_path(dir);
-        if let Ok(mut graph) = load_graph(&graph_path)
-            && let Some(eval_task) = graph.get_task_mut(&eval_task_id)
-        {
-            eval_task.token_usage = Some(usage.clone());
-            let _ = workgraph::parser::save_graph(&graph, &graph_path);
-        }
+        let usage_clone = usage.clone();
+        let _ = workgraph::parser::modify_graph(&graph_path, |graph| {
+            if let Some(eval_task) = graph.get_task_mut(&eval_task_id) {
+                eval_task.token_usage = Some(usage_clone.clone());
+                true
+            } else {
+                false
+            }
+        });
         // Emit machine-readable token summary for inline eval capture.
         if let Ok(json) = serde_json::to_string(usage) {
             eprintln!("__WG_TOKENS__:{}", json);

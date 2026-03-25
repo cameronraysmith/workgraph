@@ -13899,7 +13899,7 @@ mod activity_feed_tests {
 #[cfg(test)]
 mod dashboard_tests {
     use super::*;
-    use crate::service::registry::AgentStatus;
+    use workgraph::AgentStatus;
 
     // ── Agent activity classification ──────────────────────────────────────
 

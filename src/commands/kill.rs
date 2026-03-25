@@ -203,7 +203,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
     use workgraph::graph::{Node, Task, WorkGraph};
-    use workgraph::parser::save_graph;
+    use workgraph::parser::{load_graph, save_graph};
     use workgraph::service::is_process_alive;
 
     fn make_task(id: &str, title: &str, status: Status) -> Task {

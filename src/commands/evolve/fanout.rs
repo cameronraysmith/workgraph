@@ -5,7 +5,7 @@ use std::path::Path;
 use workgraph::agency::{Evaluation, Role, TradeoffConfig};
 use workgraph::config::Config;
 use workgraph::graph::{CycleConfig, Node, Status, Task};
-use workgraph::parser::{load_graph, save_graph, modify_graph};
+use workgraph::parser::{load_graph, modify_graph};
 
 use super::partition::{self, AnalyzerSlice, ModelTier};
 use super::prompt::{build_analyzer_prompt, load_evolver_skills};
@@ -683,6 +683,7 @@ mod tests {
     use tempfile::TempDir;
     use workgraph::agency::{AccessControl, Lineage, PerformanceRecord};
     use workgraph::graph::WorkGraph;
+    use workgraph::parser::save_graph;
 
     fn setup_test_env() -> (TempDir, std::path::PathBuf) {
         let tmp = TempDir::new().unwrap();

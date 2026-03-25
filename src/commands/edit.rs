@@ -467,6 +467,7 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+    use workgraph::parser::{load_graph, save_graph};
 
     fn create_test_graph(dir: &Path) -> Result<()> {
         // Create the workgraph directory if it doesn't exist

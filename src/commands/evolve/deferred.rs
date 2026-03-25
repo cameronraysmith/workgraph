@@ -5,7 +5,7 @@ use std::path::Path;
 
 use workgraph::agency;
 use workgraph::graph::{Node, Status, Task};
-use workgraph::{load_graph, save_graph, modify_graph};
+use workgraph::modify_graph;
 
 use super::operations::apply_operation;
 use super::strategy::EvolverOperation;

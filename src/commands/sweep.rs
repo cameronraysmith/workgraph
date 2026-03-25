@@ -20,7 +20,7 @@ use chrono::Utc;
 use std::path::Path;
 
 use workgraph::graph::{LogEntry, Status};
-use workgraph::parser::{load_graph, save_graph, modify_graph};
+use workgraph::parser::{load_graph, modify_graph};
 use workgraph::service::registry::{AgentRegistry, AgentStatus};
 
 use super::{graph_path, is_process_alive};

@@ -1469,40 +1469,39 @@ fn run_graph_compaction(dir: &Path, compaction_error_count: &mut u64, logger: &D
                 let state = CoordinatorState::load_or_default(dir);
                 if state.accumulated_tokens >= threshold {
                     let acc_tokens = state.accumulated_tokens;
-                        if let Err(e) = workgraph::parser::modify_graph(&gp, |graph| {
-                            if let Some(task) = graph.get_task_mut(".compact-0") {
-                                task.status = workgraph::graph::Status::Open;
-                                task.started_at = None;
-                                task.completed_at = None;
-                                task.log.push(workgraph::graph::LogEntry {
-                                    timestamp: chrono::Utc::now().to_rfc3339(),
-                                    actor: Some("daemon".to_string()),
-                                    user: Some(workgraph::current_user()),
-                                    message: format!(
-                                        "Re-opened: tokens {} >= threshold {} (coordinator cycle bypass)",
-                                        acc_tokens, threshold
-                                    ),
-                                });
-                                if task.log.len() > 50 {
-                                    let drain_count = task.log.len() - 50;
-                                    task.log.drain(..drain_count);
-                                }
-                                true
-                            } else {
-                                false
+                    if let Err(e) = workgraph::parser::modify_graph(&gp, |graph| {
+                        if let Some(task) = graph.get_task_mut(".compact-0") {
+                            task.status = workgraph::graph::Status::Open;
+                            task.started_at = None;
+                            task.completed_at = None;
+                            task.log.push(workgraph::graph::LogEntry {
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                                actor: Some("daemon".to_string()),
+                                user: Some(workgraph::current_user()),
+                                message: format!(
+                                    "Re-opened: tokens {} >= threshold {} (coordinator cycle bypass)",
+                                    acc_tokens, threshold
+                                ),
+                            });
+                            if task.log.len() > 50 {
+                                let drain_count = task.log.len() - 50;
+                                task.log.drain(..drain_count);
                             }
-                        }) {
-                            logger.error(&format!(
-                                "Failed to save graph after resetting .compact-0: {}",
-                                e
-                            ));
-                            return;
+                            true
+                        } else {
+                            false
                         }
-                        logger.info(&format!(
-                            "Re-opened .compact-0: tokens {} >= threshold {}",
-                            state.accumulated_tokens, threshold
+                    }) {
+                        logger.error(&format!(
+                            "Failed to save graph after resetting .compact-0: {}",
+                            e
                         ));
+                        return;
                     }
+                    logger.info(&format!(
+                        "Re-opened .compact-0: tokens {} >= threshold {}",
+                        state.accumulated_tokens, threshold
+                    ));
                 }
             }
         }

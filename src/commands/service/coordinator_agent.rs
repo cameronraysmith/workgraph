@@ -2051,8 +2051,6 @@ fn record_coordinator_turn(
     turn_start: std::time::Instant,
 ) {
     use workgraph::graph::LogEntry;
-    use workgraph::parser::save_graph;
-
     let gp = graph_path(dir);
     let latency = turn_start.elapsed();
     let user_msg_owned = user_message.to_string();

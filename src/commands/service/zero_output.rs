@@ -13,7 +13,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 
 use workgraph::graph::{LogEntry, Status};
-use workgraph::parser::{load_graph, save_graph};
+use workgraph::parser::{load_graph, modify_graph};
 use workgraph::service::registry::{AgentEntry, AgentRegistry, AgentStatus};
 use workgraph::stream_event;
 
@@ -421,8 +421,24 @@ pub fn sweep_zero_output_agents(dir: &Path) -> ZeroOutputSweepResult {
             });
         }
 
-        if graph_modified && let Err(e) = save_graph(&graph, &graph_path) {
-            eprintln!("[zero-output] Failed to save graph: {}", e);
+        if graph_modified {
+            if let Err(e) = modify_graph(&graph_path, |fresh_graph| {
+                // Replay mutations from our local graph
+                for kill in &result.killed {
+                    if let Some(local) = graph.get_task(&kill.task_id) {
+                        if let Some(fresh) = fresh_graph.get_task_mut(&kill.task_id) {
+                            fresh.status = local.status.clone();
+                            fresh.assigned = local.assigned.clone();
+                            fresh.retry_count = local.retry_count;
+                            fresh.failure_reason = local.failure_reason.clone();
+                            fresh.log = local.log.clone();
+                        }
+                    }
+                }
+                true
+            }) {
+                eprintln!("[zero-output] Failed to save graph: {}", e);
+            }
         }
     }
 

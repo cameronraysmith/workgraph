@@ -21,7 +21,7 @@ use workgraph::graph::{
     evaluate_all_cycle_iterations,
 };
 use workgraph::messages;
-use workgraph::parser::{load_graph, modify_graph, save_graph};
+use workgraph::parser::{load_graph, modify_graph};
 use workgraph::query::ready_tasks_with_peers_cycle_aware;
 use workgraph::service::registry::AgentRegistry;
 
@@ -1077,7 +1077,20 @@ fn build_auto_assign_tasks(
                         );
                     }
 
-                    save_graph(graph, &graph_path(dir)).ok();
+                    let _ = workgraph::parser::modify_graph(&graph_path(dir), |fresh| {
+                        // Copy assignment record task from local graph
+                        for node in graph.nodes() {
+                            if let workgraph::graph::Node::Task(t) = node {
+                                if let Some(ft) = fresh.get_task_mut(&t.id) {
+                                    ft.after = t.after.clone();
+                                    ft.before = t.before.clone();
+                                    ft.status = t.status.clone();
+                                    ft.log = t.log.clone();
+                                }
+                            }
+                        }
+                        true
+                    });
                     continue;
                 }
                 Err(e) => {
@@ -2597,26 +2610,31 @@ fn check_respawn_throttle(task: &Task, graph_path: &Path) -> std::result::Result
     // Fail the task if too many rapid respawns
     if death_count >= RESPAWN_MAX_RAPID {
         // Save the failure to the graph
-        if let Ok(mut graph) = load_graph(graph_path)
-            && let Some(t) = graph.get_task_mut(&task.id)
-        {
-            t.status = Status::Failed;
-            t.assigned = None;
-            t.failure_reason = Some(format!(
-                "Rapid respawn loop: {} agent deaths in {} seconds",
-                death_count, RESPAWN_WINDOW_SECS
-            ));
-            t.log.push(LogEntry {
-                timestamp: now.to_rfc3339(),
-                actor: Some("coordinator".to_string()),
-                user: Some(workgraph::current_user()),
-                message: format!(
-                    "Failed: rapid respawn loop detected ({} deaths in {}s window)",
-                    death_count, RESPAWN_WINDOW_SECS
-                ),
-            });
-            let _ = save_graph(&graph, graph_path);
-        }
+        let task_id = task.id.clone();
+        let fail_reason = format!(
+            "Rapid respawn loop: {} agent deaths in {} seconds",
+            death_count, RESPAWN_WINDOW_SECS
+        );
+        let fail_msg = format!(
+            "Failed: rapid respawn loop detected ({} deaths in {}s window)",
+            death_count, RESPAWN_WINDOW_SECS
+        );
+        let _ = modify_graph(graph_path, |graph| {
+            if let Some(t) = graph.get_task_mut(&task_id) {
+                t.status = Status::Failed;
+                t.assigned = None;
+                t.failure_reason = Some(fail_reason.clone());
+                t.log.push(LogEntry {
+                    timestamp: now.to_rfc3339(),
+                    actor: Some("coordinator".to_string()),
+                    user: Some(workgraph::current_user()),
+                    message: fail_msg.clone(),
+                });
+                true
+            } else {
+                false
+            }
+        });
         return Err(format!(
             "rapid respawn loop ({} deaths), task failed",
             death_count

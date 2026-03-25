@@ -6,7 +6,7 @@ use workgraph::function::{
     self, FunctionInput, InputType, PlanningConfig, TaskTemplate, TraceFunction,
 };
 use workgraph::graph::{Node, Status, Task};
-use workgraph::parser::{load_graph, save_graph, modify_graph};
+use workgraph::parser::{load_graph, modify_graph};
 
 use super::graph_path;
 
@@ -678,6 +678,7 @@ mod tests {
     use tempfile::TempDir;
     use workgraph::function::*;
     use workgraph::graph::WorkGraph;
+    use workgraph::parser::save_graph;
 
     fn sample_function() -> TraceFunction {
         TraceFunction {

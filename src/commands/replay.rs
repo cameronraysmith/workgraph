@@ -9,7 +9,7 @@ use std::path::Path;
 use workgraph::agency::{Evaluation, load_all_evaluations_or_warn};
 use workgraph::config::Config;
 use workgraph::graph::{Status, Task};
-use workgraph::parser::{load_graph, save_graph, modify_graph};
+use workgraph::parser::modify_graph;
 use workgraph::runs::{self, RunMeta};
 
 /// Options controlling which tasks to reset.

@@ -264,6 +264,7 @@ mod tests {
     use chrono::Duration;
     use tempfile::tempdir;
     use workgraph::graph::{LogEntry, Node, WorkGraph};
+    use workgraph::parser::{load_graph, save_graph};
 
     fn make_task(id: &str, title: &str, status: Status) -> workgraph::graph::Task {
         workgraph::graph::Task {

@@ -3,7 +3,7 @@ use chrono::Utc;
 use std::path::Path;
 use std::process::Command;
 use workgraph::graph::{LogEntry, Status};
-use workgraph::parser::{load_graph, save_graph, modify_graph};
+use workgraph::parser::modify_graph;
 
 #[cfg(test)]
 use super::graph_path;
@@ -221,7 +221,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
     use workgraph::graph::{Node, Task, WorkGraph};
-    use workgraph::parser::save_graph;
+    use workgraph::parser::{load_graph, save_graph};
 
     fn make_task(id: &str, title: &str) -> Task {
         Task {

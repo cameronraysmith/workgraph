@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use workgraph::agency;
 use workgraph::config::Config;
-use workgraph::parser::{load_graph, save_graph};
+use workgraph::parser::{load_graph, modify_graph};
 
 use super::graph_path;
 
@@ -221,12 +221,24 @@ fn run_explicit_assign(dir: &Path, path: &Path, task_id: &str, agent_hash: &str)
         format!("No agent matching '{}'. {}", agent_hash, hint)
     })?;
 
-    let mut graph = load_graph(path).context("Failed to load graph")?;
-
-    let task = graph.get_task_mut_or_err(task_id)?;
-
-    task.agent = Some(agent.id.clone());
-    save_graph(&graph, path).context("Failed to save graph")?;
+    let agent_id_clone = agent.id.clone();
+    let task_id_owned = task_id.to_string();
+    let mut error: Option<anyhow::Error> = None;
+    modify_graph(path, |graph| {
+        let task = match graph.get_task_mut(&task_id_owned) {
+            Some(t) => t,
+            None => {
+                error = Some(anyhow::anyhow!("Task '{}' not found", task_id_owned));
+                return false;
+            }
+        };
+        task.agent = Some(agent_id_clone.clone());
+        true
+    })
+    .context("Failed to modify graph")?;
+    if let Some(e) = error {
+        return Err(e);
+    }
     super::notify_graph_changed(dir);
 
     // Record operation
@@ -310,13 +322,25 @@ fn run_explicit_assign(dir: &Path, path: &Path, task_id: &str, agent_hash: &str)
 
 /// Clear the agent assignment from a task.
 fn run_clear(dir: &Path, path: &Path, task_id: &str) -> Result<()> {
-    let mut graph = load_graph(path).context("Failed to load graph")?;
-
-    let task = graph.get_task_mut_or_err(task_id)?;
-
-    let prev_agent = task.agent.clone();
-    task.agent = None;
-    save_graph(&graph, path).context("Failed to save graph")?;
+    let task_id_owned = task_id.to_string();
+    let mut error: Option<anyhow::Error> = None;
+    let mut prev_agent: Option<String> = None;
+    modify_graph(path, |graph| {
+        let task = match graph.get_task_mut(&task_id_owned) {
+            Some(t) => t,
+            None => {
+                error = Some(anyhow::anyhow!("Task '{}' not found", task_id_owned));
+                return false;
+            }
+        };
+        prev_agent = task.agent.clone();
+        task.agent = None;
+        true
+    })
+    .context("Failed to modify graph")?;
+    if let Some(e) = error {
+        return Err(e);
+    }
     super::notify_graph_changed(dir);
 
     // Record operation
@@ -362,6 +386,7 @@ mod tests {
     use tempfile::tempdir;
     use workgraph::agency::{Lineage, PerformanceRecord};
     use workgraph::graph::{Node, Task, WorkGraph};
+    use workgraph::parser::save_graph;
 
     fn make_task(id: &str, title: &str) -> Task {
         Task {

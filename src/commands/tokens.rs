@@ -46,6 +46,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
     use workgraph::graph::{Node, Task, WorkGraph};
+    use workgraph::parser::{load_graph, save_graph};
 
     fn setup_dir_with_task(task_id: &str) -> TempDir {
         let tmp = TempDir::new().unwrap();
@@ -67,7 +68,7 @@ mod tests {
         let json = r#"{"cost_usd":0.5,"input_tokens":100,"output_tokens":50}"#;
         run(tmp.path(), "t1", json).unwrap();
 
-        let (graph, _) = load_workgraph_mut(tmp.path()).unwrap();
+        let graph = load_graph(tmp.path().join("graph.jsonl")).unwrap();
         let task = graph.get_task("t1").unwrap();
         let usage = task.token_usage.as_ref().unwrap();
         assert!((usage.cost_usd - 0.5).abs() < f64::EPSILON);
@@ -83,7 +84,7 @@ mod tests {
         run(tmp.path(), "t2", json1).unwrap();
         run(tmp.path(), "t2", json2).unwrap();
 
-        let (graph, _) = load_workgraph_mut(tmp.path()).unwrap();
+        let graph = load_graph(tmp.path().join("graph.jsonl")).unwrap();
         let task = graph.get_task("t2").unwrap();
         let usage = task.token_usage.as_ref().unwrap();
         assert!((usage.cost_usd - 0.5).abs() < f64::EPSILON);

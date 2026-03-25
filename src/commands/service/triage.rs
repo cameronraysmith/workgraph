@@ -11,7 +11,7 @@ use workgraph::config::Config;
 use workgraph::graph::{
     LogEntry, Status, Task, evaluate_cycle_iteration, parse_token_usage, parse_wg_tokens,
 };
-use workgraph::parser::{load_graph, save_graph};
+use workgraph::parser::{load_graph, modify_graph};
 use workgraph::service::registry::{AgentEntry, AgentRegistry, AgentStatus};
 use workgraph::stream_event::{self, StreamEvent};
 
@@ -310,7 +310,37 @@ pub(crate) fn cleanup_dead_agents(dir: &Path, graph_path: &Path) -> Result<Vec<S
     }
 
     if tasks_modified {
-        save_graph(&graph, graph_path).context("Failed to save graph")?;
+        // Write back atomically via modify_graph. Since we already have the mutated graph,
+        // we replace all task states from our local copy.
+        modify_graph(graph_path, |fresh_graph| {
+            // Replay mutations: for each task we modified, update the fresh graph
+            for tid in &tasks_completed_by_triage {
+                if let Some(local) = graph.get_task(tid) {
+                    if let Some(fresh) = fresh_graph.get_task_mut(tid) {
+                        fresh.status = local.status.clone();
+                        fresh.completed_at = local.completed_at.clone();
+                        fresh.failure_reason = local.failure_reason.clone();
+                        fresh.retry_count = local.retry_count;
+                        fresh.log = local.log.clone();
+                        fresh.session_id = local.session_id.clone();
+                        fresh.token_usage = local.token_usage.clone();
+                    }
+                }
+            }
+            // Also replay triage mutations for failed tasks
+            for (_, task_id, _, _, _) in &dead {
+                if !tasks_completed_by_triage.contains(task_id) {
+                    if let Some(local) = graph.get_task(task_id) {
+                        if let Some(fresh) = fresh_graph.get_task_mut(task_id) {
+                            fresh.session_id = local.session_id.clone();
+                            fresh.token_usage = local.token_usage.clone();
+                        }
+                    }
+                }
+            }
+            true
+        })
+        .context("Failed to save graph")?;
     }
 
     // Capture output for completed/failed tasks whose agents just died.

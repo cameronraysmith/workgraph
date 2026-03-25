@@ -78,6 +78,7 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
     use workgraph::graph::{Node, Task, WorkGraph};
+    use workgraph::parser::save_graph;
 
     fn make_task(id: &str, title: &str) -> Task {
         Task {

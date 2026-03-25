@@ -17,7 +17,7 @@ use chrono::Utc;
 use std::path::Path;
 use workgraph::config::Config;
 use workgraph::graph::{LogEntry, Status};
-use workgraph::parser::{load_graph, modify_graph};
+use workgraph::parser::modify_graph;
 use workgraph::service::{AgentRegistry, AgentStatus};
 
 use super::graph_path;
@@ -441,7 +441,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
     use workgraph::graph::{Node, Task, WorkGraph};
-    use workgraph::parser::save_graph;
+    use workgraph::parser::{load_graph, save_graph};
 
     fn make_task(id: &str, title: &str, status: Status) -> Task {
         Task {

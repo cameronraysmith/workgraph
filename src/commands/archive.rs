@@ -595,6 +595,7 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
     use workgraph::graph::WorkGraph;
+    use workgraph::parser::save_graph;
 
     fn make_task(id: &str, title: &str, status: Status, completed_at: Option<&str>) -> Task {
         Task {

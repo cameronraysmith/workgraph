@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 use workgraph::graph::Status;
-use workgraph::parser::{load_graph, save_graph};
+use workgraph::parser::modify_graph;
 
 use super::graph_path;
 
@@ -21,45 +21,63 @@ pub fn run_link(dir: &Path, task_id: &str, dependency_id: &str) -> Result<()> {
         anyhow::bail!("Workgraph not initialized. Run 'wg init' first.");
     }
 
-    let mut graph = load_graph(&path).context("Failed to load graph")?;
+    let mut error: Option<anyhow::Error> = None;
+    let mut already_linked = false;
+    let task_id_owned = task_id.to_string();
+    let dep_id_owned = dependency_id.to_string();
+    modify_graph(&path, |graph| {
+        // Validate both tasks exist
+        if graph.get_task(&task_id_owned).is_none() {
+            error = Some(anyhow::anyhow!("Task '{}' not found", task_id_owned));
+            return false;
+        }
+        if graph.get_task(&dep_id_owned).is_none() {
+            error = Some(anyhow::anyhow!("Task '{}' not found", dep_id_owned));
+            return false;
+        }
 
-    // Validate both tasks exist
-    graph.get_task_or_err(task_id)?;
-    graph.get_task_or_err(dependency_id)?;
+        // Warn if the task is in-progress
+        if graph
+            .get_task(&task_id_owned)
+            .is_some_and(|t| t.status == Status::InProgress)
+        {
+            eprintln!(
+                "Warning: '{}' is currently in-progress. Adding a dependency on '{}' anyway.",
+                task_id_owned, dep_id_owned
+            );
+        }
 
-    // Warn if the task is in-progress
-    if graph
-        .get_task(task_id)
-        .is_some_and(|t| t.status == Status::InProgress)
-    {
-        eprintln!(
-            "Warning: '{}' is currently in-progress. Adding a dependency on '{}' anyway.",
+        // Add the forward edge: task.after includes dependency
+        {
+            let task = graph.get_task_mut(&task_id_owned).unwrap();
+            if task.after.contains(&dep_id_owned) {
+                already_linked = true;
+                return false;
+            }
+            task.after.push(dep_id_owned.clone());
+        }
+
+        // Add the reverse edge: dependency.before includes task
+        {
+            let dep = graph.get_task_mut(&dep_id_owned).unwrap();
+            if !dep.before.contains(&task_id_owned) {
+                dep.before.push(task_id_owned.clone());
+            }
+        }
+
+        true
+    })
+    .context("Failed to modify graph")?;
+    if let Some(e) = error {
+        return Err(e);
+    }
+    if already_linked {
+        println!(
+            "'{}' already depends on '{}' — no change",
             task_id, dependency_id
         );
+        return Ok(());
     }
-
-    // Add the forward edge: task.after includes dependency
-    {
-        let task = graph.get_task_mut_or_err(task_id)?;
-        if task.after.contains(&dependency_id.to_string()) {
-            println!(
-                "'{}' already depends on '{}' — no change",
-                task_id, dependency_id
-            );
-            return Ok(());
-        }
-        task.after.push(dependency_id.to_string());
-    }
-
-    // Add the reverse edge: dependency.before includes task
-    {
-        let dep = graph.get_task_mut_or_err(dependency_id)?;
-        if !dep.before.contains(&task_id.to_string()) {
-            dep.before.push(task_id.to_string());
-        }
-    }
-
-    save_graph(&graph, &path).context("Failed to save graph")?;
     super::notify_graph_changed(dir);
 
     // Record provenance
@@ -87,38 +105,56 @@ pub fn run_unlink(dir: &Path, task_id: &str, dependency_id: &str) -> Result<()> 
         anyhow::bail!("Workgraph not initialized. Run 'wg init' first.");
     }
 
-    let mut graph = load_graph(&path).context("Failed to load graph")?;
-
-    // Validate both tasks exist
-    graph.get_task_or_err(task_id)?;
-    graph.get_task_or_err(dependency_id)?;
-
-    // Remove the forward edge
-    let removed = {
-        let task = graph.get_task_mut_or_err(task_id)?;
-        if let Some(pos) = task.after.iter().position(|x| x == dependency_id) {
-            task.after.remove(pos);
-            true
-        } else {
-            false
+    let mut error: Option<anyhow::Error> = None;
+    let mut not_linked = false;
+    let task_id_owned = task_id.to_string();
+    let dep_id_owned = dependency_id.to_string();
+    modify_graph(&path, |graph| {
+        // Validate both tasks exist
+        if graph.get_task(&task_id_owned).is_none() {
+            error = Some(anyhow::anyhow!("Task '{}' not found", task_id_owned));
+            return false;
         }
-    };
+        if graph.get_task(&dep_id_owned).is_none() {
+            error = Some(anyhow::anyhow!("Task '{}' not found", dep_id_owned));
+            return false;
+        }
 
-    if !removed {
+        // Remove the forward edge
+        let removed = {
+            let task = graph.get_task_mut(&task_id_owned).unwrap();
+            if let Some(pos) = task.after.iter().position(|x| x == &dep_id_owned) {
+                task.after.remove(pos);
+                true
+            } else {
+                false
+            }
+        };
+
+        if !removed {
+            not_linked = true;
+            return false;
+        }
+
+        // Remove the reverse edge
+        {
+            let dep = graph.get_task_mut(&dep_id_owned).unwrap();
+            dep.before.retain(|b| b != &task_id_owned);
+        }
+
+        true
+    })
+    .context("Failed to modify graph")?;
+    if let Some(e) = error {
+        return Err(e);
+    }
+    if not_linked {
         println!(
             "'{}' does not depend on '{}' — no change",
             task_id, dependency_id
         );
         return Ok(());
     }
-
-    // Remove the reverse edge
-    {
-        let dep = graph.get_task_mut_or_err(dependency_id)?;
-        dep.before.retain(|b| b != task_id);
-    }
-
-    save_graph(&graph, &path).context("Failed to save graph")?;
     super::notify_graph_changed(dir);
 
     // Record provenance
@@ -146,6 +182,7 @@ pub fn run_unlink(dir: &Path, task_id: &str, dependency_id: &str) -> Result<()> 
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use workgraph::parser::load_graph;
 
     fn setup_graph(dir: &Path) {
         std::fs::create_dir_all(dir).unwrap();

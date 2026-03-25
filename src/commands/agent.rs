@@ -18,7 +18,7 @@ use std::thread;
 use std::time::Duration;
 use workgraph::config::Config;
 use workgraph::graph::{LogEntry, Status};
-use workgraph::parser::{load_graph, save_graph, modify_graph};
+use workgraph::parser::{load_graph, modify_graph};
 use workgraph::query::ready_tasks;
 
 use super::graph_path;
