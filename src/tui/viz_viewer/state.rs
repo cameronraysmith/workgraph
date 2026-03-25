@@ -5660,7 +5660,7 @@ impl VizApp {
             cycle_timing: Vec::new(),
             show_total_tokens: false,
             show_help: false,
-            show_system_tasks: false,
+            show_system_tasks: true,
             show_running_system_tasks: false,
             system_tasks_just_toggled: false,
             mouse_enabled: false,
