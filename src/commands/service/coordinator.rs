@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 use workgraph::agency;
 use workgraph::agency::evolver::{self, EvolutionTrigger, EvolverState};
@@ -896,6 +897,13 @@ fn build_auto_assign_tasks(
 
     // Phase 2: Process ready .assign-* tasks (run lightweight LLM assignment).
     // These may have been created at publish time or in Phase 1 above.
+    //
+    // Time budget: each LLM assignment call can take seconds, and running many
+    // back-to-back blocks the daemon's main event loop (which handles IPC).
+    // Cap Phase 2 at 10 seconds; remaining tasks will be picked up next tick.
+    let phase2_start = Instant::now();
+    const ASSIGN_TIME_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+
     let agency_dir = dir.join("agency");
     let total_assignments = count_assignment_records(&agency_dir.join("assignments")) as u32;
 
@@ -917,6 +925,13 @@ fn build_auto_assign_tasks(
         .collect();
 
     for assign_task_id in assign_task_ids {
+        if phase2_start.elapsed() > ASSIGN_TIME_BUDGET {
+            eprintln!(
+                "[coordinator] Assignment time budget exceeded ({}s), deferring remaining to next tick",
+                ASSIGN_TIME_BUDGET.as_secs()
+            );
+            break;
+        }
         let source_id = match assign_task_id.strip_prefix(".assign-") {
             Some(id) => id.to_string(),
             None => continue,
