@@ -5,7 +5,7 @@ use std::path::Path;
 use workgraph::agency::{Evaluation, Role, TradeoffConfig};
 use workgraph::config::Config;
 use workgraph::graph::{CycleConfig, Node, Status, Task};
-use workgraph::parser::{load_graph, save_graph};
+use workgraph::parser::{load_graph, save_graph, modify_graph};
 
 use super::partition::{self, AnalyzerSlice, ModelTier};
 use super::prompt::{build_analyzer_prompt, load_evolver_skills};
@@ -441,8 +441,21 @@ Evaluate the results of the evolution run.
         }
     }
 
-    // Save graph
-    save_graph(&graph, &graph_path)?;
+    // Save graph atomically
+    let graph_snapshot = graph;
+    modify_graph(&graph_path, |existing_graph| {
+        // Re-apply all nodes we created
+        for node in graph_snapshot.nodes() {
+            let nid = match node {
+                workgraph::graph::Node::Task(t) => t.id.clone(),
+                workgraph::graph::Node::Resource(r) => r.id.clone(),
+            };
+            if existing_graph.get_node(&nid).is_none() {
+                existing_graph.add_node(node.clone());
+            }
+        }
+        true
+    })?;
 
     // Print summary
     if json {

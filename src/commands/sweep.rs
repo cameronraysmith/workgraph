@@ -20,7 +20,7 @@ use chrono::Utc;
 use std::path::Path;
 
 use workgraph::graph::{LogEntry, Status};
-use workgraph::parser::{load_graph, save_graph};
+use workgraph::parser::{load_graph, save_graph, modify_graph};
 use workgraph::service::registry::{AgentRegistry, AgentStatus};
 
 use super::{graph_path, is_process_alive};
@@ -163,27 +163,31 @@ pub fn run(dir: &Path, dry_run: bool, json: bool) -> Result<SweepResult> {
 
     // Fix orphaned tasks: unclaim them
     let gpath = graph_path(dir);
-    let mut graph = load_graph(&gpath).context("Failed to load graph")?;
     let mut fixed = Vec::new();
 
-    for o in &orphaned {
-        if let Some(task) = graph.get_task_mut(&o.task_id)
-            && task.status == Status::InProgress
-        {
-            task.status = Status::Open;
-            task.assigned = None;
-            task.log.push(LogEntry {
-                timestamp: Utc::now().to_rfc3339(),
-                actor: Some("sweep".to_string()),
-                user: Some(workgraph::current_user()),
-                message: format!("Sweep: task unclaimed — {}", o.reason),
-            });
-            fixed.push(o.task_id.clone());
+    let orphaned_clone = orphaned.clone();
+    modify_graph(&gpath, |graph| {
+        let mut modified = false;
+        for o in &orphaned_clone {
+            if let Some(task) = graph.get_task_mut(&o.task_id)
+                && task.status == Status::InProgress
+            {
+                task.status = Status::Open;
+                task.assigned = None;
+                task.log.push(LogEntry {
+                    timestamp: Utc::now().to_rfc3339(),
+                    actor: Some("sweep".to_string()),
+                    user: Some(workgraph::current_user()),
+                    message: format!("Sweep: task unclaimed — {}", o.reason),
+                });
+                fixed.push(o.task_id.clone());
+                modified = true;
+            }
         }
-    }
-
+        modified
+    })
+    .context("Failed to modify graph")?;
     if !fixed.is_empty() {
-        save_graph(&graph, &gpath).context("Failed to save graph")?;
         super::notify_graph_changed(dir);
     }
 
@@ -227,76 +231,71 @@ pub fn run(dir: &Path, dry_run: bool, json: bool) -> Result<SweepResult> {
 /// root cause analysis.
 pub fn reconcile_orphaned_tasks(dir: &Path, graph_path: &Path) -> Result<usize> {
     let registry = AgentRegistry::load(dir).unwrap_or_else(|_| AgentRegistry::new());
-    let mut graph = load_graph(graph_path).context("Failed to load graph")?;
 
-    // First pass: collect IDs of orphaned tasks (can't mutate while iterating)
-    let orphaned_ids: Vec<(String, String)> = graph
-        .tasks()
-        .filter(|task| task.status == Status::InProgress)
-        .filter_map(|task| {
-            let dominated = match &task.assigned {
-                Some(agent_id) => match registry.get_agent(agent_id) {
-                    Some(agent) => {
-                        agent.status == AgentStatus::Dead
-                            || (agent.is_alive() && !is_process_alive(agent.pid))
-                    }
-                    None => {
-                        // Agent not in registry — could be purged. Only treat as
-                        // orphaned if the task has been InProgress for a while
-                        // (to avoid racing with a freshly-spawned agent that
-                        // hasn't registered yet).
-                        if let Some(ref started) = task.started_at {
-                            if let Ok(started_dt) = started.parse::<chrono::DateTime<chrono::Utc>>()
-                            {
-                                (Utc::now() - started_dt).num_minutes() > 5
+    let mut count = 0usize;
+    modify_graph(graph_path, |graph| {
+        // First pass: collect IDs of orphaned tasks
+        let orphaned_ids: Vec<(String, String)> = graph
+            .tasks()
+            .filter(|task| task.status == Status::InProgress)
+            .filter_map(|task| {
+                let dominated = match &task.assigned {
+                    Some(agent_id) => match registry.get_agent(agent_id) {
+                        Some(agent) => {
+                            agent.status == AgentStatus::Dead
+                                || (agent.is_alive() && !is_process_alive(agent.pid))
+                        }
+                        None => {
+                            if let Some(ref started) = task.started_at {
+                                if let Ok(started_dt) =
+                                    started.parse::<chrono::DateTime<chrono::Utc>>()
+                                {
+                                    (Utc::now() - started_dt).num_minutes() > 5
+                                } else {
+                                    false
+                                }
                             } else {
                                 false
                             }
-                        } else {
-                            false
                         }
+                    },
+                    None => {
+                        !task
+                            .tags
+                            .iter()
+                            .any(|t| t == "coordinator-loop" || t == "compact-loop")
                     }
-                },
-                None => {
-                    // System coordinator/compact tasks are managed by the daemon
-                    // directly and never have an assigned agent — skip them.
-                    !task
-                        .tags
-                        .iter()
-                        .any(|t| t == "coordinator-loop" || t == "compact-loop")
+                };
+
+                if dominated {
+                    let agent_desc = task.assigned.as_deref().unwrap_or("(none)").to_string();
+                    Some((task.id.clone(), agent_desc))
+                } else {
+                    None
                 }
-            };
+            })
+            .collect();
 
-            if dominated {
-                let agent_desc = task.assigned.as_deref().unwrap_or("(none)").to_string();
-                Some((task.id.clone(), agent_desc))
-            } else {
-                None
+        // Second pass: mutate the orphaned tasks
+        count = orphaned_ids.len();
+        for (task_id, agent_desc) in &orphaned_ids {
+            if let Some(task) = graph.get_task_mut(task_id) {
+                task.status = Status::Open;
+                task.assigned = None;
+                task.log.push(LogEntry {
+                    timestamp: Utc::now().to_rfc3339(),
+                    actor: Some("reconcile".to_string()),
+                    user: Some(workgraph::current_user()),
+                    message: format!(
+                        "Reconciliation: task recovered from orphaned state (agent: {})",
+                        agent_desc
+                    ),
+                });
             }
-        })
-        .collect();
-
-    // Second pass: mutate the orphaned tasks
-    let count = orphaned_ids.len();
-    for (task_id, agent_desc) in &orphaned_ids {
-        if let Some(task) = graph.get_task_mut(task_id) {
-            task.status = Status::Open;
-            task.assigned = None;
-            task.log.push(LogEntry {
-                timestamp: Utc::now().to_rfc3339(),
-                actor: Some("reconcile".to_string()),
-                user: Some(workgraph::current_user()),
-                message: format!(
-                    "Reconciliation: task recovered from orphaned state (agent: {})",
-                    agent_desc
-                ),
-            });
         }
-    }
-
-    if count > 0 {
-        save_graph(&graph, graph_path).context("Failed to save graph after reconciliation")?;
-    }
+        count > 0
+    })
+    .context("Failed to modify graph after reconciliation")?;
 
     Ok(count)
 }

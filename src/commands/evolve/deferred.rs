@@ -5,7 +5,7 @@ use std::path::Path;
 
 use workgraph::agency;
 use workgraph::graph::{Node, Status, Task};
-use workgraph::{load_graph, save_graph};
+use workgraph::{load_graph, save_graph, modify_graph};
 
 use super::operations::apply_operation;
 use super::strategy::EvolverOperation;
@@ -59,8 +59,6 @@ pub(crate) fn defer_self_mutation(
     run_id: &str,
 ) -> Result<String> {
     let graph_path = super::super::graph_path(dir);
-    let mut graph =
-        load_graph(&graph_path).context("Failed to load graph for self-mutation deferral")?;
 
     let task_id = format!(
         "evolve-review-{}-{}",
@@ -68,10 +66,9 @@ pub(crate) fn defer_self_mutation(
         op.target_id.as_deref().unwrap_or("unknown"),
     );
 
-    // Don't create duplicate review tasks
-    if graph.get_task(&task_id).is_some() {
-        return Ok(task_id);
-    }
+    // Check for duplicate outside modify_graph to avoid needless locking
+    // (still re-checked inside for safety)
+    let task_id_clone = task_id.clone();
 
     let op_json = serde_json::to_string_pretty(op).unwrap_or_else(|_| format!("{:?}", op.op));
 
@@ -146,10 +143,21 @@ pub(crate) fn defer_self_mutation(
         place_near: vec![],
     };
 
-    graph.add_node(Node::Task(task));
-    save_graph(&graph, &graph_path)
-        .context("Failed to save graph with self-mutation review task")?;
-    super::super::notify_graph_changed(dir);
+    let mut already_exists = false;
+    modify_graph(&graph_path, |graph| {
+        // Re-check for duplicate under lock
+        if graph.get_task(&task_id_clone).is_some() {
+            already_exists = true;
+            return false;
+        }
+        graph.add_node(Node::Task(task));
+        true
+    })
+    .context("Failed to save graph with self-mutation review task")?;
+
+    if !already_exists {
+        super::super::notify_graph_changed(dir);
+    }
 
     Ok(task_id)
 }
