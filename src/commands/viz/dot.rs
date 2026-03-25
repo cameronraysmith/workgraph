@@ -463,7 +463,6 @@ mod tests {
             &graph,
             graph.tasks().collect(),
             &annotations,
-            false,
         );
         let task_ids: HashSet<&str> = filtered.iter().map(|t| t.id.as_str()).collect();
         let critical_path = HashSet::new();
@@ -496,7 +495,6 @@ mod tests {
             &graph,
             graph.tasks().collect(),
             &annotations,
-            false,
         );
         let task_ids: HashSet<&str> = filtered.iter().map(|t| t.id.as_str()).collect();
         let critical_path = HashSet::new();

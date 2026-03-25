@@ -1826,7 +1826,6 @@ mod tests {
             &graph,
             graph.tasks().collect(),
             &annotations,
-            false,
         );
         let task_ids: HashSet<&str> = filtered.iter().map(|t| t.id.as_str()).collect();
 
@@ -1871,7 +1870,6 @@ mod tests {
             &graph,
             graph.tasks().collect(),
             &annotations,
-            false,
         );
         let task_ids: HashSet<&str> = filtered.iter().map(|t| t.id.as_str()).collect();
 
@@ -3500,7 +3498,7 @@ mod tests {
 
         let tasks: Vec<_> = graph.tasks().collect();
         let empty: HashMap<String, crate::commands::viz::AnnotationInfo> = HashMap::new();
-        let (filtered, annotations) = super::super::filter_internal_tasks(&graph, tasks, &empty, false);
+        let (filtered, annotations) = super::super::filter_internal_tasks(&graph, tasks, &empty);
         let filtered_ids: HashSet<&str> = filtered.iter().map(|t| t.id.as_str()).collect();
         let result = generate_ascii(
             &graph,

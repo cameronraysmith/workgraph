@@ -517,7 +517,7 @@ fn main() -> Result<()> {
             mermaid,
             graph,
             output,
-            system: show_internal,
+            show_internal,
             tui: tui_mode,
             no_tui: _no_tui,
             no_mouse,
@@ -554,7 +554,6 @@ fn main() -> Result<()> {
                     tags: tags.clone(),
                     edge_color: resolved_edge_color,
                     max_columns: None, // TUI handles its own sizing
-                    keep_coordinators: false,
                 };
                 let mouse_override = if no_mouse { Some(false) } else { None };
                 tui::viz_viewer::run(workgraph_dir, options, mouse_override, false, None, false)
@@ -582,7 +581,6 @@ fn main() -> Result<()> {
                     tags,
                     edge_color: resolved_edge_color,
                     max_columns,
-                    keep_coordinators: false,
                 };
                 commands::viz::run(&workgraph_dir, &options)
             }
@@ -1962,7 +1960,6 @@ fn main() -> Result<()> {
                 tags: vec![],
                 edge_color: resolved_edge_color,
                 max_columns: None, // TUI handles its own sizing
-                keep_coordinators: false,
             };
             let mouse_override = if no_mouse { Some(false) } else { None };
             let show_keys = show_keys || config.tui.show_keys;

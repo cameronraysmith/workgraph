@@ -2735,7 +2735,6 @@ impl VizApp {
         let mut opts = self.viz_options.clone();
         opts.show_internal = self.show_system_tasks;
         opts.show_internal_running_only = !self.show_system_tasks && self.show_running_system_tasks;
-        opts.keep_coordinators = true;
         crate::commands::viz::generate_viz_output(&self.workgraph_dir, &opts)
     }
 
@@ -2744,7 +2743,6 @@ impl VizApp {
         let mut opts = self.viz_options.clone();
         opts.show_internal = self.show_system_tasks;
         opts.show_internal_running_only = !self.show_system_tasks && self.show_running_system_tasks;
-        opts.keep_coordinators = true;
         crate::commands::viz::generate_viz_output_from_graph(graph, &self.workgraph_dir, &opts)
     }
 

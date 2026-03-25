@@ -131,9 +131,6 @@ pub struct VizOptions {
     pub edge_color: String,
     /// Maximum output width in columns (None = no limit)
     pub max_columns: Option<u16>,
-    /// When true, keep .coordinator-* tasks visible even when internal tasks are hidden.
-    /// Used by the TUI graph viewer to show coordinators while hiding other system tasks.
-    pub keep_coordinators: bool,
 }
 
 impl Default for VizOptions {
@@ -152,15 +149,20 @@ impl Default for VizOptions {
             tags: Vec::new(),
             edge_color: "gray".to_string(),
             max_columns: None,
-            keep_coordinators: false,
         }
     }
 }
 
-/// Returns true if the task is a system/internal task (dot-prefixed ID, or
-/// tagged as assignment/evaluation).  All dot-prefixed tasks are considered
-/// internal and hidden by default.
+/// Returns true if the task is an auto-generated internal task (assignment or evaluation).
+/// Coordinator and compact tasks are exempt — always visible.
 fn is_internal_task(task: &Task) -> bool {
+    if task
+        .tags
+        .iter()
+        .any(|t| t == "coordinator-loop" || t == "compact-loop")
+    {
+        return false;
+    }
     workgraph::graph::is_system_task(&task.id)
         || task
             .tags
@@ -228,17 +230,12 @@ pub(crate) fn filter_internal_tasks<'a>(
     _graph: &'a WorkGraph,
     tasks: Vec<&'a Task>,
     _existing_annotations: &HashMap<String, AnnotationInfo>,
-    keep_coordinators: bool,
 ) -> (Vec<&'a Task>, HashMap<String, AnnotationInfo>) {
     let mut annotations: HashMap<String, AnnotationInfo> = HashMap::new();
     let mut internal_ids: HashSet<&str> = HashSet::new();
 
     for task in &tasks {
         if !is_internal_task(task) {
-            continue;
-        }
-        // Keep coordinator tasks visible when requested
-        if keep_coordinators && is_coordinator_task(task) {
             continue;
         }
         internal_ids.insert(task.id.as_str());
@@ -277,16 +274,12 @@ pub(crate) fn filter_internal_tasks_running_only<'a>(
     _graph: &'a WorkGraph,
     tasks: Vec<&'a Task>,
     _existing_annotations: &HashMap<String, AnnotationInfo>,
-    keep_coordinators: bool,
 ) -> (Vec<&'a Task>, HashMap<String, AnnotationInfo>) {
     let mut annotations: HashMap<String, AnnotationInfo> = HashMap::new();
 
     // Compute phase annotations only for actively-running internal tasks
     for task in &tasks {
         if !is_internal_task(task) {
-            continue;
-        }
-        if keep_coordinators && is_coordinator_task(task) {
             continue;
         }
         if let Some(pid) = system_task_parent_id(&task.id)
@@ -311,10 +304,6 @@ pub(crate) fn filter_internal_tasks_running_only<'a>(
         .into_iter()
         .filter(|t| {
             if !is_internal_task(t) {
-                return true;
-            }
-            // Keep coordinator tasks visible when requested
-            if keep_coordinators && is_coordinator_task(t) {
                 return true;
             }
             // Keep only running internal tasks
@@ -582,19 +571,9 @@ pub fn generate_viz_output_from_graph(
     let (tasks_to_show, mut annotations) = if options.show_internal {
         (tasks_to_show, empty_annotations)
     } else if options.show_internal_running_only {
-        filter_internal_tasks_running_only(
-            graph,
-            tasks_to_show,
-            &empty_annotations,
-            options.keep_coordinators,
-        )
+        filter_internal_tasks_running_only(graph, tasks_to_show, &empty_annotations)
     } else {
-        filter_internal_tasks(
-            graph,
-            tasks_to_show,
-            &empty_annotations,
-            options.keep_coordinators,
-        )
+        filter_internal_tasks(graph, tasks_to_show, &empty_annotations)
     };
 
     // Inject compaction status annotation onto the .compact-0 node.
@@ -1127,7 +1106,7 @@ mod tests {
 
         let annotations: HashMap<String, AnnotationInfo> = HashMap::new();
         let (filtered, annots) =
-            filter_internal_tasks(&graph, graph.tasks().collect(), &annotations, false);
+            filter_internal_tasks(&graph, graph.tasks().collect(), &annotations);
         let task_ids: HashSet<&str> = filtered.iter().map(|t| t.id.as_str()).collect();
 
         // Both a and b should be in the filtered set
@@ -1188,7 +1167,6 @@ mod tests {
             tags: Vec::new(),
             edge_color: "gray".to_string(),
             max_columns: None,
-            keep_coordinators: false,
         };
         // We test via run() output by checking generate_ascii directly
         // with the same filter logic
@@ -1283,10 +1261,10 @@ mod tests {
             ..Task::default()
         };
 
-        // Coordinator tasks are system tasks (dot-prefixed) → treated as internal
+        // Should not be treated as internal
         assert!(
-            is_internal_task(&coordinator),
-            "Coordinator tasks should be filtered as internal (dot-prefixed)"
+            !is_internal_task(&coordinator),
+            "Coordinator tasks should not be filtered as internal"
         );
         // Should be detected as coordinator
         assert!(
@@ -1300,8 +1278,8 @@ mod tests {
     }
 
     #[test]
-    fn test_coordinator_hidden_in_filter() {
-        // Coordinator tasks (dot-prefixed) should be filtered out by default
+    fn test_coordinator_visible_in_filter() {
+        // Coordinator tasks should pass through filter_internal_tasks
         use workgraph::graph::CycleConfig;
         let mut graph = WorkGraph::new();
 
@@ -1328,73 +1306,17 @@ mod tests {
         graph.add_node(Node::Task(assign));
 
         let annotations: HashMap<String, AnnotationInfo> = HashMap::new();
-        let (filtered, _) = filter_internal_tasks(&graph, graph.tasks().collect(), &annotations, false);
+        let (filtered, _) = filter_internal_tasks(&graph, graph.tasks().collect(), &annotations);
         let ids: HashSet<&str> = filtered.iter().map(|t| t.id.as_str()).collect();
 
         assert!(
-            !ids.contains(".coordinator"),
-            "Coordinator (dot-prefixed) should be hidden by default"
+            ids.contains(".coordinator"),
+            "Coordinator should be visible"
         );
         assert!(ids.contains("foo"), "Normal tasks should be visible");
         assert!(
             !ids.contains(".assign-foo"),
             "Internal tasks should be hidden"
-        );
-    }
-
-    #[test]
-    fn test_keep_coordinators_visible_when_requested() {
-        // When keep_coordinators=true, coordinator tasks should remain visible
-        // while other internal tasks are still hidden.
-        use workgraph::graph::CycleConfig;
-        let mut graph = WorkGraph::new();
-
-        let coordinator = Task {
-            id: ".coordinator".to_string(),
-            title: "Coordinator".to_string(),
-            status: Status::InProgress,
-            tags: vec!["coordinator-loop".to_string()],
-            cycle_config: Some(CycleConfig {
-                max_iterations: 0,
-                guard: None,
-                delay: None,
-                no_converge: true,
-                restart_on_failure: true,
-                max_failure_restarts: None,
-            }),
-            ..Task::default()
-        };
-        let normal = make_task("foo", "Normal task");
-        let assign = make_internal_task(".assign-foo", "Assign foo", "assignment", vec![]);
-        let compact = Task {
-            id: ".compact-0".to_string(),
-            title: "Compaction".to_string(),
-            status: Status::Open,
-            ..Task::default()
-        };
-
-        graph.add_node(Node::Task(coordinator));
-        graph.add_node(Node::Task(normal));
-        graph.add_node(Node::Task(assign));
-        graph.add_node(Node::Task(compact));
-
-        let annotations: HashMap<String, AnnotationInfo> = HashMap::new();
-        let (filtered, _) =
-            filter_internal_tasks(&graph, graph.tasks().collect(), &annotations, true);
-        let ids: HashSet<&str> = filtered.iter().map(|t| t.id.as_str()).collect();
-
-        assert!(
-            ids.contains(".coordinator"),
-            "Coordinator should be visible when keep_coordinators=true"
-        );
-        assert!(ids.contains("foo"), "Normal tasks should be visible");
-        assert!(
-            !ids.contains(".assign-foo"),
-            "Internal assign tasks should still be hidden"
-        );
-        assert!(
-            !ids.contains(".compact-0"),
-            "Internal compact tasks should still be hidden"
         );
     }
 
@@ -1417,7 +1339,7 @@ mod tests {
 
         let empty: HashMap<String, AnnotationInfo> = HashMap::new();
         let (filtered, annots) =
-            filter_internal_tasks_running_only(&graph, graph.tasks().collect(), &empty, false);
+            filter_internal_tasks_running_only(&graph, graph.tasks().collect(), &empty);
 
         // Both b and in-progress .assign-b and open .evaluate-b should be kept (visibility)
         let ids: HashSet<&str> = filtered.iter().map(|t| t.id.as_str()).collect();
@@ -1467,7 +1389,7 @@ mod tests {
 
         let annotations: HashMap<String, AnnotationInfo> = HashMap::new();
         let (filtered, annots) =
-            filter_internal_tasks(&graph, graph.tasks().collect(), &annotations, false);
+            filter_internal_tasks(&graph, graph.tasks().collect(), &annotations);
         let ids: HashSet<&str> = filtered.iter().map(|t| t.id.as_str()).collect();
 
         // Parent task should be visible
@@ -1511,7 +1433,7 @@ mod tests {
 
         let annotations: HashMap<String, AnnotationInfo> = HashMap::new();
         let (_filtered, annots) =
-            filter_internal_tasks(&graph, graph.tasks().collect(), &annotations, false);
+            filter_internal_tasks(&graph, graph.tasks().collect(), &annotations);
 
         // Parent should have annotation from the InProgress .assign task
         assert!(
@@ -1550,7 +1472,7 @@ mod tests {
 
         let annotations: HashMap<String, AnnotationInfo> = HashMap::new();
         let (filtered, annots) =
-            filter_internal_tasks(&graph, graph.tasks().collect(), &annotations, false);
+            filter_internal_tasks(&graph, graph.tasks().collect(), &annotations);
 
         // Parent should be visible
         let ids: HashSet<&str> = filtered.iter().map(|t| t.id.as_str()).collect();

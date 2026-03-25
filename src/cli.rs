@@ -522,9 +522,9 @@ pub enum Commands {
         #[arg(long, short)]
         output: Option<String>,
 
-        /// Show system tasks (dot-prefixed: .compact-*, .coordinator-*, .assign-*, etc.)
-        #[arg(long, alias = "show-internal")]
-        system: bool,
+        /// Show internal tasks (assign-*, evaluate-*) normally hidden
+        #[arg(long)]
+        show_internal: bool,
 
         /// Launch interactive TUI mode instead of static output
         #[arg(long, conflicts_with_all = ["dot", "mermaid", "graph", "output", "no_tui"])]
