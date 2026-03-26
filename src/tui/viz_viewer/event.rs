@@ -2073,10 +2073,17 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
         app.last_coordinator_bar_area.height > 0 && app.last_coordinator_bar_area.contains(pos);
     let in_divider =
         app.last_divider_area.width > 0 && app.last_divider_area.contains(pos);
+    let in_minimized_strip =
+        app.last_minimized_strip_area.width > 0 && app.last_minimized_strip_area.contains(pos);
+    let in_fullscreen_restore =
+        app.last_fullscreen_restore_area.width > 0 && app.last_fullscreen_restore_area.contains(pos);
 
     // Track hover state for the divider (visual indicator).
     app.divider_hover = in_divider
         || app.scrollbar_drag == Some(ScrollbarDragTarget::Divider);
+    // Track hover state for tri-state strips.
+    app.minimized_strip_hover = in_minimized_strip;
+    app.fullscreen_restore_hover = in_fullscreen_restore;
 
     match kind {
         MouseEventKind::ScrollUp => {
@@ -2210,7 +2217,17 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
                 }
                 return;
             }
-            if in_divider {
+            if in_minimized_strip {
+                // Click on minimized strip: restore to last normal split mode.
+                app.restore_from_extreme();
+                return;
+            } else if in_fullscreen_restore {
+                // Click on full-screen restore strip: transition to normal split
+                // and start divider drag so user can fine-tune position.
+                app.restore_from_extreme();
+                app.scrollbar_drag = Some(ScrollbarDragTarget::Divider);
+                return;
+            } else if in_divider {
                 // Click on divider between graph and inspector: start resize drag.
                 app.scrollbar_drag = Some(ScrollbarDragTarget::Divider);
                 return;
@@ -2471,18 +2488,51 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
             if app.scrollbar_drag == Some(ScrollbarDragTarget::Divider) {
                 // Dragging the divider: compute new right_panel_percent from mouse column.
                 // The right panel starts at `column` and extends to the right edge.
-                let total_width = app.last_graph_area.width + app.last_right_panel_area.width;
+                // Use graph+panel width when available, fall back to total known area.
+                let total_width = if app.last_graph_area.width > 0 && app.last_right_panel_area.width > 0 {
+                    app.last_graph_area.width + app.last_right_panel_area.width
+                } else if app.last_graph_area.width > 0 {
+                    // Coming from FullInspector restore — panel area not yet set.
+                    // Estimate total from graph area + rough frame width.
+                    app.last_graph_area.width.max(80)
+                } else if app.last_right_panel_area.width > 0 {
+                    app.last_right_panel_area.width.max(80)
+                } else {
+                    0
+                };
                 if total_width > 0 {
                     let left_x = app.last_graph_area.x;
                     let right_edge = left_x + total_width;
                     // The panel width = distance from mouse column to the right edge.
                     let panel_width = right_edge.saturating_sub(column);
-                    let pct = (panel_width as u32 * 100 / total_width as u32) as u16;
-                    // Clamp: neither panel below 15%.
-                    let clamped = pct.max(15).min(85);
-                    app.right_panel_percent = clamped;
-                    app.layout_mode =
-                        super::state::VizApp::layout_mode_for_percent(clamped);
+                    let raw_pct = (panel_width as u32 * 100 / total_width as u32) as u16;
+                    // Snap to extreme states at thresholds; otherwise clamp to 15–85%.
+                    if raw_pct > 90 {
+                        // Dragged far left → full-screen inspector.
+                        if app.layout_mode.is_normal_split() {
+                            app.last_split_mode = app.layout_mode;
+                            app.last_split_percent = app.right_panel_percent;
+                        }
+                        app.layout_mode = super::state::LayoutMode::FullInspector;
+                        app.right_panel_visible = true;
+                        app.focused_panel = super::state::FocusedPanel::RightPanel;
+                        app.scrollbar_drag = None;
+                    } else if raw_pct < 10 {
+                        // Dragged far right → minimized inspector.
+                        if app.layout_mode.is_normal_split() {
+                            app.last_split_mode = app.layout_mode;
+                            app.last_split_percent = app.right_panel_percent;
+                        }
+                        app.layout_mode = super::state::LayoutMode::Off;
+                        app.right_panel_visible = false;
+                        app.focused_panel = super::state::FocusedPanel::Graph;
+                        app.scrollbar_drag = None;
+                    } else {
+                        let clamped = raw_pct.max(15).min(85);
+                        app.right_panel_percent = clamped;
+                        app.layout_mode =
+                            super::state::VizApp::layout_mode_for_percent(clamped);
+                    }
                 }
             } else if app.scrollbar_drag == Some(ScrollbarDragTarget::Graph) {
                 app.record_graph_scroll_activity();

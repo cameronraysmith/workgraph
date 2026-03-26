@@ -152,6 +152,9 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
     match app.responsive_breakpoint {
         ResponsiveBreakpoint::Compact => {
             // Single-panel mode: show graph OR detail OR log, one at a time.
+            // No room for tri-state strips in compact mode.
+            app.last_minimized_strip_area = Rect::default();
+            app.last_fullscreen_restore_area = Rect::default();
             match app.single_panel_view {
                 SinglePanelView::Graph => {
                     app.last_graph_area = main_area;
@@ -176,17 +179,44 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
                     app.last_graph_area = Rect::default();
                     app.scroll.viewport_height = 0;
                     app.scroll.viewport_width = 0;
+                    if main_area.width > 1 {
+                        app.last_fullscreen_restore_area = Rect::new(
+                            main_area.x,
+                            main_area.y,
+                            1,
+                            main_area.height,
+                        );
+                    } else {
+                        app.last_fullscreen_restore_area = Rect::default();
+                    }
+                    app.last_minimized_strip_area = Rect::default();
                 }
                 LayoutMode::Off => {
-                    app.last_graph_area = main_area;
+                    let strip_width = if main_area.width > 1 { 1u16 } else { 0 };
+                    let graph_width = main_area.width.saturating_sub(strip_width);
+                    let graph_area = Rect::new(main_area.x, main_area.y, graph_width, main_area.height);
+                    app.last_graph_area = graph_area;
                     app.last_right_panel_area = Rect::default();
                     app.last_divider_area = Rect::default();
                     app.last_tab_bar_area = Rect::default();
                     app.last_right_content_area = Rect::default();
-                    app.scroll.viewport_height = main_area.height as usize;
-                    app.scroll.viewport_width = main_area.width as usize;
+                    app.scroll.viewport_height = graph_area.height as usize;
+                    app.scroll.viewport_width = graph_area.width as usize;
+                    if strip_width > 0 {
+                        app.last_minimized_strip_area = Rect::new(
+                            main_area.x + graph_width,
+                            main_area.y,
+                            strip_width,
+                            main_area.height,
+                        );
+                    } else {
+                        app.last_minimized_strip_area = Rect::default();
+                    }
+                    app.last_fullscreen_restore_area = Rect::default();
                 }
                 _ => {
+                    app.last_minimized_strip_area = Rect::default();
+                    app.last_fullscreen_restore_area = Rect::default();
                     if app.right_panel_visible {
                         // In narrow mode, use a compact side-by-side split.
                         // Graph gets 40%, inspector gets 60% (minimum useful inspector width).
@@ -223,17 +253,46 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
                     app.last_graph_area = Rect::default();
                     app.scroll.viewport_height = 0;
                     app.scroll.viewport_width = 0;
+                    // Left restore strip (1 col).
+                    if main_area.width > 1 {
+                        app.last_fullscreen_restore_area = Rect::new(
+                            main_area.x,
+                            main_area.y,
+                            1,
+                            main_area.height,
+                        );
+                    } else {
+                        app.last_fullscreen_restore_area = Rect::default();
+                    }
+                    app.last_minimized_strip_area = Rect::default();
                 }
                 LayoutMode::Off => {
-                    app.last_graph_area = main_area;
+                    // Right minimized strip (1 col) when there's room.
+                    let strip_width = if main_area.width > 1 { 1u16 } else { 0 };
+                    let graph_width = main_area.width.saturating_sub(strip_width);
+                    let graph_area = Rect::new(main_area.x, main_area.y, graph_width, main_area.height);
+                    app.last_graph_area = graph_area;
                     app.last_right_panel_area = Rect::default();
                     app.last_divider_area = Rect::default();
                     app.last_tab_bar_area = Rect::default();
                     app.last_right_content_area = Rect::default();
-                    app.scroll.viewport_height = main_area.height as usize;
-                    app.scroll.viewport_width = main_area.width as usize;
+                    app.scroll.viewport_height = graph_area.height as usize;
+                    app.scroll.viewport_width = graph_area.width as usize;
+                    if strip_width > 0 {
+                        app.last_minimized_strip_area = Rect::new(
+                            main_area.x + graph_width,
+                            main_area.y,
+                            strip_width,
+                            main_area.height,
+                        );
+                    } else {
+                        app.last_minimized_strip_area = Rect::default();
+                    }
+                    app.last_fullscreen_restore_area = Rect::default();
                 }
                 LayoutMode::ThirdInspector | LayoutMode::HalfInspector | LayoutMode::TwoThirdsInspector => {
+                    app.last_minimized_strip_area = Rect::default();
+                    app.last_fullscreen_restore_area = Rect::default();
                     if app.right_panel_visible {
                         if area.width >= SIDE_MIN_WIDTH {
                             let right_width =
@@ -320,19 +379,32 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
             // Narrow split mode.
             match app.layout_mode {
                 LayoutMode::FullInspector => {
-                    draw_right_panel(frame, app, main_area);
+                    // Draw left restore strip, then inspector in the rest.
+                    let strip = app.last_fullscreen_restore_area;
+                    let panel_area = if strip.width > 0 {
+                        draw_restore_strip(frame, strip, app.fullscreen_restore_hover);
+                        Rect::new(main_area.x + 1, main_area.y, main_area.width - 1, main_area.height)
+                    } else {
+                        main_area
+                    };
+                    draw_right_panel(frame, app, panel_area);
                     app.last_graph_hscrollbar_area = Rect::default();
                 }
                 LayoutMode::Off => {
-                    draw_viz_content(frame, app, main_area);
+                    let graph_area = app.last_graph_area;
+                    let strip = app.last_minimized_strip_area;
+                    draw_viz_content(frame, app, graph_area);
                     if app.scroll.content_height > app.scroll.viewport_height
                         && app.graph_scrollbar_visible()
                     {
-                        draw_scrollbar(frame, app, main_area);
+                        draw_scrollbar(frame, app, graph_area);
+                    }
+                    if strip.width > 0 {
+                        draw_minimized_strip(frame, strip, app.minimized_strip_hover);
                     }
                     app.last_graph_hscrollbar_area = draw_horizontal_scrollbar(
                         frame,
-                        main_area,
+                        graph_area,
                         app.scroll.content_width,
                         app.scroll.viewport_width,
                         app.scroll.offset_x,
@@ -394,19 +466,32 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
             // Full layout: existing behavior.
             match app.layout_mode {
                 LayoutMode::FullInspector => {
-                    draw_right_panel(frame, app, main_area);
+                    // Draw left restore strip, then inspector in the rest.
+                    let strip = app.last_fullscreen_restore_area;
+                    let panel_area = if strip.width > 0 {
+                        draw_restore_strip(frame, strip, app.fullscreen_restore_hover);
+                        Rect::new(main_area.x + 1, main_area.y, main_area.width - 1, main_area.height)
+                    } else {
+                        main_area
+                    };
+                    draw_right_panel(frame, app, panel_area);
                     app.last_graph_hscrollbar_area = Rect::default();
                 }
                 LayoutMode::Off => {
-                    draw_viz_content(frame, app, main_area);
+                    let graph_area = app.last_graph_area;
+                    let strip = app.last_minimized_strip_area;
+                    draw_viz_content(frame, app, graph_area);
                     if app.scroll.content_height > app.scroll.viewport_height
                         && app.graph_scrollbar_visible()
                     {
-                        draw_scrollbar(frame, app, main_area);
+                        draw_scrollbar(frame, app, graph_area);
+                    }
+                    if strip.width > 0 {
+                        draw_minimized_strip(frame, strip, app.minimized_strip_hover);
                     }
                     app.last_graph_hscrollbar_area = draw_horizontal_scrollbar(
                         frame,
-                        main_area,
+                        graph_area,
                         app.scroll.content_width,
                         app.scroll.viewport_width,
                         app.scroll.offset_x,
@@ -1646,6 +1731,36 @@ fn draw_horizontal_scrollbar(
         .track_style(Style::default().fg(Color::DarkGray));
     frame.render_stateful_widget(scrollbar, scrollbar_area, &mut state);
     scrollbar_area
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Tri-state inspector strips
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// Draw the 1-col restore strip on the left edge in FullInspector mode.
+/// Clicking/dragging from this strip restores the normal split view.
+fn draw_restore_strip(frame: &mut Frame, area: Rect, hover: bool) {
+    let fg = if hover { Color::Yellow } else { Color::DarkGray };
+    let text: String = (0..area.height).map(|_| '▌').collect();
+    let lines: Vec<Line> = text.chars().map(|c| Line::from(Span::styled(
+        c.to_string(),
+        Style::default().fg(fg),
+    ))).collect();
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, area);
+}
+
+/// Draw the 1-col minimized strip on the right edge in Off mode.
+/// Clicking this strip restores the normal split view.
+fn draw_minimized_strip(frame: &mut Frame, area: Rect, hover: bool) {
+    let fg = if hover { Color::Yellow } else { Color::DarkGray };
+    let text: String = (0..area.height).map(|_| '▐').collect();
+    let lines: Vec<Line> = text.chars().map(|c| Line::from(Span::styled(
+        c.to_string(),
+        Style::default().fg(fg),
+    ))).collect();
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, area);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
