@@ -4149,23 +4149,23 @@ model = "haiku"
 
     #[test]
     fn test_registry_resolve_step1_custom_registry_entry() {
-        // Step 1: custom registry entry "deepseek-v3.2" resolves to full path
+        // Step 1: custom registry entry "deepseek-chat-v3" resolves to full path
         let mut config = Config::default();
         config.model_registry = vec![ModelRegistryEntry {
-            id: "deepseek-v3.2".into(),
+            id: "deepseek-chat-v3".into(),
             provider: "deepseek".into(),
-            model: "deepseek/deepseek-v3.2".into(),
+            model: "deepseek/deepseek-chat-v3".into(),
             tier: Tier::Standard,
             ..Default::default()
         }];
         config.models.evaluator = Some(RoleModelConfig {
-            model: Some("deepseek-v3.2".to_string()),
+            model: Some("deepseek-chat-v3".to_string()),
             provider: None,
             tier: None,
             endpoint: None,
         });
         let resolved = config.resolve_model_for_role(DispatchRole::Evaluator);
-        assert_eq!(resolved.model, "deepseek/deepseek-v3.2");
+        assert_eq!(resolved.model, "deepseek/deepseek-chat-v3");
         assert_eq!(resolved.provider, Some("deepseek".to_string()));
         assert!(resolved.registry_entry.is_some());
     }
