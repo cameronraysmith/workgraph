@@ -36,6 +36,20 @@ pub trait Provider: Send + Sync {
     /// The provider translates between the canonical message format and
     /// its wire protocol.
     async fn send(&self, request: &MessagesRequest) -> Result<MessagesResponse>;
+
+    /// Send a streaming completion request with incremental text callbacks.
+    ///
+    /// `on_text` is called for each text chunk as it arrives from the SSE
+    /// stream, enabling progressive display. Returns the full assembled
+    /// response as with `send()`. Default: falls back to `send()`.
+    async fn send_streaming(
+        &self,
+        request: &MessagesRequest,
+        on_text: &(dyn Fn(String) + Send + Sync),
+    ) -> Result<MessagesResponse> {
+        let _ = on_text;
+        self.send(request).await
+    }
 }
 
 /// Backward-compatible wrapper: routes by model string only.

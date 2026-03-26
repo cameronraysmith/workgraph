@@ -7005,7 +7005,13 @@ impl VizApp {
     }
 
     /// Apply a layout mode, updating panel visibility and focus.
+    /// Saves the current split state when transitioning to FullInspector or Off.
     fn apply_layout_mode(&mut self, mode: LayoutMode) {
+        // Save the current normal split state before leaving it.
+        if self.layout_mode.is_normal_split() && !mode.is_normal_split() {
+            self.last_split_mode = self.layout_mode;
+            self.last_split_percent = self.right_panel_percent;
+        }
         self.layout_mode = mode;
         match mode {
             LayoutMode::ThirdInspector
@@ -7024,6 +7030,14 @@ impl VizApp {
                 self.focused_panel = FocusedPanel::Graph;
             }
         }
+    }
+
+    /// Restore the last normal split mode from FullInspector or Off.
+    pub fn restore_from_extreme(&mut self) {
+        let mode = self.last_split_mode;
+        self.layout_mode = mode;
+        self.right_panel_visible = true;
+        self.right_panel_percent = self.last_split_percent;
     }
 
     /// Cycle inspector view forward: closed → Chat → Detail → ... → CoordLog → closed.
@@ -7097,8 +7111,15 @@ impl VizApp {
             // At maximum → transition to Off (full viz)
             self.apply_layout_mode(LayoutMode::Off);
         } else {
-            self.right_panel_percent = (self.right_panel_percent + 5).min(100);
-            self.layout_mode = Self::layout_mode_for_percent(self.right_panel_percent);
+            let new_pct = (self.right_panel_percent + 5).min(100);
+            let new_mode = Self::layout_mode_for_percent(new_pct);
+            // Save split state before entering FullInspector.
+            if self.layout_mode.is_normal_split() && !new_mode.is_normal_split() {
+                self.last_split_mode = self.layout_mode;
+                self.last_split_percent = self.right_panel_percent;
+            }
+            self.right_panel_percent = new_pct;
+            self.layout_mode = new_mode;
         }
     }
 

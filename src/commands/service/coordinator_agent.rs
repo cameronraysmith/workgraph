@@ -1599,7 +1599,7 @@ fn native_coordinator_loop(
         let mut total_output_tokens: u64 = 0;
         let mut total_cache_creation: u64 = 0;
         let mut api_turns = 0;
-        let mut streaming_text = String::new();
+        let streaming_text = std::sync::Mutex::new(String::new());
         let mut errored = false;
 
         loop {
@@ -1626,24 +1626,34 @@ fn native_coordinator_loop(
                 stream: false,
             };
 
-            let response: MessagesResponse = match rt.block_on(client.send(&api_request)) {
-                Ok(r) => r,
-                Err(e) => {
-                    logger.error(&format!(
-                        "Native coordinator: API request failed: {}",
-                        e
-                    ));
-                    let _ = chat::append_outbox_for(
-                        dir,
-                        coordinator_id,
-                        &format!("The coordinator encountered an API error: {}", e),
-                        &request.request_id,
-                    );
-                    chat::clear_streaming(dir, coordinator_id);
-                    errored = true;
-                    break;
+            // Stream text chunks to the TUI incrementally via callback
+            let st_ref = &streaming_text;
+            let on_text = move |text: String| {
+                if let Ok(mut st) = st_ref.lock() {
+                    st.push_str(&text);
+                    let _ = chat::write_streaming(dir, coordinator_id, &st);
                 }
             };
+
+            let response: MessagesResponse =
+                match rt.block_on(client.send_streaming(&api_request, &on_text)) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        logger.error(&format!(
+                            "Native coordinator: API request failed: {}",
+                            e
+                        ));
+                        let _ = chat::append_outbox_for(
+                            dir,
+                            coordinator_id,
+                            &format!("The coordinator encountered an API error: {}", e),
+                            &request.request_id,
+                        );
+                        chat::clear_streaming(dir, coordinator_id);
+                        errored = true;
+                        break;
+                    }
+                };
 
             api_turns += 1;
 
@@ -1660,46 +1670,55 @@ fn native_coordinator_loop(
                     .unwrap_or(0),
             );
 
-            // Process content blocks: extract text and tool calls
+            // Process content blocks: text was already streamed via callback,
+            // now handle tool calls and record parts.
             let mut tool_use_blocks = Vec::new();
-            for block in &response.content {
-                match block {
-                    ContentBlock::Text { text } => {
-                        // Stream text to TUI
-                        streaming_text.push_str(text);
-                        if !text.ends_with('\n') {
-                            streaming_text.push('\n');
-                        }
-                        let _ = chat::write_streaming(dir, coordinator_id, &streaming_text);
-                        parts.push(ResponsePart::Text(text.clone()));
-                    }
-                    ContentBlock::ToolUse { id, name, input } => {
-                        has_tool_calls = true;
-                        let input_str = serde_json::to_string(input).unwrap_or_default();
-
-                        // Stream tool call to TUI
-                        streaming_text.push_str(&format!("\n┌─ {} ", name));
-                        streaming_text
-                            .push_str(&"─".repeat(40usize.saturating_sub(name.len() + 4)));
-                        streaming_text.push('\n');
-                        if name == "bash" || name == "Bash" {
-                            if let Some(cmd) = input.get("command").and_then(|c| c.as_str()) {
-                                streaming_text.push_str(&format!("│ $ {}\n", cmd));
-                            } else {
-                                format_tool_input(&mut streaming_text, &input_str);
+            {
+                let mut st = streaming_text.lock().unwrap();
+                for block in &response.content {
+                    match block {
+                        ContentBlock::Text { text } => {
+                            // Text was streamed incrementally via callback;
+                            // ensure trailing newline for display.
+                            if !st.ends_with('\n') {
+                                st.push('\n');
                             }
-                        } else {
-                            format_tool_input(&mut streaming_text, &input_str);
+                            let _ = chat::write_streaming(dir, coordinator_id, &st);
+                            parts.push(ResponsePart::Text(text.clone()));
                         }
-                        let _ = chat::write_streaming(dir, coordinator_id, &streaming_text);
+                        ContentBlock::ToolUse { id, name, input } => {
+                            has_tool_calls = true;
+                            let input_str =
+                                serde_json::to_string(input).unwrap_or_default();
 
-                        parts.push(ResponsePart::ToolUse {
-                            name: name.clone(),
-                            input: input_str,
-                        });
-                        tool_use_blocks.push((id.clone(), name.clone(), input.clone()));
+                            // Stream tool call header to TUI
+                            st.push_str(&format!("\n┌─ {} ", name));
+                            st.push_str(
+                                &"─".repeat(40usize.saturating_sub(name.len() + 4)),
+                            );
+                            st.push('\n');
+                            if name == "bash" || name == "Bash" {
+                                if let Some(cmd) =
+                                    input.get("command").and_then(|c| c.as_str())
+                                {
+                                    st.push_str(&format!("│ $ {}\n", cmd));
+                                } else {
+                                    format_tool_input(&mut st, &input_str);
+                                }
+                            } else {
+                                format_tool_input(&mut st, &input_str);
+                            }
+                            let _ = chat::write_streaming(dir, coordinator_id, &st);
+
+                            parts.push(ResponsePart::ToolUse {
+                                name: name.clone(),
+                                input: input_str,
+                            });
+                            tool_use_blocks
+                                .push((id.clone(), name.clone(), input.clone()));
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
 
@@ -1722,25 +1741,28 @@ fn native_coordinator_loop(
                         let output = rt.block_on(registry.execute(name, input));
 
                         // Stream tool result to TUI
-                        if !output.content.trim().is_empty() {
-                            let lines: Vec<&str> = output.content.lines().collect();
-                            let max_lines = 15;
-                            if lines.len() > max_lines {
-                                for line in &lines[..max_lines] {
-                                    streaming_text.push_str(&format!("│ {}\n", line));
-                                }
-                                streaming_text.push_str(&format!(
-                                    "│ ... ({} more lines)\n",
-                                    lines.len() - max_lines
-                                ));
-                            } else {
-                                for line in &lines {
-                                    streaming_text.push_str(&format!("│ {}\n", line));
+                        {
+                            let mut st = streaming_text.lock().unwrap();
+                            if !output.content.trim().is_empty() {
+                                let lines: Vec<&str> = output.content.lines().collect();
+                                let max_lines = 15;
+                                if lines.len() > max_lines {
+                                    for line in &lines[..max_lines] {
+                                        st.push_str(&format!("│ {}\n", line));
+                                    }
+                                    st.push_str(&format!(
+                                        "│ ... ({} more lines)\n",
+                                        lines.len() - max_lines
+                                    ));
+                                } else {
+                                    for line in &lines {
+                                        st.push_str(&format!("│ {}\n", line));
+                                    }
                                 }
                             }
+                            st.push_str("└─\n");
+                            let _ = chat::write_streaming(dir, coordinator_id, &st);
                         }
-                        streaming_text.push_str("└─\n");
-                        let _ = chat::write_streaming(dir, coordinator_id, &streaming_text);
 
                         parts.push(ResponsePart::ToolResult(output.content.clone()));
                         tool_results.push(ContentBlock::ToolResult {

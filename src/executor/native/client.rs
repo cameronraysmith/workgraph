@@ -269,6 +269,59 @@ impl AnthropicClient {
         assemble_stream_response(events).await
     }
 
+    /// Streaming request with a text callback for progressive display.
+    ///
+    /// Processes SSE events inline, calling `on_text` for each text delta
+    /// as it arrives from the wire.
+    pub async fn messages_streaming_with_callback(
+        &self,
+        request: &MessagesRequest,
+        on_text: &(dyn Fn(String) + Send + Sync),
+    ) -> Result<MessagesResponse> {
+        let url = format!("{}/v1/messages", self.base_url);
+        let mut req = request.clone();
+        req.stream = true;
+
+        let headers = self.build_headers();
+        let resp = self
+            .http
+            .post(&url)
+            .headers(headers)
+            .json(&req)
+            .send()
+            .await
+            .context("Failed to send streaming request")?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(api_error(status.as_u16(), &body));
+        }
+
+        let mut events = Vec::new();
+        let mut stream = resp.bytes_stream();
+        let mut buffer = String::new();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.context("Error reading SSE chunk")?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(event) = parse_next_sse_event(&mut buffer) {
+                // Forward text deltas to the callback immediately
+                if let StreamEvent::ContentBlockDelta {
+                    delta: ContentDelta::TextDelta { ref text },
+                    ..
+                } = event
+                {
+                    on_text(text.clone());
+                }
+                events.push(event);
+            }
+        }
+
+        assemble_stream_response(events).await
+    }
+
     /// Send a streaming request and collect raw SSE events.
     async fn messages_stream_raw(&self, request: &MessagesRequest) -> Result<Vec<StreamEvent>> {
         let url = format!("{}/v1/messages", self.base_url);
@@ -415,6 +468,15 @@ impl super::provider::Provider for AnthropicClient {
         } else {
             self.messages(request).await
         }
+    }
+
+    async fn send_streaming(
+        &self,
+        request: &MessagesRequest,
+        on_text: &(dyn Fn(String) + Send + Sync),
+    ) -> Result<MessagesResponse> {
+        self.messages_streaming_with_callback(request, on_text)
+            .await
     }
 }
 

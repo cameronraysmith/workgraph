@@ -607,13 +607,18 @@ impl AgentLoop {
     }
 
     fn write_log_event(&self, event: &LogEvent) {
-        if let Ok(json) = serde_json::to_string(event)
-            && let Ok(mut file) = std::fs::OpenOptions::new()
+        if let Ok(json) = serde_json::to_string(event) {
+            // Write to the dedicated NDJSON log file
+            if let Ok(mut file) = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&self.output_log)
-        {
-            let _ = writeln!(file, "{}", json);
+            {
+                let _ = writeln!(file, "{}", json);
+            }
+            // Also write to stdout so the wrapper script captures it to output.log,
+            // making events visible to the TUI.
+            println!("{}", json);
         }
     }
 }

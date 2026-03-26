@@ -795,6 +795,194 @@ impl OpenAiClient {
         assemble_oai_stream_response(response_id, text_content, tool_calls, finish_reason, usage)
     }
 
+    /// Execute a single streaming attempt with a text callback for progressive display.
+    async fn streaming_attempt_with_callback(
+        &self,
+        url: &str,
+        oai_request: &OaiRequest,
+        on_text: &(dyn Fn(String) + Send + Sync),
+    ) -> Result<MessagesResponse> {
+        let headers = self.build_headers();
+        let resp = self
+            .http
+            .post(url)
+            .headers(headers)
+            .json(oai_request)
+            .send()
+            .await
+            .context("Failed to send streaming request")?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let status_code = status.as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            if is_retryable(status_code) {
+                let wait_hint = parse_retry_after_oai(&body).unwrap_or(0);
+                if wait_hint > 0 {
+                    tokio::time::sleep(Duration::from_millis(wait_hint)).await;
+                }
+            }
+            return Err(oai_api_error(status_code, &body));
+        }
+
+        let mut stream = resp.bytes_stream();
+        let mut buffer = String::new();
+        let mut response_id = String::new();
+        let mut text_content = String::new();
+        let mut tool_calls: std::collections::BTreeMap<usize, (String, String, String)> =
+            std::collections::BTreeMap::new();
+        let mut finish_reason: Option<String> = None;
+        let mut usage: Option<OaiUsage> = None;
+        let mut chunk_count: u32 = 0;
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = match chunk_result {
+                Ok(c) => c,
+                Err(e) => {
+                    if chunk_count == 0 {
+                        return Err(anyhow!(
+                            "Stream connection failed before receiving data: {}",
+                            e
+                        ));
+                    }
+                    eprintln!(
+                        "[openai-client] Stream interrupted after {} chunks: {}",
+                        chunk_count, e
+                    );
+                    if finish_reason.is_some() {
+                        break;
+                    }
+                    return Err(anyhow!(
+                        "Stream interrupted after {} chunks: {}",
+                        chunk_count,
+                        e
+                    ));
+                }
+            };
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(data) = parse_next_oai_sse_data(&mut buffer) {
+                if data == "[DONE]" {
+                    break;
+                }
+
+                let parsed_chunk: OaiStreamChunk = match serde_json::from_str(&data) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!(
+                            "[openai-client] Skipping malformed SSE chunk: {} (data: {})",
+                            e,
+                            truncate(&data, 200)
+                        );
+                        continue;
+                    }
+                };
+
+                chunk_count += 1;
+
+                if response_id.is_empty() && !parsed_chunk.id.is_empty() {
+                    response_id = parsed_chunk.id;
+                }
+
+                if let Some(u) = parsed_chunk.usage {
+                    usage = Some(u);
+                }
+
+                for choice in &parsed_chunk.choices {
+                    if let Some(ref text) = choice.delta.content {
+                        text_content.push_str(text);
+                        on_text(text.clone());
+                    }
+
+                    if let Some(ref tcs) = choice.delta.tool_calls {
+                        for tc in tcs {
+                            let entry = tool_calls
+                                .entry(tc.index)
+                                .or_insert_with(|| (String::new(), String::new(), String::new()));
+                            if let Some(ref id) = tc.id {
+                                entry.0 = id.clone();
+                            }
+                            if let Some(ref func) = tc.function {
+                                if let Some(ref name) = func.name {
+                                    entry.1 = name.clone();
+                                }
+                                if let Some(ref args) = func.arguments {
+                                    entry.2.push_str(args);
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(ref fr) = choice.finish_reason {
+                        finish_reason = Some(fr.clone());
+                    }
+                }
+            }
+        }
+
+        eprintln!(
+            "[openai-client] Stream complete: {} chunks, {} text chars, {} tool calls",
+            chunk_count,
+            text_content.len(),
+            tool_calls.len()
+        );
+
+        assemble_oai_stream_response(response_id, text_content, tool_calls, finish_reason, usage)
+    }
+
+    /// Streaming completion with text callback and retry logic.
+    async fn chat_completion_streaming_with_callback(
+        &self,
+        request: &MessagesRequest,
+        on_text: &(dyn Fn(String) + Send + Sync),
+    ) -> Result<MessagesResponse> {
+        let tools = Self::translate_tools(&request.tools);
+        let tool_choice = if tools.is_empty() {
+            None
+        } else {
+            Some("auto".to_string())
+        };
+        let oai_request = OaiRequest {
+            model: request.model.clone(),
+            messages: Self::translate_messages(&request.system, &request.messages),
+            max_tokens: Some(request.max_tokens),
+            tools,
+            tool_choice,
+            stream: true,
+            stream_options: Some(OaiStreamOptions {
+                include_usage: true,
+            }),
+            cache_control: self.cache_control_value(),
+        };
+
+        let url = format!("{}/chat/completions", self.base_url);
+        let max_retries = 3;
+        let mut retry_count = 0;
+        let mut backoff_ms = 1000u64;
+
+        loop {
+            match self
+                .streaming_attempt_with_callback(&url, &oai_request, on_text)
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    if retry_count < max_retries {
+                        retry_count += 1;
+                        eprintln!(
+                            "[openai-client] Streaming error (attempt {}/{}): {}. Retrying in {}ms",
+                            retry_count, max_retries, e, backoff_ms
+                        );
+                        tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                        backoff_ms = (backoff_ms * 2).min(30_000);
+                        continue;
+                    }
+                    return Err(e).context("Streaming request failed after retries");
+                }
+            }
+        }
+    }
+
     /// Send a request with retry logic.
     async fn send_with_retry(&self, url: &str, request: &OaiRequest) -> Result<MessagesResponse> {
         let max_retries = 5;
@@ -917,6 +1105,15 @@ impl super::provider::Provider for OpenAiClient {
         } else {
             self.chat_completion(request).await
         }
+    }
+
+    async fn send_streaming(
+        &self,
+        request: &MessagesRequest,
+        on_text: &(dyn Fn(String) + Send + Sync),
+    ) -> Result<MessagesResponse> {
+        self.chat_completion_streaming_with_callback(request, on_text)
+            .await
     }
 }
 
