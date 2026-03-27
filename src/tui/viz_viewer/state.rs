@@ -9113,7 +9113,7 @@ impl VizApp {
                     user: Some(msg.sender.clone()),
                     target_task: Some(task_id.to_string()),
                     msg_timestamp: Some(msg.timestamp.clone()),
-                    read_at: None,
+                    read_at: msg.read_at.clone(),
                     msg_queue_id: Some(msg.id),
                 });
             }
