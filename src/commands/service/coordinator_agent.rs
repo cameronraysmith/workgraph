@@ -2511,6 +2511,28 @@ pub fn build_coordinator_context(
         }
     }
 
+    // --- Conversation Context Summary ---
+    {
+        use workgraph::service::chat_compactor::{ChatCompactorState, context_summary_path};
+        let summary_path = context_summary_path(dir, coordinator_id);
+        if summary_path.exists()
+            && let Ok(contents) = std::fs::read_to_string(&summary_path)
+        {
+            let contents = contents.trim();
+            if !contents.is_empty() {
+                let cstate = ChatCompactorState::load(dir, coordinator_id);
+                let ts_line = match &cstate.last_compaction {
+                    Some(ts) => format!("_Last compacted: {}_\n", ts),
+                    None => String::new(),
+                };
+                parts.push(format!(
+                    "\n### Conversation Context Summary\n{}{}",
+                    ts_line, contents
+                ));
+            }
+        }
+    }
+
     parts.push(format!(
         "\n### Graph Summary\n{} tasks: {} done, {} in-progress, {} open, {} blocked, {} failed, {} abandoned",
         total, done, in_progress, open, blocked, failed, abandoned
@@ -2833,5 +2855,72 @@ mod tests {
         assert!(!ctx.contains("Compacted Project Context"));
         // But should still have graph summary
         assert!(ctx.contains("### Graph Summary"));
+    }
+
+    #[test]
+    fn test_coordinator_context_includes_chat_summary() {
+        use workgraph::service::chat_compactor::{ChatCompactorState, context_summary_path};
+        use workgraph::test_helpers::{make_task_with_status, setup_workgraph};
+
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+
+        setup_workgraph(
+            dir,
+            vec![make_task_with_status("task-1", "A task", Status::Open)],
+        );
+
+        // Write context-summary.md with known content
+        let summary_path = context_summary_path(dir, 0);
+        std::fs::create_dir_all(summary_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &summary_path,
+            "# Conversation Context Summary\n\nUser prefers concise responses.",
+        )
+        .unwrap();
+
+        // Write chat compactor state with a known timestamp
+        let state = ChatCompactorState {
+            last_compaction: Some("2026-03-27T15:00:00Z".to_string()),
+            last_message_count: 20,
+            compaction_count: 1,
+            last_inbox_id: 10,
+            last_outbox_id: 10,
+        };
+        state.save(dir, 0).unwrap();
+
+        let ctx = build_coordinator_context(dir, "2026-01-01T00:00:00Z", None, 0).unwrap();
+
+        // Chat summary should appear
+        assert!(
+            ctx.contains("### Conversation Context Summary"),
+            "missing chat summary section header"
+        );
+        assert!(
+            ctx.contains("User prefers concise responses."),
+            "missing chat summary body"
+        );
+        assert!(
+            ctx.contains("2026-03-27T15:00:00Z"),
+            "missing chat compaction timestamp"
+        );
+    }
+
+    #[test]
+    fn test_coordinator_context_without_chat_summary() {
+        use workgraph::test_helpers::{make_task_with_status, setup_workgraph};
+
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+
+        setup_workgraph(
+            dir,
+            vec![make_task_with_status("task-1", "A task", Status::Open)],
+        );
+
+        let ctx = build_coordinator_context(dir, "2026-01-01T00:00:00Z", None, 0).unwrap();
+
+        // Should not contain chat summary section
+        assert!(!ctx.contains("Conversation Context Summary"));
     }
 }

@@ -1002,8 +1002,11 @@ fn main() -> Result<()> {
             no_history,
             rotate,
             cleanup,
+            compact,
         } => {
-            if rotate {
+            if compact {
+                commands::chat::run_compact(&workgraph_dir, coordinator, cli.json)
+            } else if rotate {
                 commands::chat::run_rotate(&workgraph_dir, coordinator)
             } else if cleanup {
                 commands::chat::run_cleanup(&workgraph_dir, coordinator)

@@ -91,6 +91,9 @@ pub struct ChatConfig {
     /// Retention period in days for archived files (default: 30). 0 = keep forever.
     #[serde(default = "default_chat_retention_days")]
     pub retention_days: u32,
+    /// Number of new messages before auto-triggering chat compaction (default: 50).
+    #[serde(default = "default_chat_compact_threshold")]
+    pub compact_threshold: usize,
 }
 
 fn default_chat_max_file_size() -> u64 {
@@ -102,6 +105,9 @@ fn default_chat_max_messages() -> usize {
 fn default_chat_retention_days() -> u32 {
     30
 }
+fn default_chat_compact_threshold() -> usize {
+    50
+}
 
 impl Default for ChatConfig {
     fn default() -> Self {
@@ -109,6 +115,7 @@ impl Default for ChatConfig {
             max_file_size: default_chat_max_file_size(),
             max_messages: default_chat_max_messages(),
             retention_days: default_chat_retention_days(),
+            compact_threshold: default_chat_compact_threshold(),
         }
     }
 }
@@ -639,6 +646,8 @@ pub enum DispatchRole {
     CoordinatorEval,
     /// Placement agent: analyzes tasks and wires them into the graph
     Placer,
+    /// Chat compactor: summarizes per-coordinator conversation history
+    ChatCompactor,
 }
 
 impl std::fmt::Display for DispatchRole {
@@ -657,6 +666,7 @@ impl std::fmt::Display for DispatchRole {
             Self::Compactor => write!(f, "compactor"),
             Self::CoordinatorEval => write!(f, "coordinator_eval"),
             Self::Placer => write!(f, "placer"),
+            Self::ChatCompactor => write!(f, "chat_compactor"),
         }
     }
 }
@@ -679,9 +689,11 @@ impl std::str::FromStr for DispatchRole {
             "compactor" => Ok(Self::Compactor),
             "coordinator_eval" => Ok(Self::CoordinatorEval),
             "placer" => Ok(Self::Placer),
+            "chat_compactor" => Ok(Self::ChatCompactor),
             _ => Err(anyhow::anyhow!(
                 "Unknown dispatch role '{}'. Valid roles: default, task_agent, evaluator, \
-                 flip_inference, flip_comparison, assigner, evolver, verification, triage, creator, compactor, placer",
+                 flip_inference, flip_comparison, assigner, evolver, verification, triage, \
+                 creator, compactor, placer, chat_compactor",
                 s
             )),
         }
@@ -702,6 +714,7 @@ impl DispatchRole {
         Self::Creator,
         Self::Compactor,
         Self::Placer,
+        Self::ChatCompactor,
     ];
 
     /// Default quality tier for this role.
@@ -711,6 +724,7 @@ impl DispatchRole {
             Self::FlipComparison => Tier::Fast,
             Self::Assigner => Tier::Fast,
             Self::Compactor => Tier::Fast,
+            Self::ChatCompactor => Tier::Fast,
             Self::CoordinatorEval => Tier::Fast,
             Self::Placer => Tier::Fast,
             Self::FlipInference => Tier::Standard,
@@ -958,6 +972,9 @@ pub struct ModelRoutingConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placer: Option<RoleModelConfig>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_compactor: Option<RoleModelConfig>,
 }
 
 impl ModelRoutingConfig {
@@ -977,6 +994,7 @@ impl ModelRoutingConfig {
             DispatchRole::Compactor => self.compactor.as_ref(),
             DispatchRole::CoordinatorEval => self.evaluator.as_ref(),
             DispatchRole::Placer => self.placer.as_ref(),
+            DispatchRole::ChatCompactor => self.chat_compactor.as_ref(),
         }
     }
 
@@ -996,6 +1014,7 @@ impl ModelRoutingConfig {
             DispatchRole::Compactor => &mut self.compactor,
             DispatchRole::CoordinatorEval => &mut self.evaluator,
             DispatchRole::Placer => &mut self.placer,
+            DispatchRole::ChatCompactor => &mut self.chat_compactor,
         }
     }
 

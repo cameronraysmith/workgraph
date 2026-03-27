@@ -334,6 +334,26 @@ pub fn run_cleanup(dir: &Path, coordinator_id: u32) -> Result<()> {
     Ok(())
 }
 
+/// Compact chat history into a context summary for a specific coordinator.
+pub fn run_compact(dir: &Path, coordinator_id: u32, json: bool) -> Result<()> {
+    use workgraph::service::chat_compactor;
+
+    let output_path = chat_compactor::run_chat_compaction(dir, coordinator_id)?;
+
+    if json {
+        let result = serde_json::json!({
+            "path": output_path.display().to_string(),
+            "coordinator_id": coordinator_id,
+            "status": "ok",
+        });
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!("Chat compacted → {}", output_path.display());
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -894,6 +894,10 @@ pub enum Commands {
         /// Clean up archived files older than the retention period
         #[arg(long)]
         cleanup: bool,
+
+        /// Compact chat history into a context summary
+        #[arg(long)]
+        compact: bool,
     },
 
     /// Manage resources
