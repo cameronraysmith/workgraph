@@ -876,6 +876,16 @@ pub enum Commands {
         /// Target coordinator ID (default: 0)
         #[arg(long, default_value = "0")]
         coordinator: u32,
+
+        /// Show only the last N messages (with --history) or load only the last N
+        /// messages in interactive mode.
+        #[arg(long, value_name = "N")]
+        history_depth: Option<usize>,
+
+        /// Start with no history loaded. History is still persisted — this only
+        /// affects the initial display.
+        #[arg(long)]
+        no_history: bool,
     },
 
     /// Manage resources
@@ -1467,6 +1477,17 @@ pub enum Commands {
         /// Also enabled by tui.show_keys config.
         #[arg(long)]
         show_keys: bool,
+
+        /// Load only the last N chat messages on startup (overrides default pagination window).
+        /// User can still scroll up to load more.
+        #[arg(long, value_name = "N")]
+        history_depth: Option<usize>,
+
+        /// Start with a clean chat view (no history loaded). History is still
+        /// persisted — this only affects the initial display. Prevents scrollback
+        /// for this session.
+        #[arg(long)]
+        no_history: bool,
     },
 
     /// Dump the current TUI screen contents (requires a running `wg tui`)

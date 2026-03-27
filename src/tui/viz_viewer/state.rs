@@ -3201,6 +3201,10 @@ pub struct VizApp {
     /// Backward-compatible accessor: mutable reference to the active coordinator's chat state.
     /// This field is kept in sync with `coordinator_chats[active_coordinator_id]`.
     pub chat: ChatState,
+    /// CLI override: load only the last N chat messages on startup.
+    pub history_depth_override: Option<usize>,
+    /// CLI flag: start with no history loaded, prevent scrollback for this session.
+    pub no_history: bool,
 
     // ── Agent monitor state ──
     pub agent_monitor: AgentMonitorState,
@@ -3314,6 +3318,10 @@ pub struct VizApp {
     // ── Scrollbar drag state ──
     /// Which scrollbar (if any) is currently being dragged.
     pub scrollbar_drag: Option<ScrollbarDragTarget>,
+    /// Offset between the click column and the actual divider column when a
+    /// divider drag starts.  Applied during Drag events so the divider stays
+    /// anchored to its original position (avoids an integer-rounding jump).
+    pub divider_drag_offset: i16,
     /// Last mouse position during a graph-body drag-to-pan gesture (col, row).
     pub graph_pan_last: Option<(u16, u16)>,
 
@@ -3412,6 +3420,8 @@ impl VizApp {
         workgraph_dir: PathBuf,
         viz_options: VizOptions,
         mouse_override: Option<bool>,
+        history_depth_override: Option<usize>,
+        no_history: bool,
     ) -> Self {
         let mouse_enabled = match mouse_override {
             Some(v) => v,
@@ -3532,6 +3542,8 @@ impl VizApp {
             active_coordinator_id: 0,
             coordinator_chats: HashMap::new(),
             chat: ChatState::default(),
+            history_depth_override,
+            no_history,
             agent_monitor: AgentMonitorState::default(),
             agent_streams: HashMap::new(),
             service_health: ServiceHealthState::default(),
@@ -3570,6 +3582,7 @@ impl VizApp {
             graph_scroll_activity: None,
             panel_scroll_activity: None,
             scrollbar_drag: None,
+            divider_drag_offset: 0,
             graph_pan_last: None,
             last_graph_scrollbar_area: Rect::default(),
             last_panel_scrollbar_area: Rect::default(),
@@ -7137,6 +7150,8 @@ impl VizApp {
             active_coordinator_id: 0,
             coordinator_chats: HashMap::new(),
             chat: ChatState::default(),
+            history_depth_override: None,
+            no_history: false,
             agent_monitor: AgentMonitorState::default(),
             agent_streams: HashMap::new(),
             service_health: ServiceHealthState::default(),
@@ -7172,6 +7187,7 @@ impl VizApp {
             graph_scroll_activity: None,
             panel_scroll_activity: None,
             scrollbar_drag: None,
+            divider_drag_offset: 0,
             graph_pan_last: None,
             last_graph_scrollbar_area: Rect::default(),
             last_panel_scrollbar_area: Rect::default(),
@@ -9055,12 +9071,29 @@ impl VizApp {
     /// Tries the persisted per-coordinator chat-history-{cid}.json first,
     /// then falls back to inbox/outbox.
     pub fn load_chat_history(&mut self) {
+        // --no-history: start with empty chat, prevent scrollback.
+        if self.no_history {
+            self.chat.messages.clear();
+            self.chat.has_more_history = false;
+            self.chat.total_history_count = 0;
+            self.chat.skipped_history_count = 0;
+            // Still set outbox cursor so new messages during this session appear.
+            if let Ok(msgs) = workgraph::chat::read_outbox_since_for(
+                &self.workgraph_dir,
+                self.active_coordinator_id,
+                0,
+            ) {
+                self.chat.outbox_cursor = msgs.last().map(|m| m.id).unwrap_or(0);
+            }
+            return;
+        }
+
         self.load_chat_history_for_coordinator(self.active_coordinator_id);
 
         // Also pre-load persisted chat for all other known coordinators so
         // switch_coordinator doesn't lose history. Use pagination for these too.
         let config = Config::load_or_default(&self.workgraph_dir);
-        let page_size = config.tui.chat_page_size;
+        let page_size = self.history_depth_override.unwrap_or(config.tui.chat_page_size);
         let other_ids: Vec<u32> = self
             .list_coordinator_ids()
             .into_iter()
@@ -9088,7 +9121,7 @@ impl VizApp {
     /// Load chat history for a specific coordinator into self.chat (paginated).
     fn load_chat_history_for_coordinator(&mut self, coordinator_id: u32) {
         let config = Config::load_or_default(&self.workgraph_dir);
-        let page_size = config.tui.chat_page_size;
+        let page_size = self.history_depth_override.unwrap_or(config.tui.chat_page_size);
         let result = load_persisted_chat_history_paginated(&self.workgraph_dir, coordinator_id, page_size);
         if !result.messages.is_empty() {
             self.chat.messages = result.messages;
@@ -9187,7 +9220,7 @@ impl VizApp {
     /// Prepends older messages to the beginning of `self.chat.messages`.
     /// Returns true if new messages were loaded.
     pub fn load_more_chat_history(&mut self) -> bool {
-        if !self.chat.has_more_history {
+        if self.no_history || !self.chat.has_more_history {
             return false;
         }
 
@@ -9701,24 +9734,28 @@ impl VizApp {
             .insert(self.active_coordinator_id, current);
 
         // Load target chat state: try in-memory first, then persisted file (paginated), then default.
-        self.chat = self
-            .coordinator_chats
-            .remove(&target_id)
-            .unwrap_or_else(|| {
-                let config = Config::load_or_default(&self.workgraph_dir);
-                let page_size = config.tui.chat_page_size;
-                let result = load_persisted_chat_history_paginated(&self.workgraph_dir, target_id, page_size);
-                if result.messages.is_empty() {
-                    ChatState::default()
-                } else {
-                    let mut state = ChatState::default();
-                    state.has_more_history = result.has_more;
-                    state.total_history_count = result.total_count;
-                    state.skipped_history_count = result.total_count.saturating_sub(result.messages.len());
-                    state.messages = result.messages;
-                    state
-                }
-            });
+        // --no-history: always start with empty chat for any coordinator.
+        self.chat = if self.no_history {
+            ChatState::default()
+        } else {
+            self.coordinator_chats
+                .remove(&target_id)
+                .unwrap_or_else(|| {
+                    let config = Config::load_or_default(&self.workgraph_dir);
+                    let page_size = self.history_depth_override.unwrap_or(config.tui.chat_page_size);
+                    let result = load_persisted_chat_history_paginated(&self.workgraph_dir, target_id, page_size);
+                    if result.messages.is_empty() {
+                        ChatState::default()
+                    } else {
+                        let mut state = ChatState::default();
+                        state.has_more_history = result.has_more;
+                        state.total_history_count = result.total_count;
+                        state.skipped_history_count = result.total_count.saturating_sub(result.messages.len());
+                        state.messages = result.messages;
+                        state
+                    }
+                })
+        };
 
         // Initialize outbox cursor for newly created chat states so we don't
         // re-display old messages or miss new ones (each coordinator has independent
@@ -14785,6 +14822,8 @@ mod touch_echo_tests {
             tmp.path().to_path_buf(),
             crate::commands::viz::VizOptions::default(),
             Some(true),
+            None,
+            false,
         );
 
         // Disabled by default: adding echo should be a no-op.
@@ -14811,6 +14850,8 @@ mod touch_echo_tests {
             tmp.path().to_path_buf(),
             crate::commands::viz::VizOptions::default(),
             Some(true),
+            None,
+            false,
         );
         app.touch_echo_enabled = true;
 
@@ -14834,6 +14875,8 @@ mod touch_echo_tests {
             tmp.path().to_path_buf(),
             crate::commands::viz::VizOptions::default(),
             Some(true),
+            None,
+            false,
         );
         app.touch_echo_enabled = true;
 
@@ -14863,6 +14906,8 @@ mod touch_echo_tests {
             tmp.path().to_path_buf(),
             crate::commands::viz::VizOptions::default(),
             Some(true),
+            None,
+            false,
         );
 
         // No echoes: false regardless.
@@ -14889,6 +14934,8 @@ mod touch_echo_tests {
             tmp.path().to_path_buf(),
             crate::commands::viz::VizOptions::default(),
             Some(true),
+            None,
+            false,
         );
 
         app.touch_echo_enabled = true;

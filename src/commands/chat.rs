@@ -242,11 +242,15 @@ pub fn run_interactive(dir: &Path, timeout_secs: Option<u64>, coordinator_id: u3
 }
 
 /// Display chat history (interleaved inbox + outbox by timestamp).
-pub fn run_history(dir: &Path, json: bool, coordinator_id: u32) -> Result<()> {
+pub fn run_history(dir: &Path, json: bool, coordinator_id: u32, history_depth: Option<usize>) -> Result<()> {
     let history = chat::read_history_for(dir, coordinator_id)?;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&history)?);
+        let to_serialize = match history_depth {
+            Some(n) => history.into_iter().rev().take(n).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>(),
+            None => history,
+        };
+        println!("{}", serde_json::to_string_pretty(&to_serialize)?);
         return Ok(());
     }
 
@@ -255,7 +259,15 @@ pub fn run_history(dir: &Path, json: bool, coordinator_id: u32) -> Result<()> {
         return Ok(());
     }
 
-    for msg in &history {
+    let display_msgs: &[_] = match history_depth {
+        Some(n) => {
+            let skip = history.len().saturating_sub(n);
+            &history[skip..]
+        }
+        None => &history,
+    };
+
+    for msg in display_msgs {
         // Extract time portion from ISO timestamp for compact display
         let time = if let Some(t_pos) = msg.timestamp.find('T') {
             let time_part = &msg.timestamp[t_pos + 1..];
@@ -327,8 +339,8 @@ mod tests {
     fn test_run_history_empty() {
         let (_tmp, dir) = setup();
         // Should not error on empty history
-        run_history(&dir, false, 0).unwrap();
-        run_history(&dir, true, 0).unwrap();
+        run_history(&dir, false, 0, None).unwrap();
+        run_history(&dir, true, 0, None).unwrap();
     }
 
     #[test]
@@ -339,7 +351,7 @@ mod tests {
         chat::append_outbox(&dir, "hi there", "req-1").unwrap();
 
         // Should not error
-        run_history(&dir, false, 0).unwrap();
+        run_history(&dir, false, 0, None).unwrap();
     }
 
     #[test]
@@ -350,7 +362,7 @@ mod tests {
         chat::append_outbox(&dir, "hi there", "req-1").unwrap();
 
         // Should not error
-        run_history(&dir, true, 0).unwrap();
+        run_history(&dir, true, 0, None).unwrap();
     }
 
     #[test]

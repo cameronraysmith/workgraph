@@ -483,7 +483,7 @@ pub fn run(
         show_internal: true,
         ..VizOptions::default()
     };
-    let mut app = VizApp::new(PathBuf::from(workgraph_dir), viz_options, Some(false));
+    let mut app = VizApp::new(PathBuf::from(workgraph_dir), viz_options, Some(false), None, false);
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend)?;
 

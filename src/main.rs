@@ -555,7 +555,7 @@ fn main() -> Result<()> {
                     max_columns: None, // TUI handles its own sizing
                 };
                 let mouse_override = if no_mouse { Some(false) } else { None };
-                tui::viz_viewer::run(workgraph_dir, options, mouse_override, false, None, false)
+                tui::viz_viewer::run(workgraph_dir, options, mouse_override, false, None, false, None, false)
             } else {
                 let fmt = if dot {
                     commands::viz::OutputFormat::Dot
@@ -998,17 +998,21 @@ fn main() -> Result<()> {
             timeout,
             attachment,
             coordinator,
+            history_depth,
+            no_history,
         } => {
             if clear {
                 commands::chat::run_clear(&workgraph_dir, coordinator)
             } else if history {
-                commands::chat::run_history(&workgraph_dir, cli.json, coordinator)
+                commands::chat::run_history(&workgraph_dir, cli.json, coordinator, history_depth)
             } else if interactive {
                 commands::chat::run_interactive(&workgraph_dir, timeout, coordinator)
             } else if let Some(msg) = message {
+                let _ = no_history; // no_history only affects display, not send
                 commands::chat::run_send(&workgraph_dir, &msg, timeout, &attachment, coordinator)
             } else {
                 // No message and no flags → default to interactive
+                let _ = no_history;
                 commands::chat::run_interactive(&workgraph_dir, timeout, coordinator)
             }
         }
@@ -1952,6 +1956,8 @@ fn main() -> Result<()> {
             recording,
             trace,
             show_keys,
+            history_depth,
+            no_history,
         } => {
             let config = Config::load_or_default(&workgraph_dir);
             let resolved_edge_color = config.viz.edge_color;
@@ -1979,6 +1985,8 @@ fn main() -> Result<()> {
                 recording,
                 trace,
                 show_keys,
+                history_depth,
+                no_history,
             )
         }
         Commands::TuiDump {} => {

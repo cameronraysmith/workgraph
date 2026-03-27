@@ -54,6 +54,8 @@ pub fn run(
     recording: bool,
     trace_path: Option<PathBuf>,
     show_keys: bool,
+    history_depth: Option<usize>,
+    no_history: bool,
 ) -> Result<()> {
     let recording = recording || detect_asciinema();
 
@@ -104,7 +106,7 @@ pub fn run(
         None => None,
     };
 
-    let mut app = VizApp::new(workgraph_dir.clone(), viz_options, effective_mouse);
+    let mut app = VizApp::new(workgraph_dir.clone(), viz_options, effective_mouse, history_depth, no_history);
     app.has_keyboard_enhancement = has_keyboard_enhancement;
     app.tracer = tracer;
     app.key_feedback_enabled = show_keys;
