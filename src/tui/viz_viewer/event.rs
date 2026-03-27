@@ -301,6 +301,7 @@ fn handle_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
     // Dispatch based on input mode
     match &app.input_mode {
         InputMode::Search => handle_search_input(app, code, modifiers),
+        InputMode::ChatSearch => handle_chat_search_input(app, code, modifiers),
         InputMode::TaskForm => handle_task_form_input(app, code, modifiers),
         InputMode::Confirm(_) => handle_confirm_input(app, code),
         InputMode::TextPrompt(_) => handle_text_prompt_input(app, code, modifiers),
@@ -330,6 +331,11 @@ fn handle_paste(app: &mut VizApp, text: &str) {
             let clean: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
             app.search_input.push_str(&clean);
             app.update_search();
+        }
+        InputMode::ChatSearch => {
+            let clean: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
+            app.chat.search.query.push_str(&clean);
+            app.update_chat_search();
         }
         InputMode::TextPrompt(_action) => {
             super::state::paste_insert_mode(text, &mut app.text_prompt.editor);
@@ -419,6 +425,53 @@ fn handle_search_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers)
         KeyCode::Down => {
             app.record_graph_scroll_activity();
             app.scroll.scroll_down(1);
+        }
+        _ => {}
+    }
+}
+
+fn handle_chat_search_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
+    match code {
+        KeyCode::Esc => {
+            app.clear_chat_search();
+            app.input_mode = InputMode::Normal;
+        }
+        KeyCode::Enter => {
+            // Accept search — keep highlights, return to normal mode.
+            // n/N will still navigate matches.
+            app.input_mode = InputMode::Normal;
+        }
+        KeyCode::Backspace | KeyCode::Delete => {
+            app.chat.search.query.pop();
+            app.update_chat_search();
+        }
+        KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
+            app.chat.search.query.clear();
+            app.update_chat_search();
+        }
+        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+            app.clear_chat_search();
+            app.input_mode = InputMode::Normal;
+        }
+        KeyCode::Char('n') if modifiers.contains(KeyModifiers::CONTROL) => {
+            app.chat_search_next();
+        }
+        KeyCode::Char('p') if modifiers.contains(KeyModifiers::CONTROL) => {
+            app.chat_search_prev();
+        }
+        KeyCode::Tab => {
+            app.chat_search_next();
+        }
+        KeyCode::BackTab => {
+            app.chat_search_prev();
+        }
+        KeyCode::Char('a') if modifiers.contains(KeyModifiers::CONTROL) => {
+            // Ctrl+A: search all history (load unloaded pages).
+            app.chat_search_load_all_history();
+        }
+        KeyCode::Char(c) => {
+            app.chat.search.query.push(c);
+            app.update_chat_search();
         }
         _ => {}
     }
@@ -1490,9 +1543,15 @@ fn handle_right_panel_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
             app.shrink_viz_pane();
         }
 
-        // Esc: pop nav stack if non-empty, otherwise go back to graph focus
+        // Esc: clear chat search results first, then pop nav stack, otherwise go back to graph focus
         KeyCode::Esc => {
-            nav_stack_pop(app);
+            if !app.chat.search.query.is_empty()
+                && app.right_panel_tab == RightPanelTab::Chat
+            {
+                app.clear_chat_search();
+            } else {
+                nav_stack_pop(app);
+            }
         }
 
         // Number keys 0-9 switch tabs (clears nav stack — manual navigation)
@@ -1841,6 +1900,34 @@ fn handle_right_panel_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
         // Detail tab: Space toggles section collapse at current scroll position
         KeyCode::Char(' ') if app.right_panel_tab == RightPanelTab::Detail => {
             app.toggle_detail_section_at_scroll();
+        }
+
+        // Chat tab: '/' opens in-chat search, Ctrl+F also works
+        KeyCode::Char('/') if app.right_panel_tab == RightPanelTab::Chat => {
+            app.chat.search.query.clear();
+            app.chat.search.matches.clear();
+            app.chat.search.current_match = None;
+            app.input_mode = InputMode::ChatSearch;
+        }
+        KeyCode::Char('f') if modifiers.contains(KeyModifiers::CONTROL)
+            && app.right_panel_tab == RightPanelTab::Chat =>
+        {
+            app.chat.search.query.clear();
+            app.chat.search.matches.clear();
+            app.chat.search.current_match = None;
+            app.input_mode = InputMode::ChatSearch;
+        }
+
+        // Chat tab: 'n' / 'N' navigate between search matches (after search accepted)
+        KeyCode::Char('n') if app.right_panel_tab == RightPanelTab::Chat
+            && !app.chat.search.matches.is_empty() =>
+        {
+            app.chat_search_next();
+        }
+        KeyCode::Char('N') if app.right_panel_tab == RightPanelTab::Chat
+            && !app.chat.search.matches.is_empty() =>
+        {
+            app.chat_search_prev();
         }
 
         _ => {}

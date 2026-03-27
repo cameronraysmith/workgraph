@@ -809,6 +809,8 @@ pub enum InputMode {
     ChoiceDialog(ChoiceDialogState),
     /// Config panel text editing mode.
     ConfigEdit,
+    /// Chat search mode (/ key in chat tab). Keys go to chat search input.
+    ChatSearch,
 }
 
 /// What action the confirmation dialog is for.
@@ -1018,6 +1020,42 @@ pub struct ChatState {
     /// Number of messages at the start of the history file that are NOT in memory.
     /// Used by save to preserve unloaded older messages.
     pub skipped_history_count: usize,
+    /// In-chat search state.
+    pub search: ChatSearchState,
+}
+
+/// State for in-chat search (/ key when chat tab is focused).
+#[derive(Clone, Debug)]
+pub struct ChatSearchState {
+    /// The current search query.
+    pub query: String,
+    /// Matches: (message_index, byte_offset_in_text) pairs.
+    pub matches: Vec<ChatSearchMatch>,
+    /// Index into `matches` for the currently focused match.
+    pub current_match: Option<usize>,
+}
+
+/// A single match in the chat search results.
+#[derive(Clone, Debug)]
+pub struct ChatSearchMatch {
+    /// Index into `ChatState::messages`.
+    pub message_idx: usize,
+    /// Byte offset of the match start within the message text.
+    #[allow(dead_code)]
+    pub byte_offset: usize,
+    /// Length of the matched text in bytes.
+    #[allow(dead_code)]
+    pub match_len: usize,
+}
+
+impl Default for ChatSearchState {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            matches: Vec::new(),
+            current_match: None,
+        }
+    }
 }
 
 impl Default for ChatState {
@@ -1045,6 +1083,7 @@ impl Default for ChatState {
             has_more_history: false,
             total_history_count: 0,
             skipped_history_count: 0,
+            search: ChatSearchState::default(),
         }
     }
 }
@@ -4662,6 +4701,146 @@ impl VizApp {
             }
         } else {
             self.current_match = None;
+        }
+    }
+
+    // ── Chat search ──
+
+    /// Update chat search results after query changes.
+    /// Performs case-insensitive substring matching across all loaded messages.
+    pub fn update_chat_search(&mut self) {
+        let query = self.chat.search.query.to_lowercase();
+        self.chat.search.matches.clear();
+        self.chat.search.current_match = None;
+
+        if query.is_empty() {
+            return;
+        }
+
+        for (msg_idx, msg) in self.chat.messages.iter().enumerate() {
+            let text_lower = msg.text.to_lowercase();
+            let mut start = 0;
+            while let Some(pos) = text_lower[start..].find(&query) {
+                let byte_offset = start + pos;
+                self.chat.search.matches.push(ChatSearchMatch {
+                    message_idx: msg_idx,
+                    byte_offset,
+                    match_len: query.len(),
+                });
+                start = byte_offset + 1;
+                if start >= text_lower.len() {
+                    break;
+                }
+            }
+        }
+
+        if !self.chat.search.matches.is_empty() {
+            self.chat.search.current_match = Some(0);
+            self.scroll_chat_to_search_match();
+        }
+    }
+
+    /// Navigate to the next chat search match.
+    pub fn chat_search_next(&mut self) {
+        if self.chat.search.matches.is_empty() {
+            return;
+        }
+        let next = match self.chat.search.current_match {
+            Some(idx) => (idx + 1) % self.chat.search.matches.len(),
+            None => 0,
+        };
+        self.chat.search.current_match = Some(next);
+        self.scroll_chat_to_search_match();
+    }
+
+    /// Navigate to the previous chat search match.
+    pub fn chat_search_prev(&mut self) {
+        if self.chat.search.matches.is_empty() {
+            return;
+        }
+        let prev = match self.chat.search.current_match {
+            Some(0) => self.chat.search.matches.len() - 1,
+            Some(idx) => idx - 1,
+            None => self.chat.search.matches.len() - 1,
+        };
+        self.chat.search.current_match = Some(prev);
+        self.scroll_chat_to_search_match();
+    }
+
+    /// Scroll the chat view so the current search match is visible.
+    fn scroll_chat_to_search_match(&mut self) {
+        let match_idx = match self.chat.search.current_match {
+            Some(idx) => idx,
+            None => return,
+        };
+        let m = match self.chat.search.matches.get(match_idx) {
+            Some(m) => m.clone(),
+            None => return,
+        };
+
+        // Find the rendered line that corresponds to this message index.
+        // We use the line_to_message mapping (set each frame by renderer).
+        // If the message is before the loaded range, try to load more history.
+        if m.message_idx >= self.chat.messages.len() {
+            return;
+        }
+
+        // Find any rendered line for this message.
+        let target_line = self
+            .chat
+            .line_to_message
+            .iter()
+            .position(|opt| *opt == Some(m.message_idx));
+
+        if let Some(line_idx) = target_line {
+            // Convert line_idx to the scroll-from-bottom coordinate used by chat.
+            let total = self.chat.total_rendered_lines;
+            let viewport = self.chat.viewport_height.max(1);
+            if total > viewport {
+                let max_scroll = total.saturating_sub(viewport);
+                // Desired scroll_from_top to center this line.
+                let desired_top = line_idx.saturating_sub(viewport / 2);
+                let clamped_top = desired_top.min(max_scroll);
+                // Convert to scroll-from-bottom.
+                self.chat.scroll = max_scroll.saturating_sub(clamped_top);
+            }
+        }
+    }
+
+    /// Clear chat search state.
+    pub fn clear_chat_search(&mut self) {
+        self.chat.search.query.clear();
+        self.chat.search.matches.clear();
+        self.chat.search.current_match = None;
+    }
+
+    /// Search through on-disk history pages that haven't been loaded yet.
+    /// Loads pages until a match is found or all history is loaded.
+    pub fn chat_search_load_all_history(&mut self) {
+        while self.chat.has_more_history {
+            if !self.load_more_chat_history() {
+                break;
+            }
+        }
+        // Re-run the search with all messages now loaded.
+        self.update_chat_search();
+    }
+
+    /// Return a human-readable chat search status string for the search bar.
+    #[allow(dead_code)]
+    pub fn chat_search_status(&self) -> String {
+        if self.chat.search.query.is_empty() {
+            "/".to_string()
+        } else if self.chat.search.matches.is_empty() {
+            format!("/{} [no matches]", self.chat.search.query)
+        } else {
+            let idx = self.chat.search.current_match.unwrap_or(0);
+            format!(
+                "/{} [{}/{}]",
+                self.chat.search.query,
+                idx + 1,
+                self.chat.search.matches.len()
+            )
         }
     }
 

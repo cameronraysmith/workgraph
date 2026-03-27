@@ -2382,7 +2382,11 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     } else {
         1
     };
-    let msg_area_height = area.height.saturating_sub(input_height);
+    // Reserve 1 line for the search bar when searching or showing results.
+    let chat_search_active = app.input_mode == InputMode::ChatSearch
+        || !app.chat.search.query.is_empty();
+    let search_bar_height: u16 = if chat_search_active { 1 } else { 0 };
+    let msg_area_height = area.height.saturating_sub(input_height).saturating_sub(search_bar_height);
 
     // Coordinator tab bar — always visible so the user can discover [+] even with 1 coordinator
     let coordinator_entries = app.list_coordinator_ids_and_labels();
@@ -2544,9 +2548,15 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         width: area.width,
         height: msg_area_height.saturating_sub(tab_bar_height),
     };
-    let input_area = Rect {
+    let search_bar_area = Rect {
         x: area.x,
         y: area.y + tab_bar_height + msg_area.height,
+        width: area.width,
+        height: search_bar_height,
+    };
+    let input_area = Rect {
+        x: area.x,
+        y: search_bar_area.y + search_bar_height,
         width: area.width,
         height: input_height,
     };
@@ -2600,6 +2610,9 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         };
         let msg = Paragraph::new(lines);
         frame.render_widget(msg, msg_area);
+        if chat_search_active && search_bar_area.height > 0 {
+            draw_chat_search_bar(frame, app, search_bar_area);
+        }
         draw_chat_input(frame, app, input_area);
         return;
     }
@@ -3060,7 +3073,26 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     app.chat.scroll_from_top = scroll_from_top;
 
     let end = (scroll_from_top + viewport_h).min(total_lines);
-    let visible_lines: Vec<Line> = rendered_lines[scroll_from_top..end].to_vec();
+    let mut visible_lines: Vec<Line> = rendered_lines[scroll_from_top..end].to_vec();
+
+    // Apply search highlights to visible lines.
+    if !app.chat.search.query.is_empty() && !app.chat.search.matches.is_empty() {
+        let query_lower = app.chat.search.query.to_lowercase();
+        let current_msg_idx = app.chat.search.current_match
+            .and_then(|idx| app.chat.search.matches.get(idx))
+            .map(|m| m.message_idx);
+        let highlight_bg = Color::Rgb(80, 80, 0); // yellow-ish highlight for matches
+        let current_bg = Color::Rgb(180, 120, 0); // brighter for current match
+
+        for (line_idx, line) in visible_lines.iter_mut().enumerate() {
+            let global_line_idx = scroll_from_top + line_idx;
+            if let Some(Some(_msg_idx)) = app.chat.line_to_message.get(global_line_idx) {
+                let is_current_msg = current_msg_idx == Some(*_msg_idx);
+                let bg = if is_current_msg { current_bg } else { highlight_bg };
+                *line = highlight_query_in_line(line.clone(), &query_lower, bg);
+            }
+        }
+    }
 
     let paragraph = Paragraph::new(visible_lines);
     frame.render_widget(paragraph, msg_area);
@@ -3100,8 +3132,53 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
         );
     }
 
+    // Search bar (between messages and input).
+    if chat_search_active && search_bar_area.height > 0 {
+        draw_chat_search_bar(frame, app, search_bar_area);
+    }
+
     // Input area.
     draw_chat_input(frame, app, input_area);
+}
+
+/// Draw the chat search bar showing the current query and match count.
+fn draw_chat_search_bar(frame: &mut Frame, app: &VizApp, area: Rect) {
+    let is_active = app.input_mode == InputMode::ChatSearch;
+    let color = if is_active { Color::Cyan } else { Color::DarkGray };
+    let mut spans = vec![
+        Span::styled("/ ", Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            app.chat.search.query.clone(),
+            Style::default().fg(Color::White),
+        ),
+    ];
+    if !app.chat.search.query.is_empty() {
+        let match_info = if app.chat.search.matches.is_empty() {
+            " [no matches]".to_string()
+        } else {
+            let idx = app.chat.search.current_match.unwrap_or(0);
+            format!(" [{}/{}]", idx + 1, app.chat.search.matches.len())
+        };
+        spans.push(Span::styled(match_info, Style::default().fg(Color::DarkGray)));
+    }
+    if is_active && app.chat.search.query.is_empty() {
+        spans.push(Span::styled(
+            "type to search...",
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    // Cursor indicator when actively typing.
+    if is_active {
+        spans.push(Span::styled("█", Style::default().fg(color)));
+    }
+    let line = Line::from(spans);
+    let bg = if is_active {
+        Color::Rgb(20, 30, 40)
+    } else {
+        Color::Rgb(15, 15, 20)
+    };
+    let paragraph = Paragraph::new(vec![line]).style(Style::default().bg(bg));
+    frame.render_widget(paragraph, area);
 }
 
 /// Draw the chat input line at the bottom of the chat panel.
@@ -5091,6 +5168,54 @@ fn draw_message_input(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     }
 }
 
+/// Highlight all occurrences of `query_lower` (already lowercased) in a Line
+/// by splitting spans and applying `bg` to matching regions.
+fn highlight_query_in_line<'a>(line: Line<'a>, query_lower: &str, bg: Color) -> Line<'a> {
+    if query_lower.is_empty() {
+        return line;
+    }
+    let mut new_spans: Vec<Span<'a>> = Vec::new();
+    for span in line.spans {
+        let text = span.content.as_ref();
+        let text_lower = text.to_lowercase();
+        let mut last = 0;
+        let mut found = false;
+        let mut start = 0;
+        while start < text_lower.len() {
+            if let Some(pos) = text_lower[start..].find(query_lower) {
+                found = true;
+                let abs_pos = start + pos;
+                // Text before the match.
+                if abs_pos > last {
+                    new_spans.push(Span::styled(
+                        text[last..abs_pos].to_string(),
+                        span.style,
+                    ));
+                }
+                // The match itself.
+                let match_end = abs_pos + query_lower.len();
+                let match_end = match_end.min(text.len());
+                new_spans.push(Span::styled(
+                    text[abs_pos..match_end].to_string(),
+                    span.style.bg(bg).add_modifier(Modifier::BOLD),
+                ));
+                last = match_end;
+                start = match_end;
+            } else {
+                break;
+            }
+        }
+        if found {
+            if last < text.len() {
+                new_spans.push(Span::styled(text[last..].to_string(), span.style));
+            }
+        } else {
+            new_spans.push(span);
+        }
+    }
+    Line::from(new_spans)
+}
+
 /// Simple word-wrap: break text into lines that fit within `max_width` display columns.
 /// Words longer than `max_width` are hard-broken across multiple lines.
 /// Uses display width (UnicodeWidthStr) so wide characters are accounted for correctly.
@@ -6273,6 +6398,18 @@ fn action_hints_parts(app: &VizApp) -> (&str, &str, Color, Vec<(&str, &str)>) {
                 ("S-Tab", "prev"),
                 ("Enter", "go"),
                 ("Esc", "cancel"),
+            ],
+        ),
+        InputMode::ChatSearch => (
+            "0:Chat",
+            "SEARCH",
+            Color::Cyan,
+            vec![
+                ("Tab", "next"),
+                ("S-Tab", "prev"),
+                ("Enter", "accept"),
+                ("Esc", "cancel"),
+                ("C-a", "all history"),
             ],
         ),
         InputMode::ChatInput => {
