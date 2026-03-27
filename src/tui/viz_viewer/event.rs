@@ -2271,7 +2271,26 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
             } else if in_fullscreen_restore {
                 // Click on full-screen restore strip: transition to normal split
                 // and start divider drag so user can fine-tune position.
-                app.restore_from_extreme();
+                // Compute initial percent from the mouse column so the divider
+                // appears at the click location (no visual jump).
+                app.right_panel_visible = true;
+                let total_width = {
+                    let restore_w = app.last_fullscreen_restore_area.width;
+                    let right_w = app.last_fullscreen_right_border_area.width;
+                    app.last_right_panel_area.width + restore_w + right_w
+                }
+                .max(1);
+                let left_x = app.last_fullscreen_restore_area.x;
+                let right_edge = left_x + total_width;
+                let panel_width = right_edge.saturating_sub(column);
+                let pct =
+                    ((panel_width as u32 * 100) / total_width as u32).clamp(1, 99) as u16;
+                app.right_panel_percent = pct;
+                app.layout_mode = super::state::VizApp::layout_mode_for_percent(pct);
+                if pct > 0 && pct < 100 {
+                    app.last_split_percent = pct;
+                    app.last_split_mode = app.layout_mode;
+                }
                 app.scrollbar_drag = Some(ScrollbarDragTarget::Divider);
             } else if in_fullscreen_right || in_fullscreen_top || in_fullscreen_bottom {
                 // Click on any fullscreen border: restore to normal split.
