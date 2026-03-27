@@ -15608,3 +15608,875 @@ mod vitals_tests {
         assert!(s.contains("last event 10m ago"), "got: {}", s);
     }
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TUI chat end-to-end persistence tests
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tui_chat_tests {
+    use super::*;
+    use std::collections::{HashMap, HashSet};
+    use tempfile::TempDir;
+    use workgraph::graph::{Node, Status, WorkGraph};
+    use workgraph::parser::save_graph;
+    use workgraph::test_helpers::make_task_with_status;
+
+    use crate::commands::viz::ascii::generate_ascii;
+    use crate::commands::viz::{LayoutMode as VizLayoutMode, VizOutput};
+
+    // ── helpers ──
+
+    /// Create a minimal workgraph with coordinator tasks so list_coordinator_ids works.
+    fn setup_workgraph_with_coordinators(
+        tmp: &TempDir,
+        coordinator_ids: &[u32],
+    ) -> (VizOutput, std::path::PathBuf) {
+        let mut graph = WorkGraph::new();
+
+        // Create a coordinator task for each requested ID.
+        for &cid in coordinator_ids {
+            let id = if cid == 0 {
+                ".coordinator".to_string()
+            } else {
+                format!(".coordinator-{}", cid)
+            };
+            let title = format!("Coordinator {}", cid);
+            let mut task = make_task_with_status(&id, &title, Status::InProgress);
+            task.tags = vec!["coordinator-loop".to_string()];
+            graph.add_node(Node::Task(task));
+        }
+
+        // Also add a regular task for interleaving tests.
+        let regular = make_task_with_status("test-task", "Test Task", Status::InProgress);
+        graph.add_node(Node::Task(regular));
+
+        let wg_dir = tmp.path().join(".workgraph");
+        std::fs::create_dir_all(&wg_dir).unwrap();
+        let graph_path = wg_dir.join("graph.jsonl");
+        save_graph(&graph, &graph_path).unwrap();
+
+        // Also write a config.toml so chat_history is enabled.
+        let config_path = wg_dir.join("config.toml");
+        std::fs::write(&config_path, "[tui]\nchat_history = true\nchat_history_max = 1000\n")
+            .unwrap();
+
+        let tasks: Vec<_> = graph.tasks().collect();
+        let task_ids: HashSet<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
+        let viz = generate_ascii(
+            &graph,
+            &tasks,
+            &task_ids,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            VizLayoutMode::Tree,
+            &HashSet::new(),
+            "gray",
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        (viz, wg_dir)
+    }
+
+    fn build_test_app(viz: &VizOutput, wg_dir: &std::path::Path) -> VizApp {
+        let mut app = VizApp::from_viz_output_for_test(viz);
+        app.workgraph_dir = wg_dir.to_path_buf();
+        app
+    }
+
+    fn make_chat_message(role: ChatRole, text: &str) -> ChatMessage {
+        ChatMessage {
+            role,
+            text: text.to_string(),
+            full_text: None,
+            attachments: vec![],
+            edited: false,
+            inbox_id: None,
+            user: Some("test-user".to_string()),
+            target_task: None,
+            msg_timestamp: Some(chrono::Utc::now().to_rfc3339()),
+            read_at: None,
+            msg_queue_id: None,
+        }
+    }
+
+    fn make_chat_message_with_ts(role: ChatRole, text: &str, ts: &str) -> ChatMessage {
+        ChatMessage {
+            role,
+            text: text.to_string(),
+            full_text: None,
+            attachments: vec![],
+            edited: false,
+            inbox_id: None,
+            user: Some("test-user".to_string()),
+            target_task: None,
+            msg_timestamp: Some(ts.to_string()),
+            read_at: None,
+            msg_queue_id: None,
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Scenario 1: Persistence round-trip
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn chat_persistence_round_trip_basic() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        // Simulate: open TUI, send messages
+        let mut app = build_test_app(&viz, &wg_dir);
+        app.chat.messages.push(make_chat_message(ChatRole::User, "Hello coordinator!"));
+        app.chat
+            .messages
+            .push(make_chat_message(ChatRole::Coordinator, "Hi there, how can I help?"));
+        app.chat
+            .messages
+            .push(make_chat_message(ChatRole::User, "Please build a feature."));
+
+        // Simulate: close TUI (saves all state)
+        app.save_all_chat_state();
+
+        // Simulate: reopen TUI (new app, loads history)
+        let mut app2 = build_test_app(&viz, &wg_dir);
+        app2.load_chat_history();
+
+        // Verify all messages are present and intact
+        assert_eq!(app2.chat.messages.len(), 3, "Should have 3 messages after reload");
+        assert_eq!(app2.chat.messages[0].text, "Hello coordinator!");
+        assert!(matches!(app2.chat.messages[0].role, ChatRole::User));
+        assert_eq!(app2.chat.messages[1].text, "Hi there, how can I help?");
+        assert!(matches!(app2.chat.messages[1].role, ChatRole::Coordinator));
+        assert_eq!(app2.chat.messages[2].text, "Please build a feature.");
+        assert!(matches!(app2.chat.messages[2].role, ChatRole::User));
+    }
+
+    #[test]
+    fn chat_persistence_preserves_sent_message_fields() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        let mut app = build_test_app(&viz, &wg_dir);
+
+        // Add a SentMessage with all metadata fields
+        let mut sent = make_chat_message(ChatRole::SentMessage, "Check this task");
+        sent.target_task = Some("task-xyz".to_string());
+        sent.msg_timestamp = Some("2026-03-27T10:00:00Z".to_string());
+        sent.read_at = Some("2026-03-27T10:01:00Z".to_string());
+        sent.msg_queue_id = Some(42);
+        app.chat.messages.push(sent);
+
+        app.save_all_chat_state();
+
+        let mut app2 = build_test_app(&viz, &wg_dir);
+        app2.load_chat_history();
+
+        assert_eq!(app2.chat.messages.len(), 1);
+        let m = &app2.chat.messages[0];
+        assert!(matches!(m.role, ChatRole::SentMessage));
+        assert_eq!(m.text, "Check this task");
+        assert_eq!(m.target_task.as_deref(), Some("task-xyz"));
+        assert_eq!(m.msg_timestamp.as_deref(), Some("2026-03-27T10:00:00Z"));
+        assert_eq!(m.read_at.as_deref(), Some("2026-03-27T10:01:00Z"));
+        assert_eq!(m.msg_queue_id, Some(42));
+    }
+
+    #[test]
+    fn chat_persistence_respects_max_history() {
+        let tmp = TempDir::new().unwrap();
+        let (_, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        // Override config with very small max
+        let config_path = wg_dir.join("config.toml");
+        std::fs::write(&config_path, "[tui]\nchat_history = true\nchat_history_max = 3\n").unwrap();
+
+        // Save 5 messages
+        let messages: Vec<ChatMessage> = (0..5)
+            .map(|i| make_chat_message(ChatRole::User, &format!("message {}", i)))
+            .collect();
+
+        save_chat_history(&wg_dir, 0, &messages);
+
+        // Load back: should only have the last 3
+        let loaded = load_persisted_chat_history(&wg_dir, 0);
+        assert_eq!(loaded.len(), 3);
+        assert_eq!(loaded[0].text, "message 2");
+        assert_eq!(loaded[1].text, "message 3");
+        assert_eq!(loaded[2].text, "message 4");
+    }
+
+    #[test]
+    fn chat_persistence_disabled_returns_empty() {
+        let tmp = TempDir::new().unwrap();
+        let (_, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        // Disable chat history
+        let config_path = wg_dir.join("config.toml");
+        std::fs::write(&config_path, "[tui]\nchat_history = false\n").unwrap();
+
+        let messages = vec![make_chat_message(ChatRole::User, "should not persist")];
+        save_chat_history(&wg_dir, 0, &messages);
+
+        let loaded = load_persisted_chat_history(&wg_dir, 0);
+        assert!(loaded.is_empty(), "Should return empty when chat_history is disabled");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Scenario 2: Focus restore
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn tui_focus_restore_coordinator_id() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0, 1, 2]);
+
+        // Simulate: user switches to coordinator 2, then closes TUI
+        let mut app = build_test_app(&viz, &wg_dir);
+        app.active_coordinator_id = 2;
+        app.right_panel_tab = RightPanelTab::Chat;
+        app.save_all_chat_state();
+
+        // Simulate: reopen TUI
+        let mut app2 = build_test_app(&viz, &wg_dir);
+        app2.restore_tui_state();
+
+        assert_eq!(
+            app2.active_coordinator_id, 2,
+            "Should restore to coordinator 2"
+        );
+        assert_eq!(
+            app2.right_panel_tab,
+            RightPanelTab::Chat,
+            "Should restore Chat tab"
+        );
+    }
+
+    #[test]
+    fn tui_focus_restore_falls_back_when_coordinator_gone() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0, 1]);
+
+        // Persist state pointing to coordinator 5 which doesn't exist in graph
+        save_tui_state(&wg_dir, 5, &RightPanelTab::Chat);
+
+        let mut app = build_test_app(&viz, &wg_dir);
+        app.restore_tui_state();
+
+        // Should not change from default 0 since coordinator 5 is not in the graph
+        assert_eq!(
+            app.active_coordinator_id, 0,
+            "Should not restore to non-existent coordinator"
+        );
+    }
+
+    #[test]
+    fn tui_focus_restore_different_tabs() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        // Save with Log tab active
+        save_tui_state(&wg_dir, 0, &RightPanelTab::Log);
+
+        let mut app = build_test_app(&viz, &wg_dir);
+        app.restore_tui_state();
+
+        assert_eq!(app.right_panel_tab, RightPanelTab::Log);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Scenario 3: Message interleaving
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn chat_interleaving_inserts_at_correct_position() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        let mut app = build_test_app(&viz, &wg_dir);
+
+        // Simulate existing chat messages with known timestamps
+        app.chat.messages.push(make_chat_message_with_ts(
+            ChatRole::User,
+            "first user msg",
+            "2026-03-27T10:00:00Z",
+        ));
+        app.chat.messages.push(make_chat_message_with_ts(
+            ChatRole::Coordinator,
+            "first coord response",
+            "2026-03-27T10:01:00Z",
+        ));
+        app.chat.messages.push(make_chat_message_with_ts(
+            ChatRole::User,
+            "second user msg",
+            "2026-03-27T10:05:00Z",
+        ));
+        app.chat.messages.push(make_chat_message_with_ts(
+            ChatRole::Coordinator,
+            "second coord response",
+            "2026-03-27T10:06:00Z",
+        ));
+
+        // Create a message file for test-task with a read message
+        // that was read at 10:03 (between first response and second user msg)
+        let msg_dir = wg_dir.join("messages");
+        std::fs::create_dir_all(&msg_dir).unwrap();
+        let msg_file = msg_dir.join("test-task.jsonl");
+        let msg_json = serde_json::json!({
+            "id": 1,
+            "timestamp": "2026-03-27T10:02:00Z",
+            "sender": "user",
+            "body": "hey agent, check this",
+            "priority": "normal",
+            "status": "read",
+            "read_at": "2026-03-27T10:03:00Z"
+        });
+        std::fs::write(&msg_file, format!("{}\n", msg_json)).unwrap();
+
+        // Poll for interleaved messages
+        app.poll_interleaved_messages();
+
+        // The interleaved message should appear after the coordinator response at 10:01
+        // and before the user message at 10:05 (based on read_at of 10:03)
+        assert_eq!(app.chat.messages.len(), 5, "Should have 5 messages total");
+        assert_eq!(app.chat.messages[2].text, "hey agent, check this");
+        assert!(matches!(app.chat.messages[2].role, ChatRole::SentMessage));
+        assert_eq!(
+            app.chat.messages[2].target_task.as_deref(),
+            Some("test-task")
+        );
+    }
+
+    #[test]
+    fn chat_interleaving_deduplicates_on_repoll() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        let mut app = build_test_app(&viz, &wg_dir);
+        app.chat.messages.push(make_chat_message_with_ts(
+            ChatRole::User,
+            "hello",
+            "2026-03-27T10:00:00Z",
+        ));
+
+        // Create message file
+        let msg_dir = wg_dir.join("messages");
+        std::fs::create_dir_all(&msg_dir).unwrap();
+        let msg_file = msg_dir.join("test-task.jsonl");
+        let msg_json = serde_json::json!({
+            "id": 1,
+            "timestamp": "2026-03-27T10:01:00Z",
+            "sender": "user",
+            "body": "interleaved msg",
+            "priority": "normal",
+            "status": "read",
+            "read_at": "2026-03-27T10:02:00Z"
+        });
+        std::fs::write(&msg_file, format!("{}\n", msg_json)).unwrap();
+
+        // Poll twice
+        app.poll_interleaved_messages();
+        app.poll_interleaved_messages();
+
+        // Should only appear once (dedup by task_id + msg_queue_id)
+        let sent_count = app
+            .chat
+            .messages
+            .iter()
+            .filter(|m| matches!(m.role, ChatRole::SentMessage))
+            .count();
+        assert_eq!(sent_count, 1, "Should not duplicate interleaved messages");
+    }
+
+    #[test]
+    fn chat_interleaving_skips_unread_messages() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        let mut app = build_test_app(&viz, &wg_dir);
+        app.chat
+            .messages
+            .push(make_chat_message(ChatRole::User, "hi"));
+
+        // Create a message with status "sent" (not yet read by agent)
+        let msg_dir = wg_dir.join("messages");
+        std::fs::create_dir_all(&msg_dir).unwrap();
+        let msg_file = msg_dir.join("test-task.jsonl");
+        let msg_json = serde_json::json!({
+            "id": 1,
+            "timestamp": "2026-03-27T10:00:00Z",
+            "sender": "user",
+            "body": "not yet read",
+            "priority": "normal",
+            "status": "sent"
+        });
+        std::fs::write(&msg_file, format!("{}\n", msg_json)).unwrap();
+
+        app.poll_interleaved_messages();
+
+        // Should NOT appear — only read/acknowledged messages are interleaved
+        let sent_count = app
+            .chat
+            .messages
+            .iter()
+            .filter(|m| matches!(m.role, ChatRole::SentMessage))
+            .count();
+        assert_eq!(sent_count, 0, "Unread messages should not be interleaved");
+    }
+
+    #[test]
+    fn chat_interleaving_skips_agent_sent_messages() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        let mut app = build_test_app(&viz, &wg_dir);
+        app.chat
+            .messages
+            .push(make_chat_message(ChatRole::User, "hi"));
+
+        // Create a message sent BY an agent (not from user/tui/coordinator)
+        let msg_dir = wg_dir.join("messages");
+        std::fs::create_dir_all(&msg_dir).unwrap();
+        let msg_file = msg_dir.join("test-task.jsonl");
+        let msg_json = serde_json::json!({
+            "id": 1,
+            "timestamp": "2026-03-27T10:00:00Z",
+            "sender": "agent-123",
+            "body": "agent reply",
+            "priority": "normal",
+            "status": "read",
+            "read_at": "2026-03-27T10:01:00Z"
+        });
+        std::fs::write(&msg_file, format!("{}\n", msg_json)).unwrap();
+
+        app.poll_interleaved_messages();
+
+        let sent_count = app
+            .chat
+            .messages
+            .iter()
+            .filter(|m| matches!(m.role, ChatRole::SentMessage))
+            .count();
+        assert_eq!(sent_count, 0, "Agent-sent messages should not be interleaved");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Scenario 4: Multiple coordinators
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn multi_coordinator_independent_chat_persistence() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0, 1, 2]);
+
+        let mut app = build_test_app(&viz, &wg_dir);
+
+        // Send messages in coordinator 0
+        app.active_coordinator_id = 0;
+        app.chat.messages.push(make_chat_message(ChatRole::User, "msg in coord 0"));
+        app.chat
+            .messages
+            .push(make_chat_message(ChatRole::Coordinator, "response from coord 0"));
+
+        // Switch to coordinator 1 and send messages
+        app.switch_coordinator(1);
+        app.chat.messages.push(make_chat_message(ChatRole::User, "msg in coord 1"));
+
+        // Switch to coordinator 2 and send messages
+        app.switch_coordinator(2);
+        app.chat
+            .messages
+            .push(make_chat_message(ChatRole::User, "msg in coord 2 - A"));
+        app.chat
+            .messages
+            .push(make_chat_message(ChatRole::User, "msg in coord 2 - B"));
+
+        // Close TUI
+        app.save_all_chat_state();
+
+        // Reopen TUI
+        let mut app2 = build_test_app(&viz, &wg_dir);
+        app2.active_coordinator_id = 0;
+        app2.load_chat_history();
+
+        // Coordinator 0 should have 2 messages
+        assert_eq!(app2.chat.messages.len(), 2, "Coord 0 should have 2 msgs");
+        assert_eq!(app2.chat.messages[0].text, "msg in coord 0");
+        assert_eq!(app2.chat.messages[1].text, "response from coord 0");
+
+        // Switch to coordinator 1
+        app2.switch_coordinator(1);
+        assert_eq!(app2.chat.messages.len(), 1, "Coord 1 should have 1 msg");
+        assert_eq!(app2.chat.messages[0].text, "msg in coord 1");
+
+        // Switch to coordinator 2
+        app2.switch_coordinator(2);
+        assert_eq!(app2.chat.messages.len(), 2, "Coord 2 should have 2 msgs");
+        assert_eq!(app2.chat.messages[0].text, "msg in coord 2 - A");
+        assert_eq!(app2.chat.messages[1].text, "msg in coord 2 - B");
+    }
+
+    #[test]
+    fn multi_coordinator_switch_preserves_in_memory_state() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0, 1]);
+
+        let mut app = build_test_app(&viz, &wg_dir);
+
+        // Add messages to coordinator 0
+        app.chat.messages.push(make_chat_message(ChatRole::User, "coord0 msg"));
+
+        // Switch to coordinator 1
+        app.switch_coordinator(1);
+        assert!(
+            app.chat.messages.is_empty(),
+            "Coord 1 should start with no messages"
+        );
+        app.chat.messages.push(make_chat_message(ChatRole::User, "coord1 msg"));
+
+        // Switch back to coordinator 0
+        app.switch_coordinator(0);
+        assert_eq!(app.chat.messages.len(), 1);
+        assert_eq!(app.chat.messages[0].text, "coord0 msg");
+
+        // Switch back to coordinator 1
+        app.switch_coordinator(1);
+        assert_eq!(app.chat.messages.len(), 1);
+        assert_eq!(app.chat.messages[0].text, "coord1 msg");
+    }
+
+    #[test]
+    fn multi_coordinator_file_paths_are_independent() {
+        let tmp = TempDir::new().unwrap();
+        let (_, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0, 1, 2]);
+
+        // Coordinator 0 uses chat-history.json (backward compatible)
+        assert_eq!(
+            chat_history_path(&wg_dir, 0),
+            wg_dir.join("chat-history.json")
+        );
+        // Others use chat-history-{N}.json
+        assert_eq!(
+            chat_history_path(&wg_dir, 1),
+            wg_dir.join("chat-history-1.json")
+        );
+        assert_eq!(
+            chat_history_path(&wg_dir, 2),
+            wg_dir.join("chat-history-2.json")
+        );
+
+        // Save to different coordinators, verify files are independent
+        let msgs_0 = vec![make_chat_message(ChatRole::User, "coord 0")];
+        let msgs_1 = vec![make_chat_message(ChatRole::User, "coord 1")];
+
+        save_chat_history(&wg_dir, 0, &msgs_0);
+        save_chat_history(&wg_dir, 1, &msgs_1);
+
+        let loaded_0 = load_persisted_chat_history(&wg_dir, 0);
+        let loaded_1 = load_persisted_chat_history(&wg_dir, 1);
+
+        assert_eq!(loaded_0.len(), 1);
+        assert_eq!(loaded_0[0].text, "coord 0");
+        assert_eq!(loaded_1.len(), 1);
+        assert_eq!(loaded_1[0].text, "coord 1");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Scenario 5: Edge cases
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn chat_persistence_empty_chat_no_error() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        // Save empty chat — should not create file or error
+        let mut app = build_test_app(&viz, &wg_dir);
+        app.save_all_chat_state();
+
+        // Reload — should work fine with no messages
+        let mut app2 = build_test_app(&viz, &wg_dir);
+        app2.load_chat_history();
+        assert!(app2.chat.messages.is_empty());
+    }
+
+    #[test]
+    fn chat_persistence_very_long_message() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        let long_text = "A".repeat(100_000);
+
+        let mut app = build_test_app(&viz, &wg_dir);
+        app.chat
+            .messages
+            .push(make_chat_message(ChatRole::User, &long_text));
+        app.save_all_chat_state();
+
+        let mut app2 = build_test_app(&viz, &wg_dir);
+        app2.load_chat_history();
+
+        assert_eq!(app2.chat.messages.len(), 1);
+        assert_eq!(app2.chat.messages[0].text.len(), 100_000);
+        assert_eq!(app2.chat.messages[0].text, long_text);
+    }
+
+    #[test]
+    fn chat_persistence_rapid_save_load_cycles() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        // Rapidly save and load 20 times without corruption
+        for i in 0..20 {
+            let mut app = build_test_app(&viz, &wg_dir);
+            app.load_chat_history();
+            app.chat
+                .messages
+                .push(make_chat_message(ChatRole::User, &format!("cycle {}", i)));
+            app.save_all_chat_state();
+        }
+
+        // Final load should have all 20 messages
+        let mut final_app = build_test_app(&viz, &wg_dir);
+        final_app.load_chat_history();
+        assert_eq!(
+            final_app.chat.messages.len(),
+            20,
+            "Should have all 20 messages after rapid cycles"
+        );
+        for (i, msg) in final_app.chat.messages.iter().enumerate() {
+            assert_eq!(msg.text, format!("cycle {}", i));
+        }
+    }
+
+    #[test]
+    fn chat_persistence_special_characters() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        let mut app = build_test_app(&viz, &wg_dir);
+        app.chat
+            .messages
+            .push(make_chat_message(ChatRole::User, "emoji: 🚀🎉"));
+        app.chat
+            .messages
+            .push(make_chat_message(ChatRole::User, "newlines:\nline2\nline3"));
+        app.chat
+            .messages
+            .push(make_chat_message(ChatRole::User, "quotes: \"hello\" 'world'"));
+        app.chat.messages.push(make_chat_message(
+            ChatRole::User,
+            "backslash: C:\\Users\\test",
+        ));
+        app.chat.messages.push(make_chat_message(
+            ChatRole::User,
+            "json-like: {\"key\": \"value\"}",
+        ));
+        app.save_all_chat_state();
+
+        let mut app2 = build_test_app(&viz, &wg_dir);
+        app2.load_chat_history();
+
+        assert_eq!(app2.chat.messages.len(), 5);
+        assert_eq!(app2.chat.messages[0].text, "emoji: 🚀🎉");
+        assert_eq!(app2.chat.messages[1].text, "newlines:\nline2\nline3");
+        assert_eq!(app2.chat.messages[2].text, "quotes: \"hello\" 'world'");
+        assert_eq!(app2.chat.messages[3].text, "backslash: C:\\Users\\test");
+        assert_eq!(app2.chat.messages[4].text, "json-like: {\"key\": \"value\"}");
+    }
+
+    #[test]
+    fn chat_persistence_corrupt_file_returns_empty() {
+        let tmp = TempDir::new().unwrap();
+        let (_, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        // Write corrupt JSON to the history file
+        let path = chat_history_path(&wg_dir, 0);
+        std::fs::write(&path, "not valid json at all!!!").unwrap();
+
+        // Should return empty rather than panic
+        let loaded = load_persisted_chat_history(&wg_dir, 0);
+        assert!(loaded.is_empty(), "Corrupt file should return empty vec");
+    }
+
+    #[test]
+    fn chat_persistence_nonexistent_file_returns_empty() {
+        let tmp = TempDir::new().unwrap();
+        let (_, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        // No file exists — should return empty
+        let loaded = load_persisted_chat_history(&wg_dir, 0);
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn tui_state_persistence_round_trip() {
+        let tmp = TempDir::new().unwrap();
+        let wg_dir = tmp.path().join(".workgraph");
+        std::fs::create_dir_all(&wg_dir).unwrap();
+
+        save_tui_state(&wg_dir, 3, &RightPanelTab::Messages);
+
+        let loaded = load_tui_state(&wg_dir);
+        assert!(loaded.is_some());
+        let state = loaded.unwrap();
+        assert_eq!(state.active_coordinator_id, 3);
+        assert_eq!(state.right_panel_tab, "Messages");
+    }
+
+    #[test]
+    fn tui_state_no_file_returns_none() {
+        let tmp = TempDir::new().unwrap();
+        let wg_dir = tmp.path().join(".workgraph");
+        std::fs::create_dir_all(&wg_dir).unwrap();
+
+        let loaded = load_tui_state(&wg_dir);
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn chat_interleaving_message_to_finished_agent() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        let mut app = build_test_app(&viz, &wg_dir);
+        app.chat.messages.push(make_chat_message_with_ts(
+            ChatRole::User,
+            "started work",
+            "2026-03-27T09:00:00Z",
+        ));
+
+        // The agent finished and read the message before finishing
+        let msg_dir = wg_dir.join("messages");
+        std::fs::create_dir_all(&msg_dir).unwrap();
+        let msg_file = msg_dir.join("test-task.jsonl");
+        let msg_json = serde_json::json!({
+            "id": 1,
+            "timestamp": "2026-03-27T09:30:00Z",
+            "sender": "user",
+            "body": "message to finished agent",
+            "priority": "normal",
+            "status": "acknowledged",
+            "read_at": "2026-03-27T09:31:00Z"
+        });
+        std::fs::write(&msg_file, format!("{}\n", msg_json)).unwrap();
+
+        app.poll_interleaved_messages();
+
+        // Should still appear in the stream (acknowledged messages are interleaved)
+        let sent_msgs: Vec<_> = app
+            .chat
+            .messages
+            .iter()
+            .filter(|m| matches!(m.role, ChatRole::SentMessage))
+            .collect();
+        assert_eq!(sent_msgs.len(), 1);
+        assert_eq!(sent_msgs[0].text, "message to finished agent");
+    }
+
+    #[test]
+    fn chat_persistence_with_attachments() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        let mut app = build_test_app(&viz, &wg_dir);
+        let mut msg = make_chat_message(ChatRole::User, "here is a file");
+        msg.attachments = vec!["screenshot.png".to_string(), "log.txt".to_string()];
+        app.chat.messages.push(msg);
+        app.save_all_chat_state();
+
+        let mut app2 = build_test_app(&viz, &wg_dir);
+        app2.load_chat_history();
+
+        assert_eq!(app2.chat.messages.len(), 1);
+        assert_eq!(
+            app2.chat.messages[0].attachments,
+            vec!["screenshot.png", "log.txt"]
+        );
+    }
+
+    #[test]
+    fn chat_persistence_edited_flag() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        let mut app = build_test_app(&viz, &wg_dir);
+        let mut msg = make_chat_message(ChatRole::User, "edited message");
+        msg.edited = true;
+        app.chat.messages.push(msg);
+        app.save_all_chat_state();
+
+        let mut app2 = build_test_app(&viz, &wg_dir);
+        app2.load_chat_history();
+
+        assert_eq!(app2.chat.messages.len(), 1);
+        assert!(app2.chat.messages[0].edited, "edited flag should persist");
+    }
+
+    #[test]
+    fn switch_coordinator_resets_input_mode() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0, 1]);
+
+        let mut app = build_test_app(&viz, &wg_dir);
+        app.input_mode = InputMode::ChatInput;
+        app.inspector_sub_focus = InspectorSubFocus::TextEntry;
+
+        app.switch_coordinator(1);
+
+        assert_eq!(
+            app.input_mode,
+            InputMode::Normal,
+            "Switching coordinator should reset input mode"
+        );
+        assert_eq!(
+            app.inspector_sub_focus,
+            InspectorSubFocus::ChatHistory,
+            "Switching coordinator should reset inspector sub-focus"
+        );
+    }
+
+    #[test]
+    fn switch_coordinator_noop_for_same_id() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        let mut app = build_test_app(&viz, &wg_dir);
+        app.chat.messages.push(make_chat_message(ChatRole::User, "original"));
+
+        // Switching to the same coordinator should be a no-op
+        app.switch_coordinator(0);
+
+        assert_eq!(app.chat.messages.len(), 1);
+        assert_eq!(app.chat.messages[0].text, "original");
+    }
+
+    #[test]
+    fn chat_persistence_full_text_and_user_fields() {
+        let tmp = TempDir::new().unwrap();
+        let (viz, wg_dir) = setup_workgraph_with_coordinators(&tmp, &[0]);
+
+        let mut app = build_test_app(&viz, &wg_dir);
+        let mut msg = make_chat_message(ChatRole::Coordinator, "summary text");
+        msg.full_text = Some("full response with tool calls and details".to_string());
+        msg.user = Some("coordinator-agent".to_string());
+        app.chat.messages.push(msg);
+        app.save_all_chat_state();
+
+        let mut app2 = build_test_app(&viz, &wg_dir);
+        app2.load_chat_history();
+
+        assert_eq!(app2.chat.messages.len(), 1);
+        assert_eq!(app2.chat.messages[0].text, "summary text");
+        assert_eq!(
+            app2.chat.messages[0].full_text.as_deref(),
+            Some("full response with tool calls and details")
+        );
+        assert_eq!(
+            app2.chat.messages[0].user.as_deref(),
+            Some("coordinator-agent")
+        );
+    }
+}
