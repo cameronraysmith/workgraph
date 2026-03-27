@@ -4020,11 +4020,20 @@ impl VizApp {
             return false;
         }
 
-        // Show notification but never move the viewport or selection — the user's
-        // scroll position should remain stable when new tasks appear. The splash
-        // animation (registered earlier in refresh_data) provides visual highlight.
-        self.push_toast(format!("New task: {}", task_id), ToastSeverity::Info);
-        false
+        // Select the new task so the viewport centers on it — the user wants
+        // to see their fresh work.  The splash animation (registered earlier
+        // in refresh_data) provides an additional visual highlight.
+        if let Some(idx) = self.task_order.iter().position(|id| id == &task_id) {
+            self.selected_task_idx = Some(idx);
+            self.recompute_trace();
+            self.sync_coordinator_from_selection();
+            self.push_toast(format!("New task: {}", task_id), ToastSeverity::Info);
+            true
+        } else {
+            // Task not found in current view (may be filtered out or internal).
+            self.push_toast(format!("New task: {}", task_id), ToastSeverity::Info);
+            false
+        }
     }
 
     // ── Splash animations ──
