@@ -25,6 +25,9 @@ pub fn run(workgraph_dir: &Path) -> Result<()> {
     // 1b. Auto-import bundled CSV if available and not already imported
     try_csv_import(workgraph_dir)?;
 
+    // 1c. Pull from upstream bureau if configured (non-blocking)
+    try_upstream_pull(workgraph_dir);
+
     // 2. Create a default agent: Programmer + Careful
     let agents_dir = agency_dir.join("cache/agents");
     std::fs::create_dir_all(&agents_dir).context("Failed to create agents directory")?;
@@ -239,6 +242,53 @@ pub fn run(workgraph_dir: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Try to pull primitives from the configured upstream bureau URL.
+///
+/// This is non-blocking: if no upstream URL is configured, or if the fetch fails
+/// (e.g., offline), we print a warning and continue. Init must not fail because
+/// of an upstream pull error.
+fn try_upstream_pull(workgraph_dir: &Path) {
+    // Load merged config (global + local) to pick up upstream_url from global config
+    let cfg = match Config::load_merged(workgraph_dir) {
+        Ok(cfg) => cfg,
+        Err(_) => return, // Can't load config — skip silently
+    };
+
+    let url = match cfg.agency.upstream_url {
+        Some(ref url) if !url.is_empty() => url.clone(),
+        _ => return, // No upstream configured — nothing to do
+    };
+
+    println!("Pulling agency bureau from upstream...");
+
+    let opts = agency_import::ImportOptions {
+        csv_path: None,
+        url: Some(url),
+        upstream: false,
+        dry_run: false,
+        tag: Some("upstream-bureau".to_string()),
+        force: false,
+        check: false,
+    };
+
+    match agency_import::run_import(workgraph_dir, opts) {
+        Ok(counts) => {
+            let total =
+                counts.role_components + counts.desired_outcomes + counts.trade_off_configs;
+            if total > 0 {
+                println!(
+                    "Pulled {} primitives from upstream bureau ({} components, {} outcomes, {} tradeoffs).",
+                    total, counts.role_components, counts.desired_outcomes, counts.trade_off_configs
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!("Warning: failed to pull upstream agency bureau: {}", e);
+            eprintln!("  Init continues without upstream data. Run `wg agency import --upstream` later.");
+        }
+    }
 }
 
 /// Try to auto-import primitives from the bundled CSV (`agency/starter.csv`).
@@ -537,5 +587,42 @@ trade_off_config,Test Tradeoff,Tradeoff description,70,0,,inst-4,,task
             serde_yaml::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
 
         assert_eq!(manifest.content_hash, expected_hash);
+    }
+
+    #[test]
+    fn test_upstream_pull_no_url_is_noop() {
+        // When no upstream_url is configured, try_upstream_pull should be a silent no-op
+        let tmp = tempfile::tempdir().unwrap();
+        let wg_dir = tmp.path().join(".workgraph");
+        std::fs::create_dir_all(&wg_dir).unwrap();
+
+        // No config at all — should not panic or error
+        try_upstream_pull(&wg_dir);
+    }
+
+    #[test]
+    fn test_upstream_pull_bad_url_does_not_fail() {
+        // When upstream_url is set but unreachable, init should still succeed
+        let tmp = tempfile::tempdir().unwrap();
+        let wg_dir = tmp.path().join(".workgraph");
+        std::fs::create_dir_all(&wg_dir).unwrap();
+
+        // Write a config with a bogus upstream URL
+        let config_path = wg_dir.join("config.toml");
+        std::fs::write(
+            &config_path,
+            "[agency]\nupstream_url = \"http://127.0.0.1:1/nonexistent.csv\"\n",
+        )
+        .unwrap();
+
+        // try_upstream_pull should warn but not panic
+        try_upstream_pull(&wg_dir);
+
+        // Full init should also succeed despite the bad URL
+        run(&wg_dir).unwrap();
+
+        // Agency data should still be created (from hardcoded starters)
+        let agents_dir = wg_dir.join("agency/cache/agents");
+        assert!(agents_dir.exists(), "agents should be created despite upstream failure");
     }
 }
