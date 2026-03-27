@@ -2229,6 +2229,30 @@ impl HistoryBrowserState {
         }
     }
 
+    /// Load segments including cross-coordinator summaries.
+    /// `coordinator_labels` maps coordinator IDs to display labels.
+    /// `restricted_ids` are coordinators whose visibility blocks sharing.
+    pub fn load_with_cross_coordinator(
+        &mut self,
+        workgraph_dir: &std::path::Path,
+        coordinator_id: u32,
+        coordinator_labels: &[(u32, String)],
+        restricted_ids: &[u32],
+    ) {
+        // Load own segments first
+        self.load(workgraph_dir, coordinator_id);
+
+        // Append cross-coordinator segments
+        if let Ok(cross_segs) = workgraph::chat::load_cross_coordinator_segments(
+            workgraph_dir,
+            coordinator_id,
+            coordinator_labels,
+            restricted_ids,
+        ) {
+            self.segments.extend(cross_segs);
+        }
+    }
+
     /// Get the currently selected segment (if any).
     pub fn selected_segment(&self) -> Option<&workgraph::chat::HistorySegment> {
         self.segments.get(self.selected)
@@ -10365,9 +10389,19 @@ impl VizApp {
         );
     }
 
-    /// Open the history browser (Ctrl+H), loading segments for the active coordinator.
+    /// Open the history browser (Ctrl+H), loading segments for the active coordinator
+    /// plus cross-coordinator context summaries.
     pub fn open_history_browser(&mut self) {
-        self.history_browser.load(&self.workgraph_dir, self.active_coordinator_id);
+        let labels = self.list_coordinator_ids_and_labels();
+        // No coordinators are restricted within the same project — visibility
+        // settings are respected at the sharing boundary (internal = project-only).
+        let restricted: Vec<u32> = Vec::new();
+        self.history_browser.load_with_cross_coordinator(
+            &self.workgraph_dir,
+            self.active_coordinator_id,
+            &labels,
+            &restricted,
+        );
         self.history_browser.active = true;
     }
 
@@ -10379,18 +10413,36 @@ impl VizApp {
     }
 
     /// Inject the selected history segment into the coordinator's context.
+    /// Cross-coordinator segments are wrapped with an import label.
     pub fn inject_selected_history(&mut self) {
-        let content = match self.history_browser.selected_segment() {
-            Some(seg) => seg.content.clone(),
+        let (content, label, is_cross) = match self.history_browser.selected_segment() {
+            Some(seg) => {
+                let is_cross = matches!(
+                    seg.source,
+                    workgraph::chat::HistorySource::CrossCoordinator { .. }
+                );
+                (seg.content.clone(), seg.label.clone(), is_cross)
+            }
             None => return,
         };
-        let label = self
-            .history_browser
-            .selected_segment()
-            .map(|s| s.label.clone())
-            .unwrap_or_default();
+        let wrapped = if is_cross {
+            format!(
+                "---\n\
+                 ## Imported Context: {}\n\
+                 \n\
+                 > This is imported context from another coordinator.\n\
+                 > Treat it as read-only reference material.\n\
+                 \n\
+                 {}\n\
+                 \n\
+                 ---",
+                label, content
+            )
+        } else {
+            content
+        };
         let cid = self.active_coordinator_id;
-        match workgraph::chat::write_injected_context(&self.workgraph_dir, cid, &content) {
+        match workgraph::chat::write_injected_context(&self.workgraph_dir, cid, &wrapped) {
             Ok(()) => {
                 self.close_history_browser();
                 self.push_toast(

@@ -898,6 +898,12 @@ pub enum Commands {
         /// Compact chat history into a context summary
         #[arg(long)]
         compact: bool,
+
+        /// Share context from another coordinator into this one.
+        /// Copies the source coordinator's compacted summary as imported context.
+        /// Use with --coordinator to specify the target (default: 0).
+        #[arg(long, value_name = "FROM_ID")]
+        share_from: Option<u32>,
     },
 
     /// Manage resources

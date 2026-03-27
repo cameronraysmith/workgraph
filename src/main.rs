@@ -1003,8 +1003,11 @@ fn main() -> Result<()> {
             rotate,
             cleanup,
             compact,
+            share_from,
         } => {
-            if compact {
+            if let Some(from_id) = share_from {
+                commands::chat::run_share(&workgraph_dir, from_id, coordinator)
+            } else if compact {
                 commands::chat::run_compact(&workgraph_dir, coordinator, cli.json)
             } else if rotate {
                 commands::chat::run_rotate(&workgraph_dir, coordinator)

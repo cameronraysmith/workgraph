@@ -1197,6 +1197,11 @@ pub enum HistorySource {
     ActiveChat,
     /// Archived inbox/outbox file.
     Archive,
+    /// Context summary from another coordinator.
+    CrossCoordinator {
+        /// The source coordinator ID.
+        coordinator_id: u32,
+    },
 }
 
 /// Load browsable history segments for a coordinator.
@@ -1266,6 +1271,129 @@ pub fn load_history_segments(
     }
 
     Ok(segments)
+}
+
+/// List coordinator IDs that have chat directories on disk.
+pub fn list_coordinator_ids(workgraph_dir: &Path) -> Vec<u32> {
+    let chat_dir = workgraph_dir.join("chat");
+    if !chat_dir.exists() {
+        return vec![];
+    }
+    let mut ids = Vec::new();
+    if let Ok(entries) = fs::read_dir(&chat_dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if let Ok(id) = name.parse::<u32>() {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+    ids.sort();
+    ids
+}
+
+/// Load context summaries from other coordinators (excluding `exclude_id`).
+///
+/// Returns history segments sourced from other coordinators' compacted
+/// `context-summary.md` files. Respects visibility: only coordinators whose
+/// task visibility is not restricted (i.e., not "internal" when the graph
+/// marks them as such) are included. In practice, all coordinators within
+/// the same project share context unless explicitly restricted.
+///
+/// `coordinator_labels` is an optional map from coordinator ID to display label.
+/// If provided, labels are used in the segment label text.
+pub fn load_cross_coordinator_segments(
+    workgraph_dir: &Path,
+    exclude_id: u32,
+    coordinator_labels: &[(u32, String)],
+    restricted_ids: &[u32],
+) -> Result<Vec<HistorySegment>> {
+    let mut segments = Vec::new();
+    let all_ids = list_coordinator_ids(workgraph_dir);
+
+    for cid in all_ids {
+        if cid == exclude_id {
+            continue;
+        }
+        // Skip coordinators that are restricted
+        if restricted_ids.contains(&cid) {
+            continue;
+        }
+        let summary_path = chat_dir_for(workgraph_dir, cid).join("context-summary.md");
+        if !summary_path.exists() {
+            continue;
+        }
+        if let Ok(content) = fs::read_to_string(&summary_path) {
+            let content = content.trim().to_string();
+            if content.is_empty() {
+                continue;
+            }
+            let label_name = coordinator_labels
+                .iter()
+                .find(|(id, _)| *id == cid)
+                .map(|(_, l)| l.as_str())
+                .unwrap_or("Unknown");
+            let preview = truncate_preview(&content, 200);
+            segments.push(HistorySegment {
+                label: format!("[C{}] {} — Context Summary", cid, label_name),
+                source: HistorySource::CrossCoordinator {
+                    coordinator_id: cid,
+                },
+                preview,
+                content,
+            });
+        }
+    }
+
+    Ok(segments)
+}
+
+/// Share context from one coordinator to another by writing an imported-context
+/// block into the target coordinator's injected-context.md file.
+///
+/// The shared content is wrapped with a clear label indicating the source.
+/// Returns the content that was written, or an error if the source has no summary.
+pub fn share_context(
+    workgraph_dir: &Path,
+    from_coordinator: u32,
+    to_coordinator: u32,
+    from_label: Option<&str>,
+) -> Result<String> {
+    let summary_path = chat_dir_for(workgraph_dir, from_coordinator).join("context-summary.md");
+    if !summary_path.exists() {
+        anyhow::bail!(
+            "Coordinator {} has no compacted context summary (context-summary.md)",
+            from_coordinator
+        );
+    }
+    let raw = fs::read_to_string(&summary_path)
+        .with_context(|| format!("Failed to read context summary for coordinator {}", from_coordinator))?;
+    let raw = raw.trim();
+    if raw.is_empty() {
+        anyhow::bail!(
+            "Coordinator {} has an empty context summary",
+            from_coordinator
+        );
+    }
+
+    let source_label = from_label.unwrap_or("Unknown");
+    let wrapped = format!(
+        "---\n\
+         ## Imported Context from Coordinator {} ({})\n\
+         \n\
+         > Shared from coordinator #{}'s compacted summary.\n\
+         > This is read-only context — do not treat it as part of this coordinator's history.\n\
+         \n\
+         {}\n\
+         \n\
+         ---",
+        from_coordinator, source_label, from_coordinator, raw
+    );
+
+    write_injected_context(workgraph_dir, to_coordinator, &wrapped)?;
+
+    Ok(wrapped)
 }
 
 /// Format messages as human-readable text for injection.
@@ -2379,5 +2507,154 @@ mod tests {
         let text = format_messages_as_text(&msgs);
         assert!(text.contains("[10:00:00] user: hello"));
         assert!(text.contains("coordinator: hi there"));
+    }
+
+    // --- Cross-coordinator context tests ---
+
+    #[test]
+    fn test_list_coordinator_ids() {
+        let (_tmp, wg_dir) = setup();
+
+        // No chat dirs initially
+        assert!(list_coordinator_ids(&wg_dir).is_empty());
+
+        // Create chat dirs for coordinators 0, 2, 5
+        fs::create_dir_all(wg_dir.join("chat").join("0")).unwrap();
+        fs::create_dir_all(wg_dir.join("chat").join("2")).unwrap();
+        fs::create_dir_all(wg_dir.join("chat").join("5")).unwrap();
+        // Non-numeric dir should be ignored
+        fs::create_dir_all(wg_dir.join("chat").join("not-a-number")).unwrap();
+
+        let ids = list_coordinator_ids(&wg_dir);
+        assert_eq!(ids, vec![0, 2, 5]);
+    }
+
+    #[test]
+    fn test_load_cross_coordinator_segments_empty() {
+        let (_tmp, wg_dir) = setup();
+        let segs = load_cross_coordinator_segments(&wg_dir, 0, &[], &[]).unwrap();
+        assert!(segs.is_empty());
+    }
+
+    #[test]
+    fn test_load_cross_coordinator_segments_finds_others() {
+        let (_tmp, wg_dir) = setup();
+
+        // Create context summaries for coordinators 0, 1, 2
+        for cid in [0, 1, 2] {
+            let dir = wg_dir.join("chat").join(cid.to_string());
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join("context-summary.md"),
+                format!("Summary for coordinator {}", cid),
+            )
+            .unwrap();
+        }
+
+        let labels = vec![
+            (0, "Main".to_string()),
+            (1, "Auth".to_string()),
+            (2, "Database".to_string()),
+        ];
+
+        // From coordinator 0, should see 1 and 2
+        let segs = load_cross_coordinator_segments(&wg_dir, 0, &labels, &[]).unwrap();
+        assert_eq!(segs.len(), 2);
+        assert!(segs[0].label.contains("Auth"));
+        assert!(segs[1].label.contains("Database"));
+        assert!(segs[0].content.contains("Summary for coordinator 1"));
+        assert_eq!(
+            segs[0].source,
+            HistorySource::CrossCoordinator { coordinator_id: 1 }
+        );
+    }
+
+    #[test]
+    fn test_load_cross_coordinator_segments_skips_empty() {
+        let (_tmp, wg_dir) = setup();
+
+        // Coordinator 1 has a summary, coordinator 2 has empty summary
+        let dir1 = wg_dir.join("chat").join("1");
+        fs::create_dir_all(&dir1).unwrap();
+        fs::write(dir1.join("context-summary.md"), "Real content").unwrap();
+
+        let dir2 = wg_dir.join("chat").join("2");
+        fs::create_dir_all(&dir2).unwrap();
+        fs::write(dir2.join("context-summary.md"), "  \n  ").unwrap();
+
+        let segs = load_cross_coordinator_segments(&wg_dir, 0, &[], &[]).unwrap();
+        assert_eq!(segs.len(), 1);
+    }
+
+    #[test]
+    fn test_load_cross_coordinator_segments_respects_restricted() {
+        let (_tmp, wg_dir) = setup();
+
+        for cid in [1, 2, 3] {
+            let dir = wg_dir.join("chat").join(cid.to_string());
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join("context-summary.md"),
+                format!("Summary {}", cid),
+            )
+            .unwrap();
+        }
+
+        // Restrict coordinator 2
+        let segs = load_cross_coordinator_segments(&wg_dir, 0, &[], &[2]).unwrap();
+        assert_eq!(segs.len(), 2);
+        assert!(segs.iter().all(|s| match &s.source {
+            HistorySource::CrossCoordinator { coordinator_id } => *coordinator_id != 2,
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn test_share_context_success() {
+        let (_tmp, wg_dir) = setup();
+
+        // Create source summary
+        let dir0 = wg_dir.join("chat").join("0");
+        fs::create_dir_all(&dir0).unwrap();
+        fs::write(dir0.join("context-summary.md"), "Auth decisions: use JWT").unwrap();
+
+        // Share from 0 to 1
+        let result = share_context(&wg_dir, 0, 1, Some("Auth Coordinator"));
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        assert!(content.contains("Imported Context from Coordinator 0"));
+        assert!(content.contains("Auth Coordinator"));
+        assert!(content.contains("Auth decisions: use JWT"));
+
+        // Verify it was written as injected context for coordinator 1
+        let injected = take_injected_context(&wg_dir, 1);
+        assert!(injected.is_some());
+        assert!(injected.unwrap().contains("Auth decisions: use JWT"));
+    }
+
+    #[test]
+    fn test_share_context_no_summary() {
+        let (_tmp, wg_dir) = setup();
+
+        // No summary exists
+        let result = share_context(&wg_dir, 0, 1, None);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("no compacted context summary"));
+    }
+
+    #[test]
+    fn test_share_context_empty_summary() {
+        let (_tmp, wg_dir) = setup();
+
+        let dir0 = wg_dir.join("chat").join("0");
+        fs::create_dir_all(&dir0).unwrap();
+        fs::write(dir0.join("context-summary.md"), "  \n  ").unwrap();
+
+        let result = share_context(&wg_dir, 0, 1, None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("empty"));
     }
 }

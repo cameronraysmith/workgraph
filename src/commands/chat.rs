@@ -335,6 +335,49 @@ pub fn run_cleanup(dir: &Path, coordinator_id: u32) -> Result<()> {
 }
 
 /// Compact chat history into a context summary for a specific coordinator.
+/// Share context from one coordinator to another.
+///
+/// Reads the source coordinator's compacted context summary and writes it
+/// as clearly-labeled imported context for the target coordinator.
+pub fn run_share(dir: &Path, from_id: u32, to_id: u32) -> Result<()> {
+    if from_id == to_id {
+        anyhow::bail!("Source and target coordinator must be different (both are {})", from_id);
+    }
+
+    // Look up coordinator label from graph
+    let graph_path = dir.join("graph.jsonl");
+    let from_label = if graph_path.exists() {
+        let graph = workgraph::parser::load_graph(&graph_path)?;
+        coordinator_label_from_graph(&graph, from_id)
+    } else {
+        None
+    };
+    let label_str = from_label.as_deref().unwrap_or("Unknown");
+
+    let content = chat::share_context(dir, from_id, to_id, Some(label_str))?;
+
+    eprintln!(
+        "Shared context from coordinator {} ({}) → coordinator {}",
+        from_id, label_str, to_id
+    );
+    eprintln!("({} bytes of imported context)", content.len());
+    eprintln!(
+        "The target coordinator will consume this on its next turn."
+    );
+
+    Ok(())
+}
+
+/// Resolve coordinator label from the graph.
+fn coordinator_label_from_graph(graph: &workgraph::graph::WorkGraph, cid: u32) -> Option<String> {
+    let task_id = if cid == 0 {
+        ".coordinator".to_string()
+    } else {
+        format!(".coordinator-{}", cid)
+    };
+    graph.get_task(&task_id).map(|t| t.title.clone())
+}
+
 pub fn run_compact(dir: &Path, coordinator_id: u32, json: bool) -> Result<()> {
     use workgraph::service::chat_compactor;
 

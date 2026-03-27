@@ -1842,6 +1842,7 @@ fn draw_history_browser(frame: &mut Frame, app: &mut VizApp, area: Rect) {
             workgraph::chat::HistorySource::ContextSummary => "📋",
             workgraph::chat::HistorySource::ActiveChat => "💬",
             workgraph::chat::HistorySource::Archive => "📦",
+            workgraph::chat::HistorySource::CrossCoordinator { .. } => "🔗",
         };
 
         let line_text = format!("  {} {} ", source_tag, seg.label);
