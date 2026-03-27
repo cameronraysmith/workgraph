@@ -965,7 +965,7 @@ fn build_auto_assign_tasks(
 
         // Design experiment for the assigner
         let learning_count = count_assignment_records(&agency_dir.join("assignments")) as u32;
-        let experiment = run_mode::design_experiment(&agency_dir, &config.agency, learning_count);
+        let experiment = run_mode::design_experiment(&agency_dir, &config.agency, learning_count, &source_id);
 
         let mode_context = render_assigner_mode_context(&AssignerModeContext {
             assignment_path,

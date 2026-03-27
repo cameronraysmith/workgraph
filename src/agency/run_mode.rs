@@ -41,6 +41,66 @@ pub fn determine_assignment_path(config: &AgencyConfig, task_count: u32) -> Assi
 }
 
 // ---------------------------------------------------------------------------
+// Scope-aware primitive filtering
+// ---------------------------------------------------------------------------
+
+/// Determine the required primitive scope for a given task ID.
+///
+/// Meta-tasks (system tasks with `.` prefix) are mapped to their corresponding
+/// meta scope. Regular tasks use the `task` scope.
+///
+/// Returns `None` for tasks whose scope cannot be determined from the ID,
+/// which should fall back to unfiltered selection.
+pub fn required_scope_for_task(task_id: &str) -> &'static str {
+    if task_id.starts_with(".assign-") {
+        "meta:assigner"
+    } else if task_id.starts_with(".evaluate-") || task_id.starts_with(".flip-") {
+        "meta:evaluator"
+    } else if task_id.starts_with(".evolve-") {
+        "meta:evolver"
+    } else if task_id.starts_with(".create-agent-") {
+        "meta:agent_creator"
+    } else {
+        "task"
+    }
+}
+
+/// Returns true if a primitive's scope metadata matches the required scope.
+///
+/// Matching rules:
+/// - Exact match (e.g., `scope=task` matches required `task`)
+/// - General `meta` scope matches any `meta:*` requirement (fallback pool)
+/// - Primitives without scope metadata match everything (backward compat)
+fn scope_matches(primitive_scope: Option<&str>, required_scope: &str) -> bool {
+    match primitive_scope {
+        None | Some("") => true, // No scope = matches everything (backward compat)
+        Some(scope) => {
+            scope == required_scope
+                || (scope == "meta" && required_scope.starts_with("meta:"))
+        }
+    }
+}
+
+/// Filter components by scope, with fallback to unfiltered if no matches.
+pub fn filter_components_by_scope(
+    components: &[super::types::RoleComponent],
+    required_scope: &str,
+) -> Vec<super::types::RoleComponent> {
+    let filtered: Vec<_> = components
+        .iter()
+        .filter(|c| scope_matches(c.metadata.get("scope").map(|s| s.as_str()), required_scope))
+        .cloned()
+        .collect();
+
+    if filtered.is_empty() {
+        // Fallback: use all components if no scope matches
+        components.to_vec()
+    } else {
+        filtered
+    }
+}
+
+// ---------------------------------------------------------------------------
 // UCB1 primitive selection
 // ---------------------------------------------------------------------------
 
@@ -123,12 +183,18 @@ pub fn select_primitive_ucb1(
 /// Implements the algorithm from the design doc §4.2:
 /// 1. Find best known composition for this task type.
 /// 2. Select dimension with highest uncertainty.
-/// 3. Pick variant via UCB1.
+/// 3. Pick variant via UCB1 (filtered by scope).
 /// 4. Construct the experiment.
+///
+/// `task_id` is used to determine the required primitive scope. Regular tasks
+/// use `scope=task` primitives; meta-tasks (`.assign-*`, `.evaluate-*`, etc.)
+/// use their corresponding `scope=meta:*` primitives. If no primitives match
+/// the required scope, falls back to unfiltered selection.
 pub fn design_experiment(
     agency_dir: &Path,
     config: &AgencyConfig,
     learning_assignment_count: u32,
+    task_id: &str,
 ) -> AssignmentExperiment {
     // Check bizarre ideation schedule
     if config.bizarre_ideation_interval > 0
@@ -173,7 +239,7 @@ pub fn design_experiment(
     };
 
     // Load components to build UCB1 candidate list
-    let components = match load_all_components(&components_dir) {
+    let all_components = match load_all_components(&components_dir) {
         Ok(c) => c,
         Err(_) => {
             return AssignmentExperiment {
@@ -184,6 +250,10 @@ pub fn design_experiment(
             };
         }
     };
+
+    // Filter components by scope (with fallback to unfiltered)
+    let required_scope = required_scope_for_task(task_id);
+    let components = filter_components_by_scope(&all_components, required_scope);
 
     // Load the role to get the base component list
     let roles_dir = agency_dir.join("cache/roles");
@@ -504,7 +574,7 @@ mod tests {
         init(&agency_dir).unwrap();
 
         let config = test_config();
-        let exp = design_experiment(&agency_dir, &config, 1);
+        let exp = design_experiment(&agency_dir, &config, 1, "some-task");
         assert!(matches!(
             exp.dimension,
             ExperimentDimension::NovelComposition
@@ -520,7 +590,7 @@ mod tests {
 
         let config = test_config();
         // learning_assignment_count = 10, bizarre_ideation_interval = 10
-        let exp = design_experiment(&agency_dir, &config, 10);
+        let exp = design_experiment(&agency_dir, &config, 10, "some-task");
         assert!(matches!(
             exp.dimension,
             ExperimentDimension::NovelComposition
@@ -539,5 +609,281 @@ mod tests {
         let config = test_config();
         let result = process_retrospective_inference(&agency_dir, "nonexistent-task", 0.9, &config);
         assert!(result.is_ok());
+    }
+
+    // -- Scope filtering tests --
+
+    #[test]
+    fn test_required_scope_for_regular_task() {
+        assert_eq!(required_scope_for_task("implement-feature"), "task");
+        assert_eq!(required_scope_for_task("fix-bug-123"), "task");
+    }
+
+    #[test]
+    fn test_required_scope_for_meta_tasks() {
+        assert_eq!(required_scope_for_task(".assign-my-task"), "meta:assigner");
+        assert_eq!(
+            required_scope_for_task(".evaluate-my-task"),
+            "meta:evaluator"
+        );
+        assert_eq!(required_scope_for_task(".flip-my-task"), "meta:evaluator");
+        assert_eq!(required_scope_for_task(".evolve-my-task"), "meta:evolver");
+        assert_eq!(
+            required_scope_for_task(".create-agent-my-task"),
+            "meta:agent_creator"
+        );
+    }
+
+    #[test]
+    fn test_scope_matches_exact() {
+        assert!(scope_matches(Some("task"), "task"));
+        assert!(scope_matches(Some("meta:assigner"), "meta:assigner"));
+        assert!(!scope_matches(Some("task"), "meta:assigner"));
+        assert!(!scope_matches(Some("meta:assigner"), "task"));
+    }
+
+    #[test]
+    fn test_scope_matches_general_meta_fallback() {
+        // General "meta" scope matches any meta:* requirement
+        assert!(scope_matches(Some("meta"), "meta:assigner"));
+        assert!(scope_matches(Some("meta"), "meta:evaluator"));
+        assert!(scope_matches(Some("meta"), "meta:evolver"));
+        assert!(scope_matches(Some("meta"), "meta:agent_creator"));
+        // But not regular tasks
+        assert!(!scope_matches(Some("meta"), "task"));
+    }
+
+    #[test]
+    fn test_scope_matches_no_scope_matches_everything() {
+        assert!(scope_matches(None, "task"));
+        assert!(scope_matches(None, "meta:assigner"));
+        assert!(scope_matches(Some(""), "task"));
+        assert!(scope_matches(Some(""), "meta:evaluator"));
+    }
+
+    fn make_component(id: &str, scope: Option<&str>) -> super::super::types::RoleComponent {
+        use super::super::types::*;
+        let mut metadata = std::collections::HashMap::new();
+        if let Some(s) = scope {
+            metadata.insert("scope".to_string(), s.to_string());
+        }
+        RoleComponent {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: format!("Component {}", id),
+            category: ComponentCategory::Translated,
+            content: ContentRef::Inline("test".to_string()),
+            performance: PerformanceRecord::default(),
+            lineage: Lineage::default(),
+            access_control: AccessControl::default(),
+            domain_tags: vec![],
+            metadata,
+            former_agents: vec![],
+            former_deployments: vec![],
+        }
+    }
+
+    #[test]
+    fn test_scope_filter_ucb1_regular_task_uses_task_scope() {
+        let components = vec![
+            make_component("task-comp-1", Some("task")),
+            make_component("task-comp-2", Some("task")),
+            make_component("meta-assigner-comp", Some("meta:assigner")),
+            make_component("meta-evaluator-comp", Some("meta:evaluator")),
+        ];
+
+        let filtered = filter_components_by_scope(&components, "task");
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|c| c.id.starts_with("task-comp")));
+    }
+
+    #[test]
+    fn test_scope_filter_meta_assigner_task() {
+        let components = vec![
+            make_component("task-comp-1", Some("task")),
+            make_component("assigner-comp-1", Some("meta:assigner")),
+            make_component("assigner-comp-2", Some("meta:assigner")),
+            make_component("general-meta-comp", Some("meta")),
+            make_component("evaluator-comp", Some("meta:evaluator")),
+        ];
+
+        let filtered = filter_components_by_scope(&components, "meta:assigner");
+        assert_eq!(filtered.len(), 3); // 2 assigner + 1 general meta
+        let ids: Vec<&str> = filtered.iter().map(|c| c.id.as_str()).collect();
+        assert!(ids.contains(&"assigner-comp-1"));
+        assert!(ids.contains(&"assigner-comp-2"));
+        assert!(ids.contains(&"general-meta-comp"));
+    }
+
+    #[test]
+    fn test_scope_filter_fallback_when_no_matches() {
+        let components = vec![
+            make_component("task-comp-1", Some("task")),
+            make_component("task-comp-2", Some("task")),
+        ];
+
+        // No meta:evolver primitives exist — should fall back to all
+        let filtered = filter_components_by_scope(&components, "meta:evolver");
+        assert_eq!(filtered.len(), 2, "Should fall back to all components");
+    }
+
+    #[test]
+    fn test_scope_filter_no_scope_metadata_matches_everything() {
+        let components = vec![
+            make_component("legacy-comp-1", None),
+            make_component("legacy-comp-2", None),
+            make_component("task-comp", Some("task")),
+        ];
+
+        let filtered = filter_components_by_scope(&components, "task");
+        assert_eq!(filtered.len(), 3); // 2 legacy (no scope = match all) + 1 explicit task
+    }
+
+    #[test]
+    fn test_scope_filter_ucb1_scoring_with_mixed_scopes() {
+        // Simulate the full UCB1 flow: mixed scope primitives, only task-scope should
+        // be used as candidates for regular tasks.
+        let task_candidates = vec![
+            ("task-comp-1".to_string(), Some(0.8), 5_u32, 0.5_f64),
+            ("task-comp-2".to_string(), Some(0.6), 3, 0.3),
+        ];
+        let meta_candidates = vec![
+            ("meta-comp".to_string(), Some(0.9), 10, 0.5),
+        ];
+
+        // For a regular task, only task candidates should be considered
+        let (selected, scores) = select_primitive_ucb1(
+            &task_candidates,
+            20,
+            std::f64::consts::SQRT_2,
+            1.5,
+        )
+        .unwrap();
+
+        // Selection should be from task candidates only
+        assert!(
+            selected == "task-comp-1" || selected == "task-comp-2",
+            "Selected '{}' should be a task-scope component",
+            selected
+        );
+        // Meta candidates should not appear in scores
+        assert!(!scores.contains_key("meta-comp"));
+
+        // For meta tasks, only meta candidates should be considered
+        let (meta_selected, meta_scores) = select_primitive_ucb1(
+            &meta_candidates,
+            20,
+            std::f64::consts::SQRT_2,
+            1.5,
+        )
+        .unwrap();
+        assert_eq!(meta_selected, "meta-comp");
+        assert!(!meta_scores.contains_key("task-comp-1"));
+    }
+
+    /// Integration-style test: set up a full agency dir with agent, role, and
+    /// mixed-scope components, then verify design_experiment uses scope filtering.
+    #[test]
+    fn test_design_experiment_scope_filter_integration() {
+        use super::super::types::*;
+
+        let tmp = TempDir::new().unwrap();
+        let agency_dir = tmp.path().join("agency");
+        init(&agency_dir).unwrap();
+
+        // Create components with different scopes
+        let components_dir = agency_dir.join("primitives/components");
+        let task_comp = make_component("task-comp-aaa", Some("task"));
+        let meta_assigner_comp = make_component("meta-assigner-bbb", Some("meta:assigner"));
+        let meta_evaluator_comp = make_component("meta-evaluator-ccc", Some("meta:evaluator"));
+        let base_comp = make_component("base-comp-ddd", Some("task"));
+
+        save_component(&task_comp, &components_dir).unwrap();
+        save_component(&meta_assigner_comp, &components_dir).unwrap();
+        save_component(&meta_evaluator_comp, &components_dir).unwrap();
+        save_component(&base_comp, &components_dir).unwrap();
+
+        // Create a role with the base component
+        let roles_dir = agency_dir.join("cache/roles");
+        let role = Role {
+            id: "test-role-111".to_string(),
+            name: "TestRole".to_string(),
+            description: "A test role".to_string(),
+            component_ids: vec!["base-comp-ddd".to_string()],
+            outcome_id: String::new(),
+            performance: PerformanceRecord {
+                task_count: 5,
+                avg_score: Some(0.7),
+                evaluations: vec![],
+            },
+            lineage: Lineage::default(),
+            default_context_scope: None,
+            default_exec_mode: None,
+        };
+        save_role(&role, &roles_dir).unwrap();
+
+        // Create an agent with the role
+        let agents_dir = agency_dir.join("cache/agents");
+        let agent = Agent {
+            id: "test-agent-222".to_string(),
+            role_id: "test-role-111".to_string(),
+            tradeoff_id: "test-tradeoff".to_string(),
+            name: "TestAgent".to_string(),
+            performance: PerformanceRecord {
+                task_count: 5,
+                avg_score: Some(0.7),
+                evaluations: vec![],
+            },
+            lineage: Lineage::default(),
+            capabilities: vec![],
+            rate: None,
+            capacity: None,
+            trust_level: crate::graph::TrustLevel::Provisional,
+            contact: None,
+            executor: "claude".to_string(),
+            preferred_model: None,
+            preferred_provider: None,
+            deployment_history: vec![],
+            attractor_weight: 0.5,
+            staleness_flags: vec![],
+        };
+        save_agent(&agent, &agents_dir).unwrap();
+
+        let config = test_config();
+
+        // For a regular task: design_experiment should use task-scope components
+        let exp = design_experiment(&agency_dir, &config, 1, "implement-feature");
+        match &exp.dimension {
+            ExperimentDimension::RoleComponent { introduced, .. } => {
+                // Should select the task-scope component, not meta-scope ones
+                assert_eq!(
+                    introduced, "task-comp-aaa",
+                    "Regular task should select task-scope component, got: {}",
+                    introduced
+                );
+            }
+            ExperimentDimension::NovelComposition => {
+                // Also acceptable if no candidate was found (e.g., all filtered out)
+            }
+            other => {
+                panic!("Expected RoleComponent or NovelComposition, got: {:?}", other);
+            }
+        }
+
+        // For a .assign-* meta task: should select meta:assigner scope
+        let meta_exp = design_experiment(&agency_dir, &config, 2, ".assign-implement-feature");
+        match &meta_exp.dimension {
+            ExperimentDimension::RoleComponent { introduced, .. } => {
+                assert_eq!(
+                    introduced, "meta-assigner-bbb",
+                    "Assigner meta-task should select meta:assigner component, got: {}",
+                    introduced
+                );
+            }
+            ExperimentDimension::NovelComposition => {}
+            other => {
+                panic!("Expected RoleComponent or NovelComposition, got: {:?}", other);
+            }
+        }
     }
 }
