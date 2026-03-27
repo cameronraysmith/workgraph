@@ -133,6 +133,9 @@ pub enum IpcRequest {
     ArchiveCoordinator { coordinator_id: u32 },
     /// Stop a coordinator instance (kill agent, reset to Open).
     StopCoordinator { coordinator_id: u32 },
+    /// Interrupt a coordinator's current generation (sends SIGINT, does NOT kill).
+    /// The coordinator process stays alive and can accept new messages immediately.
+    InterruptCoordinator { coordinator_id: u32 },
     /// List all active coordinators.
     ListCoordinators,
 }
@@ -176,6 +179,7 @@ pub(crate) fn handle_connection(
     urgent_wake: &mut bool,
     pending_coordinator_ids: &mut Vec<u32>,
     delete_coordinator_ids: &mut Vec<u32>,
+    interrupt_coordinator_ids: &mut Vec<u32>,
     daemon_cfg: &mut DaemonConfig,
     logger: &DaemonLogger,
 ) -> Result<()> {
@@ -222,6 +226,7 @@ pub(crate) fn handle_connection(
             urgent_wake,
             pending_coordinator_ids,
             delete_coordinator_ids,
+            interrupt_coordinator_ids,
             daemon_cfg,
             logger,
         );
@@ -254,6 +259,7 @@ fn handle_request(
     urgent_wake: &mut bool,
     pending_coordinator_ids: &mut Vec<u32>,
     delete_coordinator_ids: &mut Vec<u32>,
+    interrupt_coordinator_ids: &mut Vec<u32>,
     daemon_cfg: &mut DaemonConfig,
     logger: &DaemonLogger,
 ) -> IpcResponse {
@@ -474,6 +480,20 @@ fn handle_request(
                 delete_coordinator_ids.push(coordinator_id);
             }
             resp
+        }
+        IpcRequest::InterruptCoordinator { coordinator_id } => {
+            logger.info(&format!(
+                "IPC InterruptCoordinator: coordinator_id={}",
+                coordinator_id
+            ));
+            // No graph changes — just signal the daemon to send SIGINT to the
+            // coordinator's Claude CLI subprocess. The actual interrupt happens
+            // in the daemon loop where coordinator_agents is accessible.
+            interrupt_coordinator_ids.push(coordinator_id);
+            IpcResponse::success(serde_json::json!({
+                "coordinator_id": coordinator_id,
+                "interrupted": true,
+            }))
         }
         IpcRequest::ListCoordinators => {
             logger.info("IPC ListCoordinators");
@@ -1775,6 +1795,22 @@ poll_interval = 120
     }
 
     #[test]
+    fn test_ipc_interrupt_coordinator_serialization() {
+        let req = IpcRequest::InterruptCoordinator { coordinator_id: 2 };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"cmd\":\"interrupt_coordinator\""));
+        assert!(json.contains("\"coordinator_id\":2"));
+
+        let parsed: IpcRequest = serde_json::from_str(&json).unwrap();
+        match parsed {
+            IpcRequest::InterruptCoordinator { coordinator_id } => {
+                assert_eq!(coordinator_id, 2);
+            }
+            _ => panic!("Wrong request type"),
+        }
+    }
+
+    #[test]
     fn test_handle_user_chat_sets_urgent_wake() {
         let temp_dir = TempDir::new().unwrap();
         let dir = temp_dir.path();
@@ -1787,6 +1823,7 @@ poll_interval = 120
         let mut urgent_wake = false;
         let mut pending_coordinator_ids = Vec::new();
         let mut delete_coordinator_ids = Vec::new();
+        let mut interrupt_coordinator_ids = Vec::new();
         let mut cfg = DaemonConfig {
             max_agents: 4,
             executor: "claude".to_string(),
@@ -1811,6 +1848,7 @@ poll_interval = 120
             &mut urgent_wake,
             &mut pending_coordinator_ids,
             &mut delete_coordinator_ids,
+            &mut interrupt_coordinator_ids,
             &mut cfg,
             &logger,
         );
@@ -1852,6 +1890,7 @@ poll_interval = 120
         let mut urgent_wake = false;
         let mut pending_coordinator_ids = Vec::new();
         let mut delete_coordinator_ids = Vec::new();
+        let mut interrupt_coordinator_ids = Vec::new();
         let mut cfg = DaemonConfig {
             max_agents: 4,
             executor: "claude".to_string(),
@@ -1877,6 +1916,7 @@ poll_interval = 120
             &mut urgent_wake,
             &mut pending_coordinator_ids,
             &mut delete_coordinator_ids,
+            &mut interrupt_coordinator_ids,
             &mut cfg,
             &logger,
         );
@@ -1908,6 +1948,7 @@ poll_interval = 120
         let mut urgent_wake = false;
         let mut pending_coordinator_ids = Vec::new();
         let mut delete_coordinator_ids = Vec::new();
+        let mut interrupt_coordinator_ids = Vec::new();
         let mut cfg = DaemonConfig {
             max_agents: 4,
             executor: "claude".to_string(),
@@ -1927,6 +1968,7 @@ poll_interval = 120
             &mut urgent_wake,
             &mut pending_coordinator_ids,
             &mut delete_coordinator_ids,
+            &mut interrupt_coordinator_ids,
             &mut cfg,
             &logger,
         );

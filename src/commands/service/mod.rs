@@ -2223,6 +2223,7 @@ pub fn run_daemon(
                 let mut wake_coordinator = false;
                 let mut conn_urgent_wake = false;
                 let mut conn_delete_coordinator_ids = Vec::new();
+                let mut conn_interrupt_coordinator_ids = Vec::new();
                 if let Err(e) = ipc::handle_connection(
                     &dir,
                     stream,
@@ -2231,10 +2232,26 @@ pub fn run_daemon(
                     &mut conn_urgent_wake,
                     &mut pending_coordinator_ids,
                     &mut conn_delete_coordinator_ids,
+                    &mut conn_interrupt_coordinator_ids,
                     &mut daemon_cfg,
                     &logger,
                 ) {
                     logger.error(&format!("Error handling connection: {}", e));
+                }
+                // Interrupt coordinator agents (SIGINT, no kill/restart).
+                for cid in conn_interrupt_coordinator_ids {
+                    if let Some(agent) = coordinator_agents.get(&cid) {
+                        let sent = agent.interrupt();
+                        logger.info(&format!(
+                            "Interrupted coordinator {} (SIGINT sent: {})",
+                            cid, sent
+                        ));
+                    } else {
+                        logger.warn(&format!(
+                            "InterruptCoordinator: no agent for coordinator {}",
+                            cid
+                        ));
+                    }
                 }
                 // Stop and remove any coordinator agents marked for deletion.
                 for cid in conn_delete_coordinator_ids {
@@ -3354,6 +3371,36 @@ pub fn run_stop_coordinator(dir: &Path, coordinator_id: u32, json: bool) -> Resu
 
 #[cfg(not(unix))]
 pub fn run_stop_coordinator(_dir: &Path, _coordinator_id: u32, _json: bool) -> Result<()> {
+    anyhow::bail!("Service daemon is only supported on Unix systems")
+}
+
+/// Interrupt a coordinator's current generation via IPC (sends SIGINT, does NOT kill).
+#[cfg(unix)]
+pub fn run_interrupt_coordinator(dir: &Path, coordinator_id: u32, json: bool) -> Result<()> {
+    let response = send_request(dir, &IpcRequest::InterruptCoordinator { coordinator_id })?;
+
+    if !response.ok {
+        let msg = response
+            .error
+            .unwrap_or_else(|| "Unknown error".to_string());
+        if json {
+            let output = serde_json::json!({ "error": msg });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            eprintln!("Error: {}", msg);
+        }
+        anyhow::bail!("{}", msg);
+    }
+
+    if let Some(data) = &response.data {
+        println!("{}", serde_json::to_string_pretty(data)?);
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn run_interrupt_coordinator(_dir: &Path, _coordinator_id: u32, _json: bool) -> Result<()> {
     anyhow::bail!("Service daemon is only supported on Unix systems")
 }
 

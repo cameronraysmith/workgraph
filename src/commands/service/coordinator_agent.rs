@@ -392,6 +392,23 @@ impl CoordinatorAgent {
         *self.pid.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Interrupt the current generation by sending SIGINT to the Claude CLI process.
+    ///
+    /// Returns `true` if SIGINT was sent, `false` if the process is not alive.
+    /// The Claude CLI handles SIGINT by stopping the current generation and
+    /// emitting a TurnComplete signal, preserving the conversation context.
+    pub fn interrupt(&self) -> bool {
+        let pid = *self.pid.lock().unwrap_or_else(|e| e.into_inner());
+        if pid == 0 {
+            return false;
+        }
+        // Send SIGINT (not SIGKILL) — Claude CLI treats this as "stop generating"
+        unsafe {
+            libc::kill(pid as i32, libc::SIGINT);
+        }
+        true
+    }
+
     /// Shut down the coordinator agent.
     ///
     /// Drops the sender channel, which causes the agent thread to exit

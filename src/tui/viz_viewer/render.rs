@@ -2811,6 +2811,14 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
                 .unwrap_or_default();
             rendered_lines.push(spinner_wave_line(elapsed, ""));
             line_to_message.push(None);
+            // Show interrupt hint after a brief delay so it's not distracting on fast responses.
+            if elapsed.as_secs() >= 2 {
+                rendered_lines.push(Line::from(Span::styled(
+                    "  Ctrl+C to interrupt",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                line_to_message.push(None);
+            }
         } else {
             // Show progressive streaming text from the coordinator with markdown
             // rendering and word wrapping, matching finalized coordinator messages.

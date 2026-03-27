@@ -1927,6 +1927,9 @@ fn main() -> Result<()> {
             ServiceCommands::StopCoordinator { id } => {
                 commands::service::run_stop_coordinator(&workgraph_dir, id, cli.json)
             }
+            ServiceCommands::InterruptCoordinator { id } => {
+                commands::service::run_interrupt_coordinator(&workgraph_dir, id, cli.json)
+            }
             ServiceCommands::Daemon {
                 socket,
                 max_agents,

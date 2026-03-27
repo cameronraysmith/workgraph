@@ -3106,6 +3106,12 @@ pub enum ServiceCommands {
         id: u32,
     },
 
+    /// Interrupt a coordinator's current generation (sends SIGINT, preserves context)
+    InterruptCoordinator {
+        /// Coordinator ID to interrupt
+        id: u32,
+    },
+
     /// Run the daemon (internal, called by start)
     #[command(hide = true)]
     Daemon {
