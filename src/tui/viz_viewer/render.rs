@@ -3964,6 +3964,7 @@ fn draw_log_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
                 width: indicator_len + 1,
                 height: 1,
             };
+            app.last_log_new_output_area = ind_area;
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
                     indicator,
@@ -3973,7 +3974,11 @@ fn draw_log_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
                 ))),
                 ind_area,
             );
+        } else {
+            app.last_log_new_output_area = Rect::default();
         }
+    } else {
+        app.last_log_new_output_area = Rect::default();
     }
 
     // Clear new content flag when auto_tail catches up.

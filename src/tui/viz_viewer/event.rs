@@ -2627,6 +2627,12 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
                         fb.focus = super::file_browser::FileBrowserFocus::Preview;
                     }
                 }
+            } else if app.last_log_new_output_area.width > 0
+                && app.last_log_new_output_area.contains(pos)
+            {
+                // Click on "▼ new output" indicator in Log tab: scroll to bottom.
+                app.focused_panel = FocusedPanel::RightPanel;
+                app.log_scroll_to_bottom();
             } else if in_right_content && app.right_panel_tab == RightPanelTab::Detail {
                 // Click in Detail tab: toggle section collapse if clicking a header.
                 app.focused_panel = FocusedPanel::RightPanel;
