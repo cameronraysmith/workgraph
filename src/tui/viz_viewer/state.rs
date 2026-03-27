@@ -2749,10 +2749,22 @@ pub struct VizApp {
     pub last_minimized_strip_area: Rect,
     /// Hit area for the full-screen restore strip (1-col, left edge, FullInspector mode).
     pub last_fullscreen_restore_area: Rect,
+    /// Hit area for the full-screen right border (1-col, right edge, FullInspector mode).
+    pub last_fullscreen_right_border_area: Rect,
+    /// Hit area for the full-screen top border (1-row, top edge, FullInspector mode).
+    pub last_fullscreen_top_border_area: Rect,
+    /// Hit area for the full-screen bottom border (1-row, bottom edge, FullInspector mode).
+    pub last_fullscreen_bottom_border_area: Rect,
     /// Whether the mouse is hovering over the minimized strip.
     pub minimized_strip_hover: bool,
     /// Whether the mouse is hovering over the full-screen restore strip.
     pub fullscreen_restore_hover: bool,
+    /// Whether the mouse is hovering over the full-screen right border.
+    pub fullscreen_right_hover: bool,
+    /// Whether the mouse is hovering over the full-screen top border.
+    pub fullscreen_top_hover: bool,
+    /// Whether the mouse is hovering over the full-screen bottom border.
+    pub fullscreen_bottom_hover: bool,
     /// The tab bar area inside the right panel from the last render frame.
     pub last_tab_bar_area: Rect,
     /// The content area inside the right panel (below tab bar) from the last render frame.
@@ -3153,8 +3165,14 @@ impl VizApp {
             last_split_percent: 67,
             last_minimized_strip_area: Rect::default(),
             last_fullscreen_restore_area: Rect::default(),
+            last_fullscreen_right_border_area: Rect::default(),
+            last_fullscreen_top_border_area: Rect::default(),
+            last_fullscreen_bottom_border_area: Rect::default(),
             minimized_strip_hover: false,
             fullscreen_restore_hover: false,
+            fullscreen_right_hover: false,
+            fullscreen_top_hover: false,
+            fullscreen_bottom_hover: false,
             last_tab_bar_area: Rect::default(),
             last_right_content_area: Rect::default(),
             last_chat_input_area: Rect::default(),
@@ -6733,8 +6751,14 @@ impl VizApp {
             last_split_percent: 67,
             last_minimized_strip_area: Rect::default(),
             last_fullscreen_restore_area: Rect::default(),
+            last_fullscreen_right_border_area: Rect::default(),
+            last_fullscreen_top_border_area: Rect::default(),
+            last_fullscreen_bottom_border_area: Rect::default(),
             minimized_strip_hover: false,
             fullscreen_restore_hover: false,
+            fullscreen_right_hover: false,
+            fullscreen_top_hover: false,
+            fullscreen_bottom_hover: false,
             last_tab_bar_area: Rect::default(),
             last_right_content_area: Rect::default(),
             last_chat_input_area: Rect::default(),

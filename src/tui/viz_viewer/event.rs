@@ -2086,12 +2086,21 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
         app.last_minimized_strip_area.width > 0 && app.last_minimized_strip_area.contains(pos);
     let in_fullscreen_restore = app.last_fullscreen_restore_area.width > 0
         && app.last_fullscreen_restore_area.contains(pos);
+    let in_fullscreen_right = app.last_fullscreen_right_border_area.width > 0
+        && app.last_fullscreen_right_border_area.contains(pos);
+    let in_fullscreen_top = app.last_fullscreen_top_border_area.height > 0
+        && app.last_fullscreen_top_border_area.contains(pos);
+    let in_fullscreen_bottom = app.last_fullscreen_bottom_border_area.height > 0
+        && app.last_fullscreen_bottom_border_area.contains(pos);
 
     // Track hover state for the divider (visual indicator).
     app.divider_hover = in_divider || app.scrollbar_drag == Some(ScrollbarDragTarget::Divider);
     // Track hover state for tri-state strips.
     app.minimized_strip_hover = in_minimized_strip;
     app.fullscreen_restore_hover = in_fullscreen_restore;
+    app.fullscreen_right_hover = in_fullscreen_right;
+    app.fullscreen_top_hover = in_fullscreen_top;
+    app.fullscreen_bottom_hover = in_fullscreen_bottom;
 
     match kind {
         MouseEventKind::ScrollUp => {
@@ -2233,6 +2242,9 @@ fn handle_mouse(app: &mut VizApp, kind: MouseEventKind, row: u16, column: u16) {
                 // and start divider drag so user can fine-tune position.
                 app.restore_from_extreme();
                 app.scrollbar_drag = Some(ScrollbarDragTarget::Divider);
+            } else if in_fullscreen_right || in_fullscreen_top || in_fullscreen_bottom {
+                // Click on any fullscreen border: restore to normal split.
+                app.restore_from_extreme();
             } else if in_divider {
                 // Click on divider between graph and inspector: start resize drag.
                 app.scrollbar_drag = Some(ScrollbarDragTarget::Divider);

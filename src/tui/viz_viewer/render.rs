@@ -155,6 +155,9 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
             // No room for tri-state strips in compact mode.
             app.last_minimized_strip_area = Rect::default();
             app.last_fullscreen_restore_area = Rect::default();
+            app.last_fullscreen_right_border_area = Rect::default();
+            app.last_fullscreen_top_border_area = Rect::default();
+            app.last_fullscreen_bottom_border_area = Rect::default();
             match app.single_panel_view {
                 SinglePanelView::Graph => {
                     app.last_graph_area = main_area;
@@ -179,11 +182,34 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
                     app.last_graph_area = Rect::default();
                     app.scroll.viewport_height = 0;
                     app.scroll.viewport_width = 0;
-                    if main_area.width > 1 {
+                    // Reserve all four borders (1 col left, 1 col right, 1 row top, 1 row bottom).
+                    let has_h_room = main_area.width > 2;
+                    let has_v_room = main_area.height > 2;
+                    if has_h_room {
                         app.last_fullscreen_restore_area =
                             Rect::new(main_area.x, main_area.y, 1, main_area.height);
+                        app.last_fullscreen_right_border_area = Rect::new(
+                            main_area.x + main_area.width - 1,
+                            main_area.y,
+                            1,
+                            main_area.height,
+                        );
                     } else {
                         app.last_fullscreen_restore_area = Rect::default();
+                        app.last_fullscreen_right_border_area = Rect::default();
+                    }
+                    if has_v_room {
+                        app.last_fullscreen_top_border_area =
+                            Rect::new(main_area.x, main_area.y, main_area.width, 1);
+                        app.last_fullscreen_bottom_border_area = Rect::new(
+                            main_area.x,
+                            main_area.y + main_area.height - 1,
+                            main_area.width,
+                            1,
+                        );
+                    } else {
+                        app.last_fullscreen_top_border_area = Rect::default();
+                        app.last_fullscreen_bottom_border_area = Rect::default();
                     }
                     app.last_minimized_strip_area = Rect::default();
                 }
@@ -213,10 +239,16 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
                         app.last_minimized_strip_area = Rect::default();
                     }
                     app.last_fullscreen_restore_area = Rect::default();
+                    app.last_fullscreen_right_border_area = Rect::default();
+                    app.last_fullscreen_top_border_area = Rect::default();
+                    app.last_fullscreen_bottom_border_area = Rect::default();
                 }
                 _ => {
                     app.last_minimized_strip_area = Rect::default();
                     app.last_fullscreen_restore_area = Rect::default();
+                    app.last_fullscreen_right_border_area = Rect::default();
+                    app.last_fullscreen_top_border_area = Rect::default();
+                    app.last_fullscreen_bottom_border_area = Rect::default();
                     if app.right_panel_visible {
                         // In narrow mode, use a compact side-by-side split.
                         // Graph gets 40%, inspector gets 60% (minimum useful inspector width).
@@ -252,12 +284,34 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
                     app.last_graph_area = Rect::default();
                     app.scroll.viewport_height = 0;
                     app.scroll.viewport_width = 0;
-                    // Left restore strip (1 col).
-                    if main_area.width > 1 {
+                    // Reserve all four borders (1 col left, 1 col right, 1 row top, 1 row bottom).
+                    let has_h_room = main_area.width > 2;
+                    let has_v_room = main_area.height > 2;
+                    if has_h_room {
                         app.last_fullscreen_restore_area =
                             Rect::new(main_area.x, main_area.y, 1, main_area.height);
+                        app.last_fullscreen_right_border_area = Rect::new(
+                            main_area.x + main_area.width - 1,
+                            main_area.y,
+                            1,
+                            main_area.height,
+                        );
                     } else {
                         app.last_fullscreen_restore_area = Rect::default();
+                        app.last_fullscreen_right_border_area = Rect::default();
+                    }
+                    if has_v_room {
+                        app.last_fullscreen_top_border_area =
+                            Rect::new(main_area.x, main_area.y, main_area.width, 1);
+                        app.last_fullscreen_bottom_border_area = Rect::new(
+                            main_area.x,
+                            main_area.y + main_area.height - 1,
+                            main_area.width,
+                            1,
+                        );
+                    } else {
+                        app.last_fullscreen_top_border_area = Rect::default();
+                        app.last_fullscreen_bottom_border_area = Rect::default();
                     }
                     app.last_minimized_strip_area = Rect::default();
                 }
@@ -287,12 +341,18 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
                         app.last_minimized_strip_area = Rect::default();
                     }
                     app.last_fullscreen_restore_area = Rect::default();
+                    app.last_fullscreen_right_border_area = Rect::default();
+                    app.last_fullscreen_top_border_area = Rect::default();
+                    app.last_fullscreen_bottom_border_area = Rect::default();
                 }
                 LayoutMode::ThirdInspector
                 | LayoutMode::HalfInspector
                 | LayoutMode::TwoThirdsInspector => {
                     app.last_minimized_strip_area = Rect::default();
                     app.last_fullscreen_restore_area = Rect::default();
+                    app.last_fullscreen_right_border_area = Rect::default();
+                    app.last_fullscreen_top_border_area = Rect::default();
+                    app.last_fullscreen_bottom_border_area = Rect::default();
                     if app.right_panel_visible {
                         if area.width >= SIDE_MIN_WIDTH {
                             let right_width = (main_area.width as u32
@@ -380,21 +440,10 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
             // Narrow split mode.
             match app.layout_mode {
                 LayoutMode::FullInspector => {
-                    // Always reserve strip space; only draw content on hover.
-                    let strip = app.last_fullscreen_restore_area;
-                    let panel_area = if strip.width > 0 {
-                        if app.fullscreen_restore_hover || !app.any_motion_mouse {
-                            draw_restore_strip(frame, strip, app.fullscreen_restore_hover);
-                        }
-                        Rect::new(
-                            main_area.x + 1,
-                            main_area.y,
-                            main_area.width - 1,
-                            main_area.height,
-                        )
-                    } else {
-                        main_area
-                    };
+                    // Compute panel area inset by all four reserved borders.
+                    let panel_area = fullscreen_panel_area(main_area, app);
+                    // Draw each border only on hover (or always when mouse not supported).
+                    draw_fullscreen_borders(frame, app);
                     draw_right_panel(frame, app, panel_area);
                     app.last_graph_hscrollbar_area = Rect::default();
                 }
@@ -476,21 +525,10 @@ pub fn draw(frame: &mut Frame, app: &mut VizApp) {
             // Full layout: existing behavior.
             match app.layout_mode {
                 LayoutMode::FullInspector => {
-                    // Always reserve strip space; only draw content on hover.
-                    let strip = app.last_fullscreen_restore_area;
-                    let panel_area = if strip.width > 0 {
-                        if app.fullscreen_restore_hover || !app.any_motion_mouse {
-                            draw_restore_strip(frame, strip, app.fullscreen_restore_hover);
-                        }
-                        Rect::new(
-                            main_area.x + 1,
-                            main_area.y,
-                            main_area.width - 1,
-                            main_area.height,
-                        )
-                    } else {
-                        main_area
-                    };
+                    // Compute panel area inset by all four reserved borders.
+                    let panel_area = fullscreen_panel_area(main_area, app);
+                    // Draw each border only on hover (or always when mouse not supported).
+                    draw_fullscreen_borders(frame, app);
                     draw_right_panel(frame, app, panel_area);
                     app.last_graph_hscrollbar_area = Rect::default();
                 }
@@ -1756,6 +1794,88 @@ fn draw_horizontal_scrollbar(
         .track_style(Style::default().fg(Color::DarkGray));
     frame.render_stateful_widget(scrollbar, scrollbar_area, &mut state);
     scrollbar_area
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Fullscreen inspector borders
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// Compute the content area for fullscreen inspector, inset by all four
+/// reserved border areas (left, right, top, bottom).
+fn fullscreen_panel_area(main_area: Rect, app: &super::state::VizApp) -> Rect {
+    let left = if app.last_fullscreen_restore_area.width > 0 {
+        1u16
+    } else {
+        0
+    };
+    let right = if app.last_fullscreen_right_border_area.width > 0 {
+        1u16
+    } else {
+        0
+    };
+    let top = if app.last_fullscreen_top_border_area.height > 0 {
+        1u16
+    } else {
+        0
+    };
+    let bottom = if app.last_fullscreen_bottom_border_area.height > 0 {
+        1u16
+    } else {
+        0
+    };
+    Rect::new(
+        main_area.x + left,
+        main_area.y + top,
+        main_area.width.saturating_sub(left + right),
+        main_area.height.saturating_sub(top + bottom),
+    )
+}
+
+/// Draw all four fullscreen borders — only on hover (or always when mouse not
+/// supported, for the left restore strip which doubles as click target).
+fn draw_fullscreen_borders(frame: &mut Frame, app: &super::state::VizApp) {
+    let no_mouse = !app.any_motion_mouse;
+
+    // Left border (restore strip).
+    let left = app.last_fullscreen_restore_area;
+    if left.width > 0 && (app.fullscreen_restore_hover || no_mouse) {
+        draw_restore_strip(frame, left, app.fullscreen_restore_hover);
+    }
+
+    // Right border.
+    let right = app.last_fullscreen_right_border_area;
+    if right.width > 0 && (app.fullscreen_right_hover || no_mouse) {
+        draw_fullscreen_border_col(frame, right, '▐', app.fullscreen_right_hover);
+    }
+
+    // Top border.
+    let top = app.last_fullscreen_top_border_area;
+    if top.height > 0 && (app.fullscreen_top_hover || no_mouse) {
+        draw_fullscreen_border_row(frame, top, '▀', app.fullscreen_top_hover);
+    }
+
+    // Bottom border.
+    let bottom = app.last_fullscreen_bottom_border_area;
+    if bottom.height > 0 && (app.fullscreen_bottom_hover || no_mouse) {
+        draw_fullscreen_border_row(frame, bottom, '▄', app.fullscreen_bottom_hover);
+    }
+}
+
+/// Draw a single-column vertical border strip (for right edge).
+fn draw_fullscreen_border_col(frame: &mut Frame, area: Rect, ch: char, hover: bool) {
+    let fg = if hover { Color::Yellow } else { Color::DarkGray };
+    let lines: Vec<Line> = (0..area.height)
+        .map(|_| Line::from(Span::styled(ch.to_string(), Style::default().fg(fg))))
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Draw a single-row horizontal border strip (for top/bottom edge).
+fn draw_fullscreen_border_row(frame: &mut Frame, area: Rect, ch: char, hover: bool) {
+    let fg = if hover { Color::Yellow } else { Color::DarkGray };
+    let text: String = (0..area.width).map(|_| ch).collect();
+    let line = Line::from(Span::styled(text, Style::default().fg(fg)));
+    frame.render_widget(Paragraph::new(vec![line]), area);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
