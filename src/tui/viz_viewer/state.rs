@@ -398,17 +398,17 @@ pub enum ToastSeverity {
     Info,
     /// Yellow, auto-dismiss after 10 seconds.
     Warning,
-    /// Red, persists until dismissed with Esc.
+    /// Red, auto-dismiss after 30 seconds (also dismissible early with Esc).
     Error,
 }
 
 impl ToastSeverity {
-    /// Duration before auto-dismiss. `None` means manual dismiss only.
+    /// Duration before auto-dismiss.
     pub fn auto_dismiss_duration(&self) -> Option<std::time::Duration> {
         match self {
             ToastSeverity::Info => Some(std::time::Duration::from_secs(5)),
             ToastSeverity::Warning => Some(std::time::Duration::from_secs(10)),
-            ToastSeverity::Error => None,
+            ToastSeverity::Error => Some(std::time::Duration::from_secs(30)),
         }
     }
 }
@@ -7357,7 +7357,7 @@ impl VizApp {
                             inbox_id: None,
                             user: None,
                             target_task: None,
-                            msg_timestamp: None,
+                            msg_timestamp: Some(chrono::Utc::now().to_rfc3339()),
                             read_at: None,
                             msg_queue_id: None,
                         });
@@ -8899,7 +8899,7 @@ impl VizApp {
                     inbox_id,
                     user: msg.user.clone(),
                     target_task: None,
-                    msg_timestamp: None,
+                    msg_timestamp: Some(msg.timestamp.clone()),
                     read_at: None,
                     msg_queue_id: None,
                 });
@@ -8990,7 +8990,7 @@ impl VizApp {
                 inbox_id: None,
                 user: msg.user.clone(),
                 target_task: None,
-                msg_timestamp: None,
+                msg_timestamp: Some(msg.timestamp.clone()),
                 read_at: None,
                 msg_queue_id: None,
             });
@@ -9177,7 +9177,7 @@ impl VizApp {
             inbox_id: None,
             user: Some(workgraph::current_user()),
             target_task: None,
-            msg_timestamp: None,
+            msg_timestamp: Some(chrono::Utc::now().to_rfc3339()),
             read_at: None,
             msg_queue_id: None,
         });
@@ -15130,8 +15130,11 @@ mod toast_tests {
     }
 
     #[test]
-    fn toast_error_no_auto_dismiss() {
-        assert_eq!(ToastSeverity::Error.auto_dismiss_duration(), None);
+    fn toast_error_auto_dismiss_30s() {
+        assert_eq!(
+            ToastSeverity::Error.auto_dismiss_duration(),
+            Some(Duration::from_secs(30))
+        );
     }
 
     #[test]
@@ -15165,17 +15168,31 @@ mod toast_tests {
     }
 
     #[test]
-    fn toast_error_survives_cleanup() {
+    fn toast_error_survives_cleanup_within_timeout() {
         let mut toasts = vec![make_toast_with_age(
             "error",
             ToastSeverity::Error,
-            Duration::from_secs(600), // 10 minutes old
+            Duration::from_secs(15), // 15 seconds old, within 30s timeout
         )];
         toasts.retain(|t| match t.severity.auto_dismiss_duration() {
             Some(dur) => t.created_at.elapsed() < dur,
             None => true,
         });
-        assert_eq!(toasts.len(), 1, "Error toasts must survive cleanup");
+        assert_eq!(toasts.len(), 1, "Error toasts within timeout must survive cleanup");
+    }
+
+    #[test]
+    fn toast_error_expires_after_timeout() {
+        let mut toasts = vec![make_toast_with_age(
+            "error",
+            ToastSeverity::Error,
+            Duration::from_secs(31), // 31 seconds old, past 30s timeout
+        )];
+        toasts.retain(|t| match t.severity.auto_dismiss_duration() {
+            Some(dur) => t.created_at.elapsed() < dur,
+            None => true,
+        });
+        assert_eq!(toasts.len(), 0, "Error toasts past timeout must be cleaned up");
     }
 
     #[test]
