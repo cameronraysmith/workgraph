@@ -2614,6 +2614,19 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     // Track which message index each rendered line belongs to (for click-to-edit).
     let mut line_to_message: Vec<Option<usize>> = Vec::new();
 
+    // Show "older messages" indicator when there's more history to load.
+    if app.chat.has_more_history {
+        let remaining = app.chat.total_history_count.saturating_sub(app.chat.messages.len());
+        let label = format!("  --- {} older messages (scroll up to load) ---", remaining);
+        rendered_lines.push(Line::from(Span::styled(
+            label,
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+        )));
+        line_to_message.push(None);
+        rendered_lines.push(Line::from(""));
+        line_to_message.push(None);
+    }
+
     // Subtle warm-tinted dark background for user messages (like iMessage blue/gray,
     // but extremely subtle). Echoes the yellow ">" prefix and loop arrows.
     let user_msg_bg = Color::Rgb(30, 28, 20);

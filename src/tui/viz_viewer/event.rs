@@ -881,6 +881,7 @@ fn handle_chat_input(app: &mut VizApp, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Up if modifiers.contains(KeyModifiers::ALT) => {
             app.record_panel_scroll_activity();
             app.chat.scroll = app.chat.scroll.saturating_add(1);
+            maybe_load_more_chat_history(app);
             return;
         }
         KeyCode::Down if modifiers.contains(KeyModifiers::ALT) => {
@@ -1846,12 +1847,44 @@ fn handle_right_panel_key(app: &mut VizApp, code: KeyCode, modifiers: KeyModifie
     }
 }
 
+/// Check if the chat is scrolled near the top of loaded messages and load more history if needed.
+/// Called after any scroll-up action in the chat panel.
+fn maybe_load_more_chat_history(app: &mut VizApp) {
+    if !app.chat.has_more_history {
+        return;
+    }
+    // Trigger load when we're within one viewport of the top of loaded messages.
+    let total = app.chat.total_rendered_lines;
+    let viewport = app.chat.viewport_height.max(1);
+    let max_scroll_from_bottom = total.saturating_sub(viewport);
+    let clamped_scroll = app.chat.scroll.min(max_scroll_from_bottom);
+    let scroll_from_top = max_scroll_from_bottom.saturating_sub(clamped_scroll);
+    // Load more when within one viewport height of the top.
+    if scroll_from_top < viewport {
+        let old_msg_count = app.chat.messages.len();
+        if app.load_more_chat_history() {
+            // Adjust scroll to maintain the user's visual position after prepending messages.
+            // The new messages added at the top will add rendered lines, so we need to
+            // increase the scroll-from-bottom by the approximate number of new lines.
+            // Since we don't know the exact rendered line count yet (that happens during
+            // rendering), we estimate based on message count change.
+            let new_msg_count = app.chat.messages.len();
+            let added_msgs = new_msg_count.saturating_sub(old_msg_count);
+            // Rough estimate: ~3 rendered lines per message (header + content + blank).
+            let estimated_new_lines = added_msgs * 3;
+            app.chat.scroll = app.chat.scroll.saturating_add(estimated_new_lines);
+        }
+    }
+}
+
 fn right_panel_scroll_up(app: &mut VizApp, amount: usize) {
     app.record_panel_scroll_activity();
     match app.right_panel_tab {
         RightPanelTab::Detail => app.hud_scroll_up(amount),
         RightPanelTab::Chat => {
             app.chat.scroll += amount;
+            // Lazy-load older messages when scrolling near the top of loaded history.
+            maybe_load_more_chat_history(app);
         }
         RightPanelTab::Log => {
             app.log_scroll_up(amount);
@@ -1989,6 +2022,12 @@ fn right_panel_scroll_to_top(app: &mut VizApp) {
             app.hud_follow = false;
         }
         RightPanelTab::Chat => {
+            // Load all remaining history when jumping to top.
+            while app.chat.has_more_history {
+                if !app.load_more_chat_history() {
+                    break;
+                }
+            }
             // Chat scroll is from bottom (0 = fully scrolled down), so "top" = max.
             app.chat.scroll = usize::MAX;
         }
@@ -3023,6 +3062,7 @@ fn vscrollbar_jump_panel(app: &mut VizApp, row: u16) {
             let scroll_from_top = jump(max_scroll);
             // Convert scroll_from_top to chat's inverted scroll.
             app.chat.scroll = max_scroll.saturating_sub(scroll_from_top);
+            maybe_load_more_chat_history(app);
         }
         RightPanelTab::Log => {
             let total = app.log_pane.total_wrapped_lines;
