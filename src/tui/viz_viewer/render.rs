@@ -2637,7 +2637,53 @@ fn draw_chat_tab(frame: &mut Frame, app: &mut VizApp, area: Rect) {
     // Subtle magenta-tinted background for sent-to-agent messages.
     let sent_msg_bg = Color::Rgb(30, 20, 30);
 
+    let session_gap_threshold = if app.session_gap_minutes > 0 {
+        Some(chrono::Duration::minutes(app.session_gap_minutes as i64))
+    } else {
+        None
+    };
+
     for (msg_idx, msg) in app.chat.messages.iter().enumerate() {
+        // Session boundary divider: if there's a significant time gap between
+        // this message and the previous one, insert a visual separator.
+        if let Some(threshold) = &session_gap_threshold {
+            if msg_idx > 0 {
+                if let (Some(prev_ts), Some(cur_ts)) = (
+                    app.chat.messages[msg_idx - 1].msg_timestamp.as_deref(),
+                    msg.msg_timestamp.as_deref(),
+                ) {
+                    if let (Ok(prev_dt), Ok(cur_dt)) = (
+                        chrono::DateTime::parse_from_rfc3339(prev_ts),
+                        chrono::DateTime::parse_from_rfc3339(cur_ts),
+                    ) {
+                        let gap = cur_dt.signed_duration_since(prev_dt);
+                        if gap > *threshold {
+                            let local_dt = cur_dt.with_timezone(&chrono::Local);
+                            let label = local_dt.format("%B %-d, %Y · %-I:%M %p").to_string();
+                            let dashes_total = content_width.saturating_sub(label.len() + 2);
+                            let left = dashes_total / 2;
+                            let right = dashes_total - left;
+                            let divider_text = format!(
+                                "{} {} {}",
+                                "─".repeat(left),
+                                label,
+                                "─".repeat(right),
+                            );
+                            rendered_lines.push(Line::from(""));
+                            line_to_message.push(None);
+                            rendered_lines.push(Line::from(Span::styled(
+                                divider_text,
+                                Style::default().fg(Color::DarkGray),
+                            )));
+                            line_to_message.push(None);
+                            rendered_lines.push(Line::from(""));
+                            line_to_message.push(None);
+                        }
+                    }
+                }
+            }
+        }
+
         let is_coordinator = msg.role == super::state::ChatRole::Coordinator;
         let is_user = msg.role == super::state::ChatRole::User;
         let is_sent_message = msg.role == super::state::ChatRole::SentMessage;

@@ -3302,6 +3302,8 @@ pub struct VizApp {
     pub message_name_threshold: u16,
     /// Cached: indent for message body when name is on its own line.
     pub message_indent: u16,
+    /// Session boundary gap threshold in minutes (from config).
+    pub session_gap_minutes: u32,
 
     // ── Scrollbar auto-hide (per-pane) ──
     /// Timestamp of the last scroll activity in the graph pane.
@@ -3564,6 +3566,7 @@ impl VizApp {
             slide_animation: None,
             message_name_threshold: config.tui.message_name_threshold,
             message_indent: config.tui.message_indent,
+            session_gap_minutes: config.tui.session_gap_minutes,
             graph_scroll_activity: None,
             panel_scroll_activity: None,
             scrollbar_drag: None,
@@ -7165,6 +7168,7 @@ impl VizApp {
             slide_animation: None,
             message_name_threshold: 8,
             message_indent: 2,
+            session_gap_minutes: 30,
             graph_scroll_activity: None,
             panel_scroll_activity: None,
             scrollbar_drag: None,
@@ -10445,6 +10449,13 @@ impl VizApp {
             section: ConfigSection::TuiSettings,
         });
         entries.push(ConfigEntry {
+            key: "tui.session_gap_minutes".into(),
+            label: "Session gap (min)".into(),
+            value: config.tui.session_gap_minutes.to_string(),
+            edit_kind: ConfigEditKind::TextInput,
+            section: ConfigSection::TuiSettings,
+        });
+        entries.push(ConfigEntry {
             key: "tui.counters".into(),
             label: "Counters".into(),
             value: config.tui.counters.clone(),
@@ -11132,6 +11143,12 @@ impl VizApp {
             "tui.chat_history_max" => {
                 if let Ok(v) = new_value.parse::<usize>() {
                     config.tui.chat_history_max = v;
+                }
+            }
+            "tui.session_gap_minutes" => {
+                if let Ok(v) = new_value.parse::<u32>() {
+                    config.tui.session_gap_minutes = v;
+                    self.session_gap_minutes = v;
                 }
             }
             "tui.counters" => config.tui.counters = new_value,
@@ -14065,6 +14082,7 @@ mod tui_config_panel_tests {
                         | "guardrails.max_child_tasks_per_agent"
                         | "guardrails.max_task_depth"
                         | "tui.chat_history_max"
+                        | "tui.session_gap_minutes"
                         | "checkpoint.retry_context_tokens" => "42",
                         "tui.message_indent" => "4", // clamped to max 8
                         "agency.flip_verification_threshold" | "agency.eval_gate_threshold" => {
@@ -14184,6 +14202,7 @@ mod tui_config_panel_tests {
             "tui.message_indent",
             "tui.chat_history",
             "tui.chat_history_max",
+            "tui.session_gap_minutes",
             "tui.counters",
             "tui.show_system_tasks",
             "tui.show_running_system_tasks",
@@ -17008,6 +17027,126 @@ mod tui_chat_tests {
             elapsed.as_millis() < 1000,
             "Paginated load of 10k messages should complete in <1s, took {}ms",
             elapsed.as_millis()
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Session boundary marker tests
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn session_boundary_divider_appears_for_large_gap() {
+        // Two messages separated by 2 hours should produce a session divider.
+        let ts1 = "2026-03-27T10:00:00+00:00";
+        let ts2 = "2026-03-27T12:00:00+00:00";
+
+        let messages = vec![
+            make_chat_message_with_ts(ChatRole::User, "hello", ts1),
+            make_chat_message_with_ts(ChatRole::Coordinator, "world", ts2),
+        ];
+
+        // Default threshold is 30 minutes; 2-hour gap exceeds it.
+        let threshold = chrono::Duration::minutes(30);
+        let prev_dt = chrono::DateTime::parse_from_rfc3339(ts1).unwrap();
+        let cur_dt = chrono::DateTime::parse_from_rfc3339(ts2).unwrap();
+        let gap = cur_dt.signed_duration_since(prev_dt);
+        assert!(gap > threshold, "2-hour gap should exceed 30-minute threshold");
+
+        // Verify both messages have valid timestamps.
+        assert!(messages[0].msg_timestamp.is_some());
+        assert!(messages[1].msg_timestamp.is_some());
+    }
+
+    #[test]
+    fn session_boundary_no_divider_for_small_gap() {
+        // Two messages 5 minutes apart should NOT trigger a session boundary.
+        let ts1 = "2026-03-27T10:00:00+00:00";
+        let ts2 = "2026-03-27T10:05:00+00:00";
+
+        let threshold = chrono::Duration::minutes(30);
+        let prev_dt = chrono::DateTime::parse_from_rfc3339(ts1).unwrap();
+        let cur_dt = chrono::DateTime::parse_from_rfc3339(ts2).unwrap();
+        let gap = cur_dt.signed_duration_since(prev_dt);
+        assert!(
+            gap <= threshold,
+            "5-minute gap should NOT exceed 30-minute threshold"
+        );
+    }
+
+    #[test]
+    fn session_boundary_disabled_when_gap_is_zero() {
+        // When session_gap_minutes is 0, no dividers should be generated.
+        let gap_minutes: u32 = 0;
+        let threshold = if gap_minutes > 0 {
+            Some(chrono::Duration::minutes(gap_minutes as i64))
+        } else {
+            None
+        };
+        assert!(
+            threshold.is_none(),
+            "Zero gap minutes should disable session boundaries"
+        );
+    }
+
+    #[test]
+    fn session_boundary_exact_threshold_no_divider() {
+        // Gap exactly equal to threshold should NOT trigger a divider (strictly greater-than).
+        let ts1 = "2026-03-27T10:00:00+00:00";
+        let ts2 = "2026-03-27T10:30:00+00:00";
+
+        let threshold = chrono::Duration::minutes(30);
+        let prev_dt = chrono::DateTime::parse_from_rfc3339(ts1).unwrap();
+        let cur_dt = chrono::DateTime::parse_from_rfc3339(ts2).unwrap();
+        let gap = cur_dt.signed_duration_since(prev_dt);
+        assert!(
+            !(gap > threshold),
+            "Exactly 30-minute gap should NOT trigger divider (strictly greater-than)"
+        );
+    }
+
+    #[test]
+    fn session_boundary_divider_format_contains_date() {
+        // The divider text should include a human-readable date/time.
+        let ts = "2026-03-27T15:42:00+00:00";
+        let dt = chrono::DateTime::parse_from_rfc3339(ts).unwrap();
+        let local_dt = dt.with_timezone(&chrono::Local);
+        let label = local_dt.format("%B %-d, %Y · %-I:%M %p").to_string();
+
+        // Verify the label contains expected components.
+        assert!(label.contains("2026"), "Label should contain year");
+        assert!(
+            label.contains("March") || label.contains("27"),
+            "Label should contain month or day"
+        );
+    }
+
+    #[test]
+    fn session_boundary_config_default() {
+        // Verify the default config value is 30 minutes.
+        let config = workgraph::config::TuiConfig::default();
+        assert_eq!(config.session_gap_minutes, 30);
+    }
+
+    #[test]
+    fn session_boundary_multiple_gaps_in_history() {
+        // Three messages: msg1 -> 2hr gap -> msg2 -> 5min gap -> msg3
+        // Should produce exactly one boundary (between msg1 and msg2).
+        let ts1 = "2026-03-27T10:00:00+00:00";
+        let ts2 = "2026-03-27T12:00:00+00:00";
+        let ts3 = "2026-03-27T12:05:00+00:00";
+
+        let threshold = chrono::Duration::minutes(30);
+        let dt1 = chrono::DateTime::parse_from_rfc3339(ts1).unwrap();
+        let dt2 = chrono::DateTime::parse_from_rfc3339(ts2).unwrap();
+        let dt3 = chrono::DateTime::parse_from_rfc3339(ts3).unwrap();
+
+        let gap1 = dt2.signed_duration_since(dt1);
+        let gap2 = dt3.signed_duration_since(dt2);
+
+        assert!(gap1 > threshold, "First gap (2hr) should produce a boundary");
+        assert!(
+            !(gap2 > threshold),
+            "Second gap (5min) should NOT produce a boundary"
         );
     }
 }

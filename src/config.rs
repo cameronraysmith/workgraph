@@ -251,6 +251,11 @@ pub struct TuiConfig {
     /// Show key press feedback overlay (useful for screencasts/demos)
     #[serde(default)]
     pub show_keys: bool,
+    /// Session boundary gap threshold in minutes (default: 30).
+    /// A visual divider is shown between chat messages separated by more than this many minutes.
+    /// Set to 0 to disable session boundaries.
+    #[serde(default = "default_session_gap_minutes")]
+    pub session_gap_minutes: u32,
 }
 
 fn default_tui_layout() -> String {
@@ -286,6 +291,9 @@ fn default_chat_page_size() -> usize {
 fn default_counters() -> String {
     "uptime,cumulative,active,compact".to_string()
 }
+fn default_session_gap_minutes() -> u32 {
+    30
+}
 
 impl Default for TuiConfig {
     fn default() -> Self {
@@ -306,6 +314,7 @@ impl Default for TuiConfig {
             show_system_tasks: true,
             show_running_system_tasks: false,
             show_keys: false,
+            session_gap_minutes: default_session_gap_minutes(),
         }
     }
 }
